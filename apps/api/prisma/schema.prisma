@@ -1,0 +1,110 @@
+// TrustVault schema.
+//
+// Prisma describes the tables. Anything Prisma cannot express — table
+// privileges for the app role, row-level security, and the triggers that
+// make the audit log append-only and hash-chained — lives in hand-written
+// SQL at the end of each migration.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  OWNER
+  VIEWER
+  EXTERNAL
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum AuditOutcome {
+  ALLOWED
+  DENIED
+  FAILED
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  /// Always stored lower-case and trimmed.
+  email             String     @unique
+  displayName       String     @map("display_name")
+  role              Role
+  status            UserStatus @default(ACTIVE)
+  passwordHash      String     @map("password_hash")
+  passwordChangedAt DateTime   @default(now()) @map("password_changed_at") @db.Timestamptz(6)
+  failedLoginCount  Int        @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?  @map("locked_until") @db.Timestamptz(6)
+  /// External accounts stop working at this time. Required for EXTERNAL.
+  accessExpiresAt   DateTime?  @map("access_expires_at") @db.Timestamptz(6)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdById       String?    @map("created_by_id") @db.Uuid
+  deactivatedAt     DateTime?  @map("deactivated_at") @db.Timestamptz(6)
+
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  /// SHA-256 of the cookie value. The raw token is never stored.
+  tokenHash  Bytes    @unique @map("token_hash")
+  /// Sent back by the browser in a header on every state-changing request.
+  csrfToken  String   @map("csrf_token")
+  /// "password" now; "mfa" once a second factor has been checked.
+  authLevel  String   @default("password") @map("auth_level")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  /// Absolute lifetime. Idle timeout is checked against lastSeenAt.
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  ip         String?
+  userAgent  String?  @map("user_agent")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Append-only, hash-chained. seq, occurred_at, prev_hash and hash are set
+/// by a database trigger, not by the application, so the app cannot
+/// backdate an event or forge its place in the chain.
+model AuditEvent {
+  /// Placeholder default; the trigger assigns the real value under a lock.
+  seq        BigInt       @id @default(0)
+  id         String       @unique @default(uuid()) @db.Uuid
+  occurredAt DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorId    String?      @map("actor_id") @db.Uuid
+  actorEmail String?      @map("actor_email")
+  action     String
+  outcome    AuditOutcome
+  reason     String?
+  targetType String?      @map("target_type")
+  targetId   String?      @map("target_id")
+  documentId String?      @map("document_id") @db.Uuid
+  ip         String?
+  userAgent  String?      @map("user_agent")
+  requestId  String?      @map("request_id")
+  details    Json?
+  prevHash   Bytes        @unique @default(dbgenerated()) @map("prev_hash")
+  hash       Bytes        @unique @default(dbgenerated())
+
+  @@index([occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([documentId, occurredAt])
+  @@index([action, occurredAt])
+  @@map("audit_events")
+}

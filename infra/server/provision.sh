@@ -5,7 +5,8 @@
 # What it sets up:
 #   - Linux users: `trustvault` (runs the API and web app), `tvkeyd` (runs the key service)
 #   - /etc/trustvault (secrets, readable by root and the trustvault group only)
-#   - Postgres databases trustvault (prod), trustvault_dev, trustvault_test
+#   - Postgres databases trustvault (prod), trustvault_dev, trustvault_test,
+#     trustvault_shadow (Prisma's migration scratch database)
 #   - Postgres roles:
 #       tv_owner      owns the prod schema, used only for migrations
 #       tv_app        what the running API connects as: no ownership, so RLS and
@@ -54,6 +55,14 @@ ALTER ROLE tv_dev_owner PASSWORD '$TV_DEV_OWNER_PW';
 ALTER ROLE tv_dev_app   PASSWORD '$TV_DEV_APP_PW';
 ALTER ROLE tv_app       SET statement_timeout = '15s';
 ALTER ROLE tv_dev_app   SET statement_timeout = '15s';
+-- One NOLOGIN group that migrations grant table rights to. Both runtime
+-- roles inherit it; pg_hba stops the dev role ever reaching prod.
+DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='trustvault_app') THEN CREATE ROLE trustvault_app NOLOGIN; END IF;
+END \$\$;
+ALTER ROLE tv_app INHERIT; ALTER ROLE tv_dev_app INHERIT;
+GRANT trustvault_app TO tv_app;
+GRANT trustvault_app TO tv_dev_app;
 SQL
 
 # --- Databases --------------------------------------------------------------
@@ -70,12 +79,16 @@ GRANT USAGE ON SCHEMA public TO $app;
 SQL
 done
 
+# Scratch database Prisma uses to check migrations (dev only)
+sudo -u postgres psql -Atc "SELECT 1 FROM pg_database WHERE datname='trustvault_shadow'" | grep -q 1 || sudo -u postgres createdb -O tv_dev_owner trustvault_shadow
+sudo -u postgres psql -q -d trustvault_shadow -c "REVOKE ALL ON DATABASE trustvault_shadow FROM PUBLIC; GRANT CONNECT, TEMP ON DATABASE trustvault_shadow TO tv_dev_owner; ALTER SCHEMA public OWNER TO tv_dev_owner;"
+
 # --- pg_hba: TrustVault roles reach only TrustVault databases --------------
 if ! grep -q "TRUSTVAULT-BEGIN" "$HBA"; then
   cp "$HBA" "$HBA.bak-trustvault"
   { echo "# TRUSTVAULT-BEGIN"
     echo "host    trustvault                      tv_owner,tv_app          127.0.0.1/32  scram-sha-256"
-    echo "host    trustvault_dev,trustvault_test  tv_dev_owner,tv_dev_app  127.0.0.1/32  scram-sha-256"
+    echo "host    trustvault_dev,trustvault_test,trustvault_shadow  tv_dev_owner,tv_dev_app  127.0.0.1/32  scram-sha-256"
     echo "host    all   tv_owner,tv_app,tv_dev_owner,tv_dev_app   all   reject"
     echo "local   all   tv_owner,tv_app,tv_dev_owner,tv_dev_app         reject"
     echo "# TRUSTVAULT-END"

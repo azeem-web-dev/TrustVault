@@ -26,3 +26,23 @@ Tools: ChatGPT (early brainstorming), Claude Code / Claude Opus (planning, code,
 ## Reused context
 
 The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at the start of each working session, with the instruction: *"Every endpoint must go through decide(); never cache permissions; every allow and deny writes an audit row in the same transaction."*
+
+---
+
+## 2026-11-01 — First migration: users, sessions, hash-chained audit log
+
+**Asked (Claude):** "Write the first Prisma migration for users, sessions and an append-only, hash-chained audit table. The app role must not be able to change or delete audit rows, and the chain must be computed by the database, not the app."
+
+**Got:** a migration with a `BEFORE INSERT` trigger computing `sha256(prev_hash || canonical(row))`, triggers refusing UPDATE/DELETE/TRUNCATE, and grants of INSERT/SELECT only to the app role.
+
+**What was wrong:**
+1. The schema-level grant (`GRANT USAGE ON SCHEMA public`) was only in my server provisioning script, not in the migration. After `prisma migrate reset` recreated the schema, every query from the app role failed with `relation "audit_events" does not exist`. In production this would have shown up the first time anyone rebuilt the database.
+2. The first draft looked up the previous hash at the start of the insert. Under `REPEATABLE READ`, two concurrent writers can both see the same "last" row and fork the chain. Nothing in the draft would have noticed.
+3. The default `seq` came from a normal sequence default, which is assigned *before* the trigger takes its lock, so chain order and `seq` order could disagree under concurrency.
+
+**What I did instead:**
+- Moved the schema grant into the migration itself.
+- The trigger now refuses to run outside `READ COMMITTED`, takes a transaction-level advisory lock, and only then assigns `seq` and reads the previous hash.
+- Added a unique index on `prev_hash`, so a fork is structurally impossible: a second event claiming the same predecessor fails to insert.
+- Field encoding uses length prefixes (`<bytes>:<value>`, NULL as `~`) so text cannot be shifted between fields without changing the hash.
+- Wrote a probe that attacks the table as the app role and as the table owner. All of UPDATE/DELETE/TRUNCATE/setval are refused, forged `seq`/`hash`/`occurred_at` values are overwritten by the trigger, and `audit_verify()` reports the chain intact. These become automated tests next.
