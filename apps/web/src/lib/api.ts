@@ -3,6 +3,8 @@
 // localStorage) and sent on every state-changing request.
 
 export type Role = 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL';
+export type Level = 'READ' | 'EDIT' | 'MANAGE';
+export type Access = Level | 'OWNER' | 'NONE';
 
 export interface User {
   id: string;
@@ -15,37 +17,48 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly body: unknown,
+    readonly body: { code?: string; issues?: { path: string; message: string }[] } | null,
   ) {
     super(message);
   }
 }
 
 let csrfToken: string | null = null;
+let onMfaRequired: (() => void) | null = null;
 
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
 
+/** Called when the API says the session still owes a second factor. */
+export function setMfaHandler(fn: (() => void) | null): void {
+  onMfaRequired = fn;
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
   const res = await fetch(`/api${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
     credentials: 'same-origin',
     cache: 'no-store',
   });
 
   if (res.status === 204) return undefined as T;
-  const data: unknown = await res.json().catch(() => null);
+  const data = (await res.json().catch(() => null)) as (T & { message?: string; code?: string; csrfToken?: string }) | null;
   if (!res.ok) {
-    const message = (data as { message?: string } | null)?.message ?? `Request failed (${res.status})`;
-    throw new ApiError(res.status, message, data);
+    if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
+    const issues = (data as { issues?: { message: string }[] } | null)?.issues;
+    const message = issues?.length ? issues.map((i) => i.message).join('; ') : (data?.message ?? `Request failed (${res.status})`);
+    throw new ApiError(res.status, message, data as ApiError['body']);
   }
+  // Sign-in steps that rotate the session also rotate the CSRF token.
+  if (data && typeof data === 'object' && typeof data.csrfToken === 'string') csrfToken = data.csrfToken;
   return data as T;
 }
 
@@ -53,4 +66,21 @@ export const api = {
   get: <T>(path: string) => call<T>('GET', path),
   post: <T>(path: string, body?: unknown) => call<T>('POST', path, body ?? {}),
   patch: <T>(path: string, body: unknown) => call<T>('PATCH', path, body),
+  put: <T>(path: string, body: unknown) => call<T>('PUT', path, body),
+  delete: <T>(path: string) => call<T>('DELETE', path),
+  upload: <T>(path: string, form: FormData) => call<T>('POST', path, form),
 };
+
+export const errorText = (err: unknown, fallback = 'Something went wrong'): string =>
+  err instanceof ApiError ? err.message : err instanceof Error && err.name === 'NotAllowedError' ? 'Cancelled' : fallback;
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}

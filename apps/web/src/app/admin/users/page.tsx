@@ -14,6 +14,8 @@ interface AdminUser {
   accessExpiresAt: string | null;
   lockedUntil: string | null;
   createdAt: string;
+  isProtected: boolean;
+  totpEnabledAt: string | null;
 }
 
 const ROLES: Role[] = ['ADMIN', 'OWNER', 'VIEWER', 'EXTERNAL'];
@@ -81,7 +83,7 @@ export default function AdminUsersPage() {
                   <select
                     aria-label={`Role for ${u.email}`}
                     value={u.role}
-                    disabled={u.id === me?.id}
+                    disabled={u.id === me?.id || u.isProtected}
                     onChange={(e) => void run(() => api.patch(`/admin/users/${u.id}`, { role: e.target.value }), `Role changed for ${u.email}`)}
                     className="rounded-md border border-slate-300 bg-transparent px-2 py-1 dark:border-slate-700"
                   >
@@ -93,10 +95,15 @@ export default function AdminUsersPage() {
                     {u.status === 'ACTIVE' ? 'Active' : 'Deactivated'}
                   </span>
                   {u.lockedUntil && new Date(u.lockedUntil) > new Date() && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">Locked</span>}
+                  {u.isProtected && <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800" title="Published demo account: cannot be changed">Demo</span>}
+                  {u.totpEnabledAt && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800">2FA</span>}
                 </td>
                 <td className="px-4 py-3 text-slate-500">{u.accessExpiresAt ? new Date(u.accessExpiresAt).toLocaleDateString() : '—'}</td>
-                <td className="px-4 py-3 text-right">
-                  {u.id !== me?.id && (u.status === 'ACTIVE' ? (
+                <td className="space-x-2 whitespace-nowrap px-4 py-3 text-right">
+                  {u.id !== me?.id && !u.isProtected && u.totpEnabledAt && (
+                    <button onClick={() => void run(() => api.post(`/admin/users/${u.id}/mfa/reset`), `Second factor reset for ${u.email}; they must set it up again`)} className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Reset 2FA</button>
+                  )}
+                  {u.id !== me?.id && !u.isProtected && (u.status === 'ACTIVE' ? (
                     <button onClick={() => void run(() => api.post(`/admin/users/${u.id}/deactivate`), `${u.email} deactivated and signed out`)} className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950">Deactivate</button>
                   ) : (
                     <button onClick={() => void run(() => api.post(`/admin/users/${u.id}/reactivate`), `${u.email} reactivated`)} className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Reactivate</button>

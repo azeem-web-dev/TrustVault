@@ -14,3 +14,7 @@ target/
 .DS_Store
 apps/api/src/generated/
 next-env.d.ts
+apps/web/AGENTS.md
+*.tsbuildinfo
+api-dev.log
+web-dev.log
