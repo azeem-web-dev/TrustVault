@@ -1,7 +1,8 @@
 [Unit]
 Description=TrustVault API
-After=network-online.target postgresql.service redis-server.service
+After=network-online.target postgresql.service redis-server.service tvkeyd.service
 Wants=network-online.target
+Requires=tvkeyd.service
 
 [Service]
 Type=simple
@@ -9,6 +10,10 @@ User=trustvault
 Group=trustvault
 WorkingDirectory=/opt/trustvault/app/apps/api
 EnvironmentFile=/etc/trustvault/api.env
+Environment=KEY_PROVIDER=keyd
+Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
+# Member of the key service's socket group; keyd also checks our uid.
+SupplementaryGroups=tvkeysock
 ExecStart=/usr/bin/node dist/main.js
 Restart=on-failure
 RestartSec=3
@@ -42,8 +47,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 IPAddressDeny=any
 IPAddressAllow=localhost
 # Nothing on disk is writable except its own log directory.
-ReadWritePaths=/var/log/trustvault
-InaccessiblePaths=/root /home /etc/trustvault/db.secrets /etc/trustvault/migrate.env
+ReadWritePaths=/var/log/trustvault /run/tvkeyd
+InaccessiblePaths=/root /home /etc/trustvault/db.secrets /etc/trustvault/migrate.env /etc/trustvault/seed.passwords /etc/tvkeyd
 UMask=0077
 MemoryMax=768M
 TasksMax=256

@@ -1,0 +1,61 @@
+[Unit]
+Description=TrustVault key service (master key, data-key wrapping, checkpoint signing)
+Before=trustvault-api.service
+
+[Service]
+Type=simple
+User=tvkeyd
+# Primary group = the socket group, so /run/tvkeyd and the socket belong to
+# it. Only the trustvault user is also in this group.
+Group=tvkeysock
+EnvironmentFile=/etc/tvkeyd/keyd.env
+Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
+# systemd reads the root-only key file and hands this process a private copy
+# in $CREDENTIALS_DIRECTORY. The tvkeyd user cannot read /etc/tvkeyd itself.
+LoadCredential=master.key:/etc/tvkeyd/master.key
+RuntimeDirectory=tvkeyd
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/tvkeyd
+Restart=on-failure
+RestartSec=2
+
+# --- Sandbox: no network, nothing writable, no way to escalate -----------
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=CAP_IPC_LOCK
+AmbientCapabilities=CAP_IPC_LOCK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+SystemCallFilter=mlockall
+InaccessiblePaths=/etc/trustvault /opt/trustvault /var/lib/postgresql
+# Key material stays in RAM and never lands in a core file.
+LimitMEMLOCK=128M
+LimitCORE=0
+UMask=0077
+MemoryMax=128M
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target
