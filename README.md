@@ -8,11 +8,11 @@ A document platform where the wrong person can never read the file, and you can 
 
 | Role | Email | Password | What to try |
 |---|---|---|---|
-| Admin | `admin@trustvault.demo` | `Demo-admin-b4401f3310b7` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity, break-glass. |
-| Owner | `olivia.owner@trustvault.demo` | `Demo-owner-32d56b2cda22` | Owns five documents shared in different ways. Share, revoke, see history. |
-| Owner | `oscar.owner@trustvault.demo` | `Demo-owner-32d56b2cda22` | Owns *Architecture review* (Engineering group can edit, Olivia can manage). |
-| Viewer | `victor.viewer@trustvault.demo` | `Demo-viewer-354fb61f99cd` | Sees 3 documents (one direct, two through groups). Try to reach *Salary bands 2026*. |
-| External | `erin.external@partner.demo` | `Demo-external-956110021bd0` | Sees only the NDA shared with her, read-only, until it expires. |
+| Admin | `admin@demo.com` | `admin1234567` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity, break-glass. |
+| Owner | `olivia@demo.com` | `owner1234567` | Owns five documents shared in different ways. Share, revoke, see history. |
+| Owner | `oscar@demo.com` | `owner1234567` | Owns *Architecture review* (Engineering group can edit, Olivia can manage). |
+| Viewer | `victor@demo.com` | `viewer123456` | Sees 3 documents (one direct, two through groups). Try to reach *Salary bands 2026*. |
+| External | `erin@demo.com` | `external1234` | Sees only the NDA shared with her, read-only, until it expires. |
 
 **Admin authenticator secret:** `NZVD2J3RUX6P7RSZ3FSGBT2ACTCWOPRZ`
 

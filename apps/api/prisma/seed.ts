@@ -31,11 +31,11 @@ function password(role: string): string {
 }
 
 const accounts: { key: string; email: string; displayName: string; role: Role; pw: string; expiresInDays?: number }[] = [
-  { key: 'admin', email: 'admin@trustvault.demo', displayName: 'Ada Admin', role: 'ADMIN', pw: 'ADMIN' },
-  { key: 'olivia', email: 'olivia.owner@trustvault.demo', displayName: 'Olivia Owner', role: 'OWNER', pw: 'OWNER' },
-  { key: 'oscar', email: 'oscar.owner@trustvault.demo', displayName: 'Oscar Owner', role: 'OWNER', pw: 'OWNER' },
-  { key: 'victor', email: 'victor.viewer@trustvault.demo', displayName: 'Victor Viewer', role: 'VIEWER', pw: 'VIEWER' },
-  { key: 'erin', email: 'erin.external@partner.demo', displayName: 'Erin External', role: 'EXTERNAL', pw: 'EXTERNAL', expiresInDays: 180 },
+  { key: 'admin', email: 'admin@demo.com', displayName: 'Ada Admin', role: 'ADMIN', pw: 'ADMIN' },
+  { key: 'olivia', email: 'olivia@demo.com', displayName: 'Olivia Owner', role: 'OWNER', pw: 'OWNER' },
+  { key: 'oscar', email: 'oscar@demo.com', displayName: 'Oscar Owner', role: 'OWNER', pw: 'OWNER' },
+  { key: 'victor', email: 'victor@demo.com', displayName: 'Victor Viewer', role: 'VIEWER', pw: 'VIEWER' },
+  { key: 'erin', email: 'erin@demo.com', displayName: 'Erin External', role: 'EXTERNAL', pw: 'EXTERNAL', expiresInDays: 180 },
 ];
 
 /** A small valid one-page PDF with plain text (no scripts, no active content). */
