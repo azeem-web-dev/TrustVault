@@ -31,12 +31,16 @@ mkdir -p "$work/etc"
 cp -a /etc/tvkeyd "$work/etc/tvkeyd"
 cp -a /etc/trustvault "$work/etc/trustvault"
 
-# 3. Manifest: what is inside, and which release was running.
+# 3. Manifest: what is inside, and which release was running. Computed
+# into variables first so a failing query stops the backup (set -e does
+# not see failures inside an echo's command substitution).
+audit_head=$(runuser -u postgres -- psql -At -v ON_ERROR_STOP=1 -d trustvault   -c "SELECT seq::text || ' ' || encode(hash, 'hex') FROM audit_events ORDER BY seq DESC LIMIT 1")
+release=$(git -c safe.directory=/opt/trustvault/app -C /opt/trustvault/app log -1 --format='%H %s' 2>/dev/null || echo unknown)
 {
   echo "created_utc=$stamp"
   echo "host=$(hostname)"
-  echo "release=$(git -c safe.directory=/opt/trustvault/app -C /opt/trustvault/app log -1 --format='%H %s' 2>/dev/null || echo unknown)"
-  echo "audit_head=$(runuser -u postgres -- psql -At -d trustvault -c 'SELECT seq || '' '' || encode(hash, ''hex'') FROM audit_events ORDER BY seq DESC LIMIT 1')"
+  echo "release=$release"
+  echo "audit_head=$audit_head"
   ( cd "$work" && find . -type f ! -name MANIFEST -print0 | sort -z | xargs -0 sha256sum )
 } > "$work/MANIFEST"
 

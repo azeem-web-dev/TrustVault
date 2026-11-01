@@ -37,9 +37,10 @@ On the server (a fresh one: run `provision.sh` and `install-app.sh` first):
 
 ```bash
 systemctl stop trustvault-api trustvault-web
-install -o root -g tvkeyd -m 0640 etc/tvkeyd/master.key /etc/tvkeyd/master.key   # the original master key
+install -d -o root -g root -m 0700 /etc/tvkeyd && install -o root -g root -m 0400 etc/tvkeyd/master.key /etc/tvkeyd/master.key   # the original master key (keyd reads it via LoadCredential)
 systemctl restart tvkeyd
-runuser -u postgres -- pg_restore --clean --if-exists --no-owner --role=tv_owner --dbname=trustvault trustvault.dump
+# fed on stdin: the postgres user cannot read files under /root
+runuser -u postgres -- pg_restore --clean --if-exists --no-owner --role=tv_owner --dbname=trustvault < trustvault.dump
 bash /opt/trustvault/app/infra/server/deploy.sh   # re-grants, migrates if needed, starts, health check
 ```
 
@@ -47,4 +48,4 @@ Then sign in as an admin and run **Audit → Verify integrity**. The chain head 
 
 ## Tested
 
-A backup was decrypted with the offline key and restored into a scratch database on the server; the results are below.
+2026-11-01, on the production server: the newest backup was decrypted with the offline key (piped in over SSH, never written to the server's disk), every file matched its checksum in `MANIFEST`, the master key matched the live one byte for byte, and the dump was restored into a scratch database with `pg_restore --exit-on-error`. Every table matched the live database (users 5, documents 5, versions 5, blobs 5, grants 5, audit events 51, checkpoints 4), and `audit_verify()` on the restored copy reported an unbroken chain of 51 events. The scratch database and the decrypted files were then deleted.
