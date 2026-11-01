@@ -37,8 +37,7 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 **What was wrong:**
 1. The schema-level grant (`GRANT USAGE ON SCHEMA public`) was only in my server provisioning script, not in the migration. After `prisma migrate reset` recreated the schema, every query from the app role failed with `relation "audit_events" does not exist`. In production this would have shown up the first time anyone rebuilt the database.
-2. The first draft looked up the previous hash at the start of the insert. Under `REPEATABLE READ`, two concurrent writers can both see the same "last" row and fork the chain. Nothing in the draft would have noticed.
-3. The default `seq` came from a normal sequence default, which is assigned *before* the trigger takes its lock, so chain order and `seq` order could disagree under concurrency.
+2. Not a bug in the output, but two concurrency risks I asked about while reviewing the design before applying it: under `REPEATABLE READ` two concurrent writers could both read the same "last" row and fork the chain; and a plain sequence default on `seq` is assigned *before* the trigger takes its lock, so chain order and `seq` order could disagree. A naive version of this trigger has both problems, so I made sure this one does not.
 
 **What I did instead:**
 - Moved the schema grant into the migration itself.
