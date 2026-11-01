@@ -12,6 +12,15 @@ export const ROLES_KEY = 'tv:roles';
  */
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(PUBLIC_KEY, true);
 
+export const PARTIAL_AUTH_KEY = 'tv:partial-auth';
+
+/**
+ * Reachable with a password-only session that still owes a second factor.
+ * Only sign-in completion, MFA enrolment, "who am I" and sign-out use this.
+ * Every other route needs the second factor when the account requires one.
+ */
+export const PartialAuth = (): MethodDecorator & ClassDecorator => SetMetadata(PARTIAL_AUTH_KEY, true);
+
 /** Restricts a route to the given account roles (checked after the session). */
 export const Roles = (...roles: Role[]): MethodDecorator & ClassDecorator => SetMetadata(ROLES_KEY, roles);
 

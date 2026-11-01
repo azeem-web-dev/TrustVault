@@ -83,7 +83,7 @@ describe('login', () => {
   it('refuses a deactivated account with the generic message', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const u = await createUser({ email: 'gone@t.io', role: 'VIEWER' });
-    const a = await login(t, admin.email, admin.password);
+    const a = await login(t, admin);
     await as(t, a).post(`/api/admin/users/${u.id}/deactivate`).expect(200);
     const res = await t.http.post('/api/auth/login').send({ email: u.email, password: u.password });
     expect(res.status).toBe(401);
@@ -133,7 +133,7 @@ describe('brute-force protection', () => {
 describe('sessions end immediately', () => {
   it('logout needs the CSRF token, and the old cookie is dead afterwards', async () => {
     const u = await createUser({ email: 'out@t.io', role: 'VIEWER' });
-    const s = await login(t, u.email, u.password);
+    const s = await login(t, u);
     const noCsrf = await t.http.post('/api/auth/logout').set('Cookie', s.cookie).set('Origin', ORIGIN);
     expect(noCsrf.status).toBe(403);
     await as(t, s).post('/api/auth/logout').expect(204);
@@ -143,8 +143,8 @@ describe('sessions end immediately', () => {
   it('a CSRF token from another session does not work', async () => {
     const u1 = await createUser({ email: 'c1@t.io', role: 'VIEWER' });
     const u2 = await createUser({ email: 'c2@t.io', role: 'VIEWER' });
-    const s1 = await login(t, u1.email, u1.password);
-    const s2 = await login(t, u2.email, u2.password);
+    const s1 = await login(t, u1);
+    const s2 = await login(t, u2);
     const res = await t.http.post('/api/auth/logout').set('Cookie', s1.cookie).set('Origin', ORIGIN).set('X-CSRF-Token', s2.csrf);
     expect(res.status).toBe(403);
   });
@@ -152,8 +152,8 @@ describe('sessions end immediately', () => {
   it('deactivating a user ends their live session on the next request', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const u = await createUser({ email: 'victim@t.io', role: 'OWNER' });
-    const a = await login(t, admin.email, admin.password);
-    const s = await login(t, u.email, u.password);
+    const a = await login(t, admin);
+    const s = await login(t, u);
     await as(t, s).get('/api/auth/me').expect(200);
     await as(t, a).post(`/api/admin/users/${u.id}/deactivate`).expect(200);
     await as(t, s).get('/api/auth/me').expect(401);
@@ -162,34 +162,34 @@ describe('sessions end immediately', () => {
   it('changing a user role ends their sessions', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const u = await createUser({ email: 'promo@t.io', role: 'VIEWER' });
-    const a = await login(t, admin.email, admin.password);
-    const s = await login(t, u.email, u.password);
+    const a = await login(t, admin);
+    const s = await login(t, u);
     await as(t, a).patch(`/api/admin/users/${u.id}`, { role: 'OWNER' }).expect(200);
     await as(t, s).get('/api/auth/me').expect(401);
   });
 
   it('changing your password ends every session, including other devices', async () => {
     const u = await createUser({ email: 'pw@t.io', role: 'VIEWER' });
-    const laptop = await login(t, u.email, u.password);
-    const phone = await login(t, u.email, u.password);
+    const laptop = await login(t, u);
+    const phone = await login(t, u);
     await as(t, laptop).post('/api/auth/password', { currentPassword: u.password, newPassword: 'a-brand-new-long-password' }).expect(204);
     await as(t, laptop).get('/api/auth/me').expect(401);
     await as(t, phone).get('/api/auth/me').expect(401);
-    await login(t, u.email, 'a-brand-new-long-password');
+    await login(t, { email: u.email, password: 'a-brand-new-long-password' });
   });
 
   it('an admin password reset ends the user’s sessions', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const u = await createUser({ email: 'reset@t.io', role: 'VIEWER' });
-    const a = await login(t, admin.email, admin.password);
-    const s = await login(t, u.email, u.password);
+    const a = await login(t, admin);
+    const s = await login(t, u);
     await as(t, a).post(`/api/admin/users/${u.id}/password`, { password: 'admin-set-long-password' }).expect(204);
     await as(t, s).get('/api/auth/me').expect(401);
   });
 
   it('logging in again from the same browser replaces the old session', async () => {
     const u = await createUser({ email: 'again@t.io', role: 'VIEWER' });
-    const first = await login(t, u.email, u.password);
+    const first = await login(t, u);
     const res = await t.http.post('/api/auth/login').set('Cookie', first.cookie).set('Origin', ORIGIN).send({ email: u.email, password: u.password });
     expect(res.status).toBe(200);
     await as(t, first).get('/api/auth/me').expect(401);
@@ -200,7 +200,7 @@ describe('account roles', () => {
   for (const role of ['OWNER', 'VIEWER', 'EXTERNAL'] as const) {
     it(`${role} cannot use admin user management, and the attempt is audited`, async () => {
       const u = await createUser({ email: `${role.toLowerCase()}@t.io`, role, accessExpiresAt: role === 'EXTERNAL' ? new Date(Date.now() + 86_400_000) : undefined });
-      const s = await login(t, u.email, u.password);
+      const s = await login(t, u);
       const res = await as(t, s).get('/api/admin/users');
       expect(res.status).toBe(403);
       const rows = await auditRows(`request_id = $1`, [res.headers['x-request-id']]);
@@ -212,7 +212,7 @@ describe('account roles', () => {
 
   it('an admin cannot deactivate or demote themselves', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
-    const a = await login(t, admin.email, admin.password);
+    const a = await login(t, admin);
     await as(t, a).post(`/api/admin/users/${admin.id}/deactivate`).expect(400);
     await as(t, a).patch(`/api/admin/users/${admin.id}`, { role: 'VIEWER' }).expect(400);
   });
@@ -220,16 +220,16 @@ describe('account roles', () => {
   it('the last active admin cannot be removed', async () => {
     const a1 = await createUser({ email: 'a1@t.io', role: 'ADMIN' });
     const a2 = await createUser({ email: 'a2@t.io', role: 'ADMIN' });
-    const s1 = await login(t, a1.email, a1.password);
+    const s1 = await login(t, a1);
     await as(t, s1).post(`/api/admin/users/${a2.id}/deactivate`).expect(200);
     // a1 is now the only admin; nobody else can remove them either.
-    const s1b = await login(t, a1.email, a1.password);
+    const s1b = await login(t, a1);
     await as(t, s1b).post(`/api/admin/users/${a1.id}/deactivate`).expect(400);
   });
 
   it('external accounts must have a future expiry', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
-    const a = await login(t, admin.email, admin.password);
+    const a = await login(t, admin);
     await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password' }).expect(400);
     await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password', accessExpiresAt: '2001-01-01' }).expect(400);
     await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password', accessExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }).expect(201);
@@ -237,7 +237,7 @@ describe('account roles', () => {
 
   it('short passwords are refused', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
-    const a = await login(t, admin.email, admin.password);
+    const a = await login(t, admin);
     await as(t, a).post('/api/admin/users', { email: 'short@t.io', displayName: 'S', role: 'VIEWER', password: 'short' }).expect(400);
   });
 });
@@ -260,7 +260,7 @@ describe('responses leak nothing', () => {
 
   it('a non-UUID id gives 400, not a database error', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
-    const a = await login(t, admin.email, admin.password);
+    const a = await login(t, admin);
     const res = await as(t, a).post("/api/admin/users/1' OR '1'='1/deactivate");
     expect([400, 404]).toContain(res.status);
   });

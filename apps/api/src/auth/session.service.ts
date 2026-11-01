@@ -61,7 +61,7 @@ export class SessionService {
     if (!token || token.length > 128) return null;
     const session = await this.prisma.session.findUnique({
       where: { tokenHash: sha256(token) },
-      include: { user: true },
+      include: { user: { include: { _count: { select: { passkeys: true } } } } },
     });
     if (!session) return null;
 
@@ -84,6 +84,7 @@ export class SessionService {
       await this.prisma.session.updateMany({ where: { id: session.id }, data: { lastSeenAt: new Date(now) } });
     }
 
+    const mfaEnrolled = user.totpEnabledAt !== null || user._count.passkeys > 0;
     return {
       userId: user.id,
       email: user.email,
@@ -91,6 +92,8 @@ export class SessionService {
       sessionId: session.id,
       authLevel: session.authLevel,
       csrfToken: session.csrfToken,
+      mfaEnrolled,
+      mfaRequired: user.role === 'ADMIN' || mfaEnrolled,
     };
   }
 

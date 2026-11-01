@@ -9,8 +9,13 @@ export interface Actor {
   email: string;
   role: Role;
   sessionId: string;
+  /** "password", or "mfa" once a second factor was presented in this session. */
   authLevel: string;
   csrfToken: string;
+  /** Has a TOTP app or passkey registered. */
+  mfaEnrolled: boolean;
+  /** Must present a second factor before using the app (every ADMIN, and anyone enrolled). */
+  mfaRequired: boolean;
 }
 
 /** Per-request facts the audit log needs, available anywhere in the call. */

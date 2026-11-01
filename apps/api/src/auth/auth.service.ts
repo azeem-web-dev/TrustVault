@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Inject, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -30,6 +30,7 @@ export interface PublicUser {
 export interface LoginResult {
   session: NewSession;
   user: PublicUser;
+  mfa: { required: boolean; enrolled: boolean; methods: ('totp' | 'passkey')[] };
 }
 
 export const normaliseEmail = (email: string): string => email.trim().toLowerCase();
@@ -50,7 +51,7 @@ export class AuthService {
     const ctx = currentContext();
     await this.enforceRateLimits(email, ctx?.ip ?? 'unknown');
 
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.prisma.user.findUnique({ where: { email }, include: { _count: { select: { passkeys: true } } } });
     // Always run a full Argon2 verify, even for unknown accounts (dummy hash),
     // so response time does not reveal which emails exist.
     const passwordOk = await this.passwords.verify(user?.passwordHash ?? null, password);
@@ -97,7 +98,15 @@ export class AuthService {
     });
     await this.redis.reset(`rl:login:acct:${emailKey(email)}`).catch(() => undefined);
 
-    return { session: result, user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role } };
+    const methods: ('totp' | 'passkey')[] = [];
+    if (user.totpEnabledAt) methods.push('totp');
+    if (user._count.passkeys > 0) methods.push('passkey');
+    const enrolled = methods.length > 0;
+    return {
+      session: result,
+      user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
+      mfa: { required: user.role === 'ADMIN' || enrolled, enrolled, methods },
+    };
   }
 
   async logout(actor: Actor): Promise<void> {
@@ -114,6 +123,7 @@ export class AuthService {
 
   async changePassword(actor: Actor, current: string, next: string): Promise<void> {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId } });
+    if (user.isProtected) throw new ForbiddenException('Demo account passwords cannot be changed');
     if (!(await this.passwords.verify(user.passwordHash, current))) {
       await this.audit.record({ action: 'auth.password_change', outcome: 'DENIED', reason: 'wrong_current_password', targetType: 'user', targetId: user.id });
       throw new UnauthorizedException('Current password is incorrect');

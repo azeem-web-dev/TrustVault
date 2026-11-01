@@ -63,6 +63,12 @@ export class UsersController {
     return { user: await this.users.reactivate(id) };
   }
 
+  @Post(':id/mfa/reset')
+  @HttpCode(204)
+  async resetMfa(@CurrentActor() actor: Actor, @Param('id', uuid) id: string): Promise<void> {
+    await this.users.resetMfa(actor, id);
+  }
+
   @Post(':id/password')
   @HttpCode(204)
   async resetPassword(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(ResetPasswordSchema)) body: z.infer<typeof ResetPasswordSchema>): Promise<void> {

@@ -3,10 +3,10 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
-import { CurrentActor, Public } from './decorators.js';
+import { CurrentActor, PartialAuth, Public } from './decorators.js';
 import { AuthService } from './auth.service.js';
 import { PasswordSchema } from './password.service.js';
-import { SESSION_COOKIE } from './session.service.js';
+import { SESSION_COOKIE, type NewSession } from './session.service.js';
 
 const LoginSchema = z.strictObject({
   email: z.string().max(254),
@@ -20,11 +20,25 @@ const ChangePasswordSchema = z.strictObject({
   newPassword: PasswordSchema,
 });
 
+const COOKIE_BASE = { httpOnly: true, secure: true, sameSite: 'strict' as const, path: '/' };
+
+export function setSessionCookie(res: Response, session: NewSession): void {
+  res.cookie(SESSION_COOKIE, session.token, { ...COOKIE_BASE, expires: session.expiresAt });
+}
+
+export function clearSessionCookie(res: Response): void {
+  res.clearCookie(SESSION_COOKIE, COOKIE_BASE);
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(@Inject(AuthService) private readonly auth: AuthService) {}
 
-  /** Who may call: anyone (this is how a session is obtained). */
+  /**
+   * Who may call: anyone (this is how a session is obtained). If the account
+   * needs a second factor, the session returned can only reach the MFA
+   * routes until it is presented (`mfaRequired: true`).
+   */
   @Public()
   @Post('login')
   @HttpCode(200)
@@ -34,32 +48,34 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const previous = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
-    const { session, user } = await this.auth.login(body.email, body.password, previous);
-    res.cookie(SESSION_COOKIE, session.token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'strict',
-      path: '/',
-      expires: session.expiresAt,
-    });
-    return { user, csrfToken: session.csrfToken };
+    const { session, user, mfa } = await this.auth.login(body.email, body.password, previous);
+    setSessionCookie(res, session);
+    return { user, csrfToken: session.csrfToken, mfaRequired: mfa.required, mfaEnrolled: mfa.enrolled, mfaMethods: mfa.methods };
   }
 
-  /** Who may call: any signed-in user (ends their own current session). */
+  /** Who may call: any signed-in user, even before the second factor (ends their own session). */
+  @PartialAuth()
   @Post('logout')
   @HttpCode(204)
   async logout(@CurrentActor() actor: Actor, @Res({ passthrough: true }) res: Response): Promise<void> {
     await this.auth.logout(actor);
-    res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: true, sameSite: 'strict', path: '/' });
+    clearSessionCookie(res);
   }
 
-  /** Who may call: any signed-in user (their own profile and CSRF token). */
+  /** Who may call: any signed-in user, even before the second factor (own profile, CSRF token, MFA state). */
+  @PartialAuth()
   @Get('me')
   async me(@CurrentActor() actor: Actor) {
-    return { user: await this.auth.me(actor), csrfToken: actor.csrfToken };
+    return {
+      user: await this.auth.me(actor),
+      csrfToken: actor.csrfToken,
+      mfaRequired: actor.mfaRequired,
+      mfaSatisfied: actor.authLevel === 'mfa',
+      mfaEnrolled: actor.mfaEnrolled,
+    };
   }
 
-  /** Who may call: any signed-in user, for their own password. Ends all their sessions. */
+  /** Who may call: any fully signed-in user, for their own password. Ends all their sessions. */
   @Post('password')
   @HttpCode(204)
   async changePassword(
@@ -68,6 +84,6 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     await this.auth.changePassword(actor, body.currentPassword, body.newPassword);
-    res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: true, sameSite: 'strict', path: '/' });
+    clearSessionCookie(res);
   }
 }

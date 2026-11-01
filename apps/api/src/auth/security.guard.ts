@@ -12,7 +12,7 @@ import { ENV, type Env } from '../config/env.js';
 import type { Role } from '../generated/prisma/enums.js';
 import { AuditService } from '../audit/audit.service.js';
 import { currentContext } from '../common/request-context.js';
-import { PUBLIC_KEY, ROLES_KEY } from './decorators.js';
+import { PARTIAL_AUTH_KEY, PUBLIC_KEY, ROLES_KEY } from './decorators.js';
 import { SESSION_COOKIE, SessionService } from './session.service.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -22,7 +22,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  *  1. Origin check on state-changing requests (cross-site requests refused).
  *  2. Session: required unless the route is @Public().
  *  3. CSRF token: required on state-changing requests with a session.
- *  4. Account role, if the route declares @Roles().
+ *  4. Second factor, if the account requires one.
+ *  5. Account role, if the route declares @Roles().
  * Document-level permissions are a separate, later check (decide()).
  */
 @Injectable()
@@ -65,7 +66,15 @@ export class SecurityGuard implements CanActivate {
       throw new ForbiddenException('Missing or invalid CSRF token');
     }
 
-    // 4. Role.
+    // 4. Second factor. A session that owes one can only reach the routes
+    //    that complete sign-in (@PartialAuth). Applies to every ADMIN and to
+    //    anyone who has enrolled a TOTP app or passkey.
+    const partialOk = this.reflector.getAllAndOverride<boolean>(PARTIAL_AUTH_KEY, targets) === true;
+    if (actor.mfaRequired && actor.authLevel !== 'mfa' && !partialOk) {
+      throw new ForbiddenException({ message: 'Second factor required', code: actor.mfaEnrolled ? 'mfa_required' : 'mfa_enrolment_required' });
+    }
+
+    // 5. Role.
     const roles = this.reflector.getAllAndOverride<Role[] | undefined>(ROLES_KEY, targets);
     if (roles && !roles.includes(actor.role)) {
       await this.audit.record({ action: 'security.role', outcome: 'DENIED', reason: 'role_not_allowed', details: { method: req.method, path: req.path, required: roles } });

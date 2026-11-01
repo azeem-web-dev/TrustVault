@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { PasswordService } from '../auth/password.service.js';
@@ -17,12 +17,19 @@ export interface AdminUserView {
   lockedUntil: Date | null;
   createdAt: Date;
   deactivatedAt: Date | null;
+  isProtected: boolean;
+  totpEnabledAt: Date | null;
 }
 
 const VIEW = {
   id: true, email: true, displayName: true, role: true, status: true,
-  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true,
+  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true, isProtected: true, totpEnabledAt: true,
 } as const;
+
+/** Published demo accounts (README) must stay usable for every visitor. THREATS.md I8. */
+function assertNotProtected(u: { isProtected: boolean }): void {
+  if (u.isProtected) throw new ForbiddenException('This is a protected demo account and cannot be changed');
+}
 
 @Injectable()
 export class UsersService {
@@ -62,6 +69,7 @@ export class UsersService {
   async update(actor: Actor, id: string, patch: { displayName?: string | undefined; role?: Role | undefined; accessExpiresAt?: Date | null | undefined }): Promise<AdminUserView> {
     return this.prisma.$transaction(async (tx) => {
       const before = await this.lockUser(tx, id);
+      assertNotProtected(before);
       const role = patch.role ?? before.role;
       const accessExpiresAt = patch.accessExpiresAt !== undefined ? patch.accessExpiresAt : before.accessExpiresAt;
       checkExternalExpiry(role, accessExpiresAt);
@@ -90,6 +98,7 @@ export class UsersService {
     if (id === actor.userId) throw new BadRequestException('You cannot deactivate your own account');
     return this.prisma.$transaction(async (tx) => {
       const before = await this.lockUser(tx, id);
+      assertNotProtected(before);
       if (before.status === 'DEACTIVATED') return before;
       if (before.role === 'ADMIN') await this.ensureAnotherAdmin(tx, id);
       const user = await tx.user.update({ where: { id }, data: { status: 'DEACTIVATED', deactivatedAt: new Date() }, select: VIEW });
@@ -113,10 +122,22 @@ export class UsersService {
     if (id === actor.userId) throw new BadRequestException('Use the change-password page for your own account');
     const passwordHash = await this.passwords.hash(password);
     await this.prisma.$transaction(async (tx) => {
-      await this.lockUser(tx, id);
+      assertNotProtected(await this.lockUser(tx, id));
       await tx.user.update({ where: { id }, data: { passwordHash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null } });
       const ended = await this.sessions.revokeAllForUser(id, tx);
       await this.audit.record({ action: 'user.password_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);
+    });
+  }
+
+  /** Clears a user's TOTP and passkeys (lost phone). They must enrol again; their sessions end. */
+  async resetMfa(actor: Actor, id: string): Promise<void> {
+    if (id === actor.userId) throw new BadRequestException('Another admin must reset your second factor');
+    await this.prisma.$transaction(async (tx) => {
+      assertNotProtected(await this.lockUser(tx, id));
+      await tx.user.update({ where: { id }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
+      const removed = await tx.passkey.deleteMany({ where: { userId: id } });
+      const ended = await this.sessions.revokeAllForUser(id, tx);
+      await this.audit.record({ action: 'user.mfa_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { passkeysRemoved: removed.count, sessionsEnded: ended } }, tx);
     });
   }
 

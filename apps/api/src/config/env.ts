@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 // Every setting the API reads, validated once at startup. A missing or
 // malformed value stops the process instead of failing later at runtime.
+const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4100),
@@ -14,6 +16,16 @@ const EnvSchema = z.object({
   /** Idle timeout and absolute lifetime of a session, in minutes. */
   SESSION_IDLE_MINUTES: z.coerce.number().int().min(1).max(240).default(30),
   SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(12 * 60),
+  /** Where long-lived keys live. `keyd` (separate process) is required in production. */
+  KEY_PROVIDER: z.enum(['local', 'keyd']).default('local'),
+  /** 32 random bytes, base64. Development and tests only. */
+  LOCAL_MASTER_KEY: z.string().optional(),
+  KEYD_SOCKET: z.string().default('/run/tvkeyd/keyd.sock'),
+  MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(100).default(25),
+  /** Documents in the trash longer than this are permanently removed. */
+  TRASH_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  /** Background jobs (audit checkpoints, retention, session cleanup). */
+  JOBS_ENABLED: bool.default(true),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -25,10 +37,16 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     const keys = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
     throw new Error(`Invalid configuration: ${keys}`);
   }
-  if (parsed.data.NODE_ENV === 'production' && !parsed.data.PUBLIC_ORIGIN.startsWith('https://')) {
-    throw new Error('Invalid configuration: PUBLIC_ORIGIN must be https in production');
+  const env = parsed.data;
+  if (env.NODE_ENV === 'production') {
+    if (!env.PUBLIC_ORIGIN.startsWith('https://')) throw new Error('Invalid configuration: PUBLIC_ORIGIN must be https in production');
+    if (env.KEY_PROVIDER !== 'keyd') throw new Error('Invalid configuration: production requires KEY_PROVIDER=keyd');
   }
-  return parsed.data;
+  if (env.KEY_PROVIDER === 'local') {
+    const key = env.LOCAL_MASTER_KEY ? Buffer.from(env.LOCAL_MASTER_KEY, 'base64') : null;
+    if (!key || key.length !== 32) throw new Error('Invalid configuration: LOCAL_MASTER_KEY must be 32 bytes of base64');
+  }
+  return env;
 }
 
 export const ENV = Symbol('ENV');

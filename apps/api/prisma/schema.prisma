@@ -50,8 +50,24 @@ model User {
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   createdById       String?    @map("created_by_id") @db.Uuid
   deactivatedAt     DateTime?  @map("deactivated_at") @db.Timestamptz(6)
+  /// Published demo accounts: cannot be deactivated, demoted, renamed or
+  /// have their password changed through the API (THREATS.md I8).
+  isProtected       Boolean    @default(false) @map("is_protected")
+  /// TOTP secret, encrypted by the key provider. Null until enrolled.
+  totpSecretEnc     Bytes?     @map("totp_secret_enc")
+  totpEnabledAt     DateTime?  @map("totp_enabled_at") @db.Timestamptz(6)
+  /// Last accepted 30-second step, so a code cannot be replayed.
+  totpLastStep      BigInt?    @map("totp_last_step")
 
-  sessions Session[]
+  sessions         Session[]
+  ownedDocuments   Document[]        @relation("DocumentOwner")
+  folders          Folder[]
+  grants           Grant[]           @relation("GrantUser")
+  grantsGiven      Grant[]           @relation("GrantGrantedBy")
+  groupMemberships GroupMember[]
+  versionsUploaded DocumentVersion[]
+  breakGlass       BreakGlass[]
+  passkeys         Passkey[]
 
   @@map("users")
 }
@@ -107,4 +123,190 @@ model AuditEvent {
   @@index([documentId, occurredAt])
   @@index([action, occurredAt])
   @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------------
+// Documents and permissions
+// ---------------------------------------------------------------------------
+
+enum DocumentStatus {
+  ACTIVE
+  DELETED
+}
+
+enum GrantLevel {
+  READ
+  EDIT
+  MANAGE
+}
+
+/// Folders organise one owner's documents. They never grant access.
+model Folder {
+  id        String   @id @default(uuid()) @db.Uuid
+  ownerId   String   @map("owner_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner     User       @relation(fields: [ownerId], references: [id])
+  documents Document[]
+
+  @@unique([ownerId, name])
+  @@map("folders")
+}
+
+model Document {
+  id               String         @id @default(uuid()) @db.Uuid
+  ownerId          String         @map("owner_id") @db.Uuid
+  title            String
+  description      String?
+  category         String
+  folderId         String?        @map("folder_id") @db.Uuid
+  status           DocumentStatus @default(ACTIVE)
+  deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  currentVersionNo Int            @default(1) @map("current_version_no")
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner      User              @relation("DocumentOwner", fields: [ownerId], references: [id])
+  folder     Folder?           @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  versions   DocumentVersion[]
+  grants     Grant[]
+  breakGlass BreakGlass[]
+
+  @@index([ownerId])
+  @@index([category])
+  @@index([createdAt])
+  @@map("documents")
+}
+
+/// Metadata of one uploaded file. The encrypted bytes live in document_blobs
+/// so listing versions never loads file contents.
+model DocumentVersion {
+  id           String   @id @default(uuid()) @db.Uuid
+  documentId   String   @map("document_id") @db.Uuid
+  versionNo    Int      @map("version_no")
+  fileName     String   @map("file_name")
+  /// Detected from the file's bytes, never taken from the client.
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  /// SHA-256 of the plaintext, for integrity checks and the audit log.
+  sha256       Bytes
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document   Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy User          @relation(fields: [uploadedById], references: [id])
+  blob       DocumentBlob?
+
+  @@unique([documentId, versionNo])
+  @@map("document_versions")
+}
+
+/// AES-256-GCM ciphertext of one version. The data key is random per
+/// version and stored only in wrapped (encrypted) form.
+model DocumentBlob {
+  versionId  String @id @map("version_id") @db.Uuid
+  wrappedKey Bytes  @map("wrapped_key")
+  keyId      String @map("key_id")
+  nonce      Bytes
+  authTag    Bytes  @map("auth_tag")
+  ciphertext Bytes
+
+  version DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@map("document_blobs")
+}
+
+/// One permission on one document, for a named user or a group.
+model Grant {
+  id          String     @id @default(uuid()) @db.Uuid
+  documentId  String     @map("document_id") @db.Uuid
+  userId      String?    @map("user_id") @db.Uuid
+  groupId     String?    @map("group_id") @db.Uuid
+  level       GrantLevel
+  expiresAt   DateTime?  @map("expires_at") @db.Timestamptz(6)
+  grantedById String     @map("granted_by_id") @db.Uuid
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user      User?    @relation("GrantUser", fields: [userId], references: [id])
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  grantedBy User     @relation("GrantGrantedBy", fields: [grantedById], references: [id])
+
+  @@unique([documentId, userId])
+  @@unique([documentId, groupId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("grants")
+}
+
+model Group {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  members GroupMember[]
+  grants  Grant[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  groupId String   @map("group_id") @db.Uuid
+  userId  String   @map("user_id") @db.Uuid
+  addedAt DateTime @default(now()) @map("added_at") @db.Timestamptz(6)
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+/// Emergency read access for an admin: written reason, one hour, alerted.
+model BreakGlass {
+  id         String   @id @default(uuid()) @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  reason     String
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  admin    User     @relation(fields: [adminId], references: [id])
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, adminId])
+  @@map("break_glass")
+}
+
+/// Signed snapshot of the audit chain head. Append-only like the log.
+model AuditCheckpoint {
+  seq       BigInt   @id
+  headHash  Bytes    @map("head_hash")
+  signature Bytes
+  keyId     String   @map("key_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("audit_checkpoints")
+}
+
+/// WebAuthn credential (passkey) used as a second factor.
+model Passkey {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  credentialId String    @unique @map("credential_id")
+  publicKey    Bytes     @map("public_key")
+  counter      BigInt    @default(0)
+  transports   String[]
+  name         String
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUsedAt   DateTime? @map("last_used_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("passkeys")
 }
