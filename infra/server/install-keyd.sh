@@ -10,7 +10,11 @@ REPO=https://github.com/azeem-web-dev/TrustVault.git
 REF=${1:-main}
 BUILD=/var/lib/tvbuild
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y -q rustc cargo >/dev/null
+# Ubuntu's default rustc (1.75) is too old for current crates; use the
+# versioned toolchain packages from the Ubuntu archive (no curl | sh).
+RUST_VER=1.91
+DEBIAN_FRONTEND=noninteractive apt-get install -y -q "rustc-$RUST_VER" "cargo-$RUST_VER" >/dev/null
+export CARGO="cargo-$RUST_VER" RUSTC="rustc-$RUST_VER"
 
 getent group tvkeysock >/dev/null || groupadd --system tvkeysock
 id tvkeyd  >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin --gid tvkeysock tvkeyd
@@ -35,7 +39,7 @@ sudo -u tvbuild -H bash -c "
   set -euo pipefail
   if [ ! -d '$BUILD/src/.git' ]; then git clone --quiet '$REPO' '$BUILD/src'; fi
   cd '$BUILD/src' && git fetch --quiet origin && git checkout --quiet --force --detach 'origin/$REF'
-  cd keyd && cargo test --release --quiet && cargo build --release --quiet
+  cd keyd && RUSTC=rustc-$RUST_VER cargo-$RUST_VER test --release --quiet && RUSTC=rustc-$RUST_VER cargo-$RUST_VER build --release --quiet
 "
 install -m 0755 -o root -g root "$BUILD/src/keyd/target/release/tvkeyd" /usr/local/bin/tvkeyd
 
