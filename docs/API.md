@@ -49,7 +49,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | PATCH | `/documents/:id` | **EDIT+** for `title`, `category`, `description`; **owner** for `folderId` | |
 | POST | `/documents/:id/versions` | **EDIT+** | Multipart `file`. Scanned only after the permission check. |
 | GET | `/documents/:id/download` | **READ+** | Current version. Audited **before** the first byte is sent. `Content-Disposition: attachment`, `CSP: sandbox`, `nosniff`, `no-store`, `X-Document-SHA256`. |
-| GET | `/documents/:id/versions/:n/download` | **READ+** | A specific version. |
+| GET | `/documents/:id/versions/:n/download` | **READ+** | A specific version. Either download answers `403` (audited) for a version the nightly malware re-scan quarantined; `GET /documents/:id` shows `quarantine: {signature, foundAt}` on such a version. |
 | GET | `/documents/:id/history` | **MANAGE+** | Audit events for this document, including refusals and break-glass use. |
 | POST | `/documents/:id/trash` | **owner** | Hidden from everyone else at once. |
 | POST | `/documents/:id/restore` | **owner** | |
@@ -90,7 +90,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | DELETE | `/admin/groups/:id/members/:userId` | Access through the group ends on the member's next request. |
 | GET | `/admin/audit` | `action` (prefix), `outcome`, `actor`, `documentId`, `from`, `to`, `before`, `limit`. Newest first, with document titles (never contents). |
 | POST | `/admin/audit/verify` | Recomputes every hash and checks every signed checkpoint. |
-| POST | `/admin/audit/checkpoint` | Signs the current chain head now (also every 5 minutes). |
-| GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `node tools/verify-audit.mjs` (add `--witness checkpoints.jsonl` from the `witness` branch to check it against the outside witness). |
+| POST | `/admin/audit/checkpoint` | Signs the current chain head now (also every minute when there are new events; each checkpoint is then published to Sigstore's public log). |
+| GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `node tools/verify-audit.mjs` (add `--witness checkpoints.jsonl` from the `witness` branch to check it against the outside witness, and `--rekor` to check it against Sigstore's public log). |
 | GET | `/admin/alerts` | `hours` (1 to 720). |
 | POST | `/admin/break-glass` | `{documentId, reason}` (20+ chars): one hour of READ on one document. Audited, alerted, visible in the document's history. |

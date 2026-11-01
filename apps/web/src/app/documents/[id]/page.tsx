@@ -15,6 +15,8 @@ interface Version {
   createdAt: string;
   sha256: string;
   uploadedBy: string;
+  /** Set when the nightly malware re-scan found something in this version. */
+  quarantine: { signature: string; foundAt: string } | null;
 }
 
 interface Doc {
@@ -197,8 +199,17 @@ function Versions({ doc, canUpload, onUploaded, onError }: { doc: Doc; canUpload
             <div>
               <span className="font-medium">v{v.versionNo}</span> · {v.fileName} · {formatBytes(v.sizeBytes)}
               <div className="text-xs text-slate-500">by {v.uploadedBy}, {formatDate(v.createdAt)}</div>
+              {v.quarantine && (
+                <div className="mt-1 text-xs font-medium text-red-700 dark:text-red-400">
+                  Quarantined {formatDate(v.quarantine.foundAt)}: the malware scanner found {v.quarantine.signature}
+                </div>
+              )}
             </div>
-            <a className="text-brand-600 hover:underline" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`}>Download</a>
+            {v.quarantine ? (
+              <span className="text-slate-400">Download blocked</span>
+            ) : (
+              <a className="text-brand-600 hover:underline" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`}>Download</a>
+            )}
           </li>
         ))}
       </ul>

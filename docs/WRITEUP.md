@@ -10,7 +10,7 @@ A document platform for confidential files: salary letters, contracts, board min
 - **Documents:** upload (type checked from the bytes), versions, folders, trash and restore, permanent delete, ownership transfer. Search by name, owner, category and date.
 - **Permissions:** per-document grants of READ, EDIT or MANAGE to named people or groups, optional expiry, revoke. External people get READ only, always with an expiry.
 - **Encryption at rest:** a random AES-256-GCM key per file version, wrapped by a separate key service (Rust) running as its own Linux user. The API never holds the master key.
-- **Audit trail:** every upload, view, download, edit, deletion, permission change, sign-in and **refused attempt**. The database itself hash-chains the log and refuses edits and deletions. The key service signs checkpoints every 10 minutes. Admins can verify the chain in one click or export a bundle that a dependency-free script verifies offline.
+- **Audit trail:** every upload, view, download, edit, deletion, permission change, sign-in and **refused attempt**. The database itself hash-chains the log and refuses edits and deletions. The key service signs a checkpoint every minute there is new activity, and each one is published to Sigstore's public transparency log within about a minute. Admins can verify the chain in one click or export a bundle that a dependency-free script verifies offline.
 - **Admin view:** filterable activity, integrity verification, alerts (repeated refusals, attempts after revocation, bulk downloads, external sharing, break-glass, blocked sign-ins, integrity failures), users, groups, and audited break-glass access.
 - **Access suggestions:** for a document, suggests people you shared similar documents with. Suggestions never grant; you confirm each one, and both are audited.
 
@@ -58,11 +58,11 @@ The full log is in [PROMPTS.md](../PROMPTS.md). The mistakes that mattered:
 
 ## What is not finished
 
-These were open gaps in the first version and are now built and tested: the outside witness for the audit chain (THREATS.md L8), malware scanning of uploads (U6), the login timing measurement (S2), automated encrypted backups of the database and master key (K4), and an end-to-end passkey test (S12). What is still open:
+These were open gaps in the first version and are now built and tested: the outside witness for the audit chain (THREATS.md L8), malware scanning of uploads (U6), the login timing measurement (S2), automated encrypted backups of the database and master key (K4), and an end-to-end passkey test (S12). In a second round: checkpoints published to Sigstore's public log within about a minute (the unprotected tail went from about 20 minutes to 1–2, L5), a nightly re-scan that quarantines files caught by newer virus signatures (U6), and the passkey ceremony run in real Chrome through the real pages (S12). What is still open:
 
 - **Backups stay on server 136.** They are encrypted to a key that is not on the server, and tested by restoring one, but losing the machine loses them. Copying them off-site was offered and declined for now; it is one `scp` (docs/RESTORE.md).
-- **The newest ~20 minutes of audit events** are protected by the hash chain and signatures, but not yet by the outside witness (L5).
-- **Signature-based malware scanning** does not catch brand-new malware. Files are still never opened on the server.
-- **Passkeys in a real browser.** The full WebAuthn ceremony is tested with a software authenticator that produces real keys and bytes; I have not run it with a phone or security key against the live site.
+- **The last minute or two of audit events** before a server compromise are signed but not yet public, so root could still cut those off (L5).
+- **Malware nobody has a signature for yet** is caught only once ClamAV learns it; the nightly re-scan then quarantines it. Files are still never opened on the server.
+- **A physical phone or security key** has not been tried against the live site. Real Chrome with its virtual authenticator, through the real pages and API, is tested on every push.
 - **Demo video:** the script is in [docs/DEMO.md](DEMO.md); the recording is mine to make.
 - **One server.** No database replication.

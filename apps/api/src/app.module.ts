@@ -26,6 +26,7 @@ import { SharingService } from './documents/sharing.service.js';
 import { DocumentsController } from './documents/documents.controller.js';
 import { FoldersController } from './documents/folders.controller.js';
 import { JobsService } from './jobs/jobs.service.js';
+import { RescanService } from './scanning/rescan.service.js';
 import { ClamdScanner, MALWARE_SCANNER, NoScanner, type MalwareScanner } from './scanning/malware-scanner.js';
 import { HealthController } from './health.controller.js';
 
@@ -66,6 +67,7 @@ export class AppModule {
         DocumentsService,
         SharingService,
         JobsService,
+        RescanService,
         // Global: runs before every route. Deny-by-default authentication.
         { provide: APP_GUARD, useClass: SecurityGuard },
       ],

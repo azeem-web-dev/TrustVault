@@ -6,6 +6,12 @@
 # branch. The server holds no credential for this repository, so whoever
 # controls the server cannot rewrite what was witnessed. If a check fails,
 # nothing is committed and this workflow fails, which emails the owner.
+#
+# It also checks the server against Sigstore's public transparency log, where
+# the server publishes each checkpoint within a minute (tools/anchor.mjs):
+# every public entry signed with the audit key must match a checkpoint the
+# server still reports (public-log.jsonl records the ones already checked),
+# and a checkpoint left unpublished for an hour fails the run.
 name: Audit witness
 
 on:
@@ -50,6 +56,6 @@ jobs:
           git config user.name "trustvault-witness"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           head=$(tail -n 1 checkpoints.jsonl | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).seq))')
-          git add checkpoints.jsonl signing-key.json
+          git add checkpoints.jsonl signing-key.json public-log.jsonl 2>/dev/null || git add checkpoints.jsonl signing-key.json
           git commit -q -m "Witness audit checkpoints up to seq ${head}"
           git push -q origin HEAD:witness

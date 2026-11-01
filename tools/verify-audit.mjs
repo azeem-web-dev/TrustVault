@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Offline verifier for a TrustVault audit bundle (Admin → Audit → Export).
 //
-//   node tools/verify-audit.mjs trustvault-audit-1-500.json [expected-public-key-base64] [--witness checkpoints.jsonl]
+//   node tools/verify-audit.mjs trustvault-audit-1-500.json [expected-public-key-base64] [--witness checkpoints.jsonl] [--rekor]
 //
-// Needs nothing but Node. It does not talk to the server or the database,
-// so it is a check you can run without trusting either. It verifies:
+// Needs nothing but Node. It never talks to the TrustVault server or its
+// database, so it is a check you can run without trusting either. It verifies:
 //   1. every event's hash = SHA-256(prev_hash || canonical bytes of the event)
 //   2. every event's prev_hash is the previous event's hash (no gaps,
 //      insertions, reordering or deletions inside the range)
@@ -15,10 +15,17 @@
 //      `witness` branch, see tools/witness.mjs) that falls inside the bundle
 //      matches the bundle's chain. The server cannot have rewritten history
 //      after the witness saw it without failing this check.
+//   5. with --rekor: looks up every checkpoint signed with the bundle's key
+//      in Sigstore's public log (the only network call). Shows how many of
+//      the bundle's checkpoints were published there and when. For a bundle
+//      that starts at event 1, every entry published before the bundle's
+//      newest published checkpoint must match the bundle's chain; one that
+//      does not is a checkpoint of a history that has since been rewritten.
 // Exit code 0 = intact, 1 = tampered or malformed.
 
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { checkpointDigest, entriesForKey } from './rekor.mjs';
 
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
@@ -74,22 +81,67 @@ export function verifyBundle(bundle, expectedKey, witnessed = null) {
   return { ok: problems.length === 0, events: events.length, checkpoints: (bundle.checkpoints ?? []).length, witnessMatched, problems };
 }
 
+/**
+ * Pure: compares a bundle (already checked by verifyBundle) with the public
+ * log entries signed with its key. Returns { ok, anchored, latest, problems, unmatchedOutside }.
+ */
+export function rekorReport(bundle, entries) {
+  const problems = [];
+  const candidates = new Map();
+  for (const e of bundle.events ?? []) candidates.set(checkpointDigest({ seq: e.seq, headHash: e.hash }), String(e.seq));
+  const matched = entries.filter((e) => candidates.has(e.digest));
+  const latest = matched.reduce((a, e) => (!a || e.logIndex > a.logIndex ? e : a), null);
+  const checkpointDigests = new Set((bundle.checkpoints ?? []).map((c) => checkpointDigest(c)));
+  const anchored = matched.filter((e) => checkpointDigests.has(e.digest)).length;
+  let unmatchedOutside = 0;
+  if (latest) {
+    for (const e of entries) {
+      if (e.logIndex >= latest.logIndex || candidates.has(e.digest)) continue;
+      // Anchoring is in chain order, so this entry is for an earlier seq.
+      if (bundle.genesisPrevHash) problems.push(`public log entry ${e.logIndex} (anchored ${e.integratedTime}) matches no event in this bundle: it is a checkpoint of a different history`);
+      else unmatchedOutside++;
+    }
+  }
+  return {
+    ok: problems.length === 0,
+    anchored,
+    latest: latest ? { seq: candidates.get(latest.digest), logIndex: latest.logIndex, integratedTime: latest.integratedTime } : null,
+    problems,
+    unmatchedOutside,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('verify-audit.mjs')) {
   const args = process.argv.slice(2);
+  const ri = args.indexOf('--rekor');
+  const useRekor = ri >= 0;
+  if (useRekor) args.splice(ri, 1);
   const wi = args.indexOf('--witness');
   const witnessFile = wi >= 0 ? args.splice(wi, 2)[1] : null;
   const [file, expectedKey] = args;
   if (!file || (wi >= 0 && !witnessFile)) {
-    console.error('usage: node tools/verify-audit.mjs <bundle.json> [expected-public-key-base64] [--witness checkpoints.jsonl]');
+    console.error('usage: node tools/verify-audit.mjs <bundle.json> [expected-public-key-base64] [--witness checkpoints.jsonl] [--rekor]');
     process.exit(2);
   }
   const witnessed = witnessFile
     ? readFileSync(witnessFile, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
     : null;
-  const result = verifyBundle(JSON.parse(readFileSync(file, 'utf8')), expectedKey, witnessed);
+  const bundle = JSON.parse(readFileSync(file, 'utf8'));
+  const result = verifyBundle(bundle, expectedKey, witnessed);
+  let rekorLine = '';
+  if (useRekor && bundle.signingKey?.publicKey) {
+    const { entries, invalid } = await entriesForKey(expectedKey ?? bundle.signingKey.publicKey);
+    const r = rekorReport(bundle, entries);
+    result.problems.push(...r.problems, ...invalid.map((u) => `public log entry ${u} has an invalid receipt`));
+    result.ok = result.problems.length === 0;
+    rekorLine = r.latest
+      ? ` ${r.anchored} of the bundle's checkpoints are in Sigstore's public log; the newest, seq ${r.latest.seq}, was published at ${r.latest.integratedTime} (log index ${r.latest.logIndex}).`
+      : ' None of this bundle is in the Sigstore public log yet.';
+    if (r.unmatchedOutside) rekorLine += ` ${r.unmatchedOutside} earlier public entries fall before this bundle's range and were not checked.`;
+  }
   if (result.ok) {
     const w = witnessed ? `, and ${result.witnessMatched} head(s) recorded by the outside witness match` : '';
-    console.log(`INTACT: ${result.events} events and ${result.checkpoints} signed checkpoints verified${w}.`);
+    console.log(`INTACT: ${result.events} events and ${result.checkpoints} signed checkpoints verified${w}.${rekorLine}`);
     process.exit(0);
   }
   console.log(`TAMPERED: ${result.problems.length} problem(s)`);

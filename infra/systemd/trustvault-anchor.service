@@ -1,0 +1,45 @@
+[Unit]
+Description=Publish TrustVault audit checkpoints to Sigstore's public log
+Documentation=file:///opt/trustvault/app/tools/anchor.mjs
+After=network-online.target trustvault-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Its own throwaway user: no database password, no key service socket,
+# no access to the app's files. It reads the public checkpoint list on
+# localhost and talks to rekor.sigstore.dev, nothing else.
+DynamicUser=yes
+StateDirectory=trustvault-anchor
+StateDirectoryMode=0700
+ExecStart=/usr/bin/node /usr/local/lib/trustvault-anchor/anchor.mjs --source http://127.0.0.1:4100 --state /var/lib/trustvault-anchor
+TimeoutStartSec=50
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=/root /home /etc/trustvault /etc/tvkeyd /run/tvkeyd /run/clamav /run/postgresql /opt/trustvault -/var/backups/trustvault -/etc/trustvault-backup
+UMask=0077
+MemoryMax=192M
+TasksMax=32

@@ -38,7 +38,14 @@ if [ -d /etc/trustvault-backup ]; then
   install -m 0750 "$APP/infra/server/backup.sh" /usr/local/sbin/trustvault-backup
   install -m 0644 "$APP/infra/systemd/trustvault-backup.service" "$APP/infra/systemd/trustvault-backup.timer" /etc/systemd/system/
 fi
+# Publishes each signed audit checkpoint to Sigstore's public log within a
+# minute (tools/anchor.mjs). Its own copy of the scripts, root-owned, so it
+# needs no access to the app directory.
+install -d -m 0755 /usr/local/lib/trustvault-anchor
+install -m 0644 "$APP/tools/anchor.mjs" "$APP/tools/witness.mjs" "$APP/tools/rekor.mjs" /usr/local/lib/trustvault-anchor/
+install -m 0644 "$APP/infra/systemd/trustvault-anchor.service" "$APP/infra/systemd/trustvault-anchor.timer" /etc/systemd/system/
 systemctl daemon-reload
+systemctl enable -q --now trustvault-anchor.timer
 systemctl is-active --quiet tvkeyd || { echo "deploy: tvkeyd is not running (run install-keyd.sh)" >&2; exit 1; }
 systemctl is-active --quiet clamav-daemon || { echo "deploy: clamav-daemon is not running (run install-clamav.sh)" >&2; exit 1; }
 systemctl restart trustvault-api trustvault-web

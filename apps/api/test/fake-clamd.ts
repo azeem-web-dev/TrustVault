@@ -17,11 +17,13 @@ export interface FakeClamd {
   address: string;
   mode: FakeMode;
   scans: number;
+  /** Extra signatures, as a signature update would add: bytes -> name. */
+  signatures: Map<string, string>;
   close: () => Promise<void>;
 }
 
 export async function startFakeClamd(): Promise<FakeClamd> {
-  const state: FakeClamd = { address: '', mode: 'normal', scans: 0, close: async () => {} };
+  const state: FakeClamd = { address: '', mode: 'normal', scans: 0, signatures: new Map(), close: async () => {} };
   const server: Server = createServer((sock) => {
     if (state.mode === 'down') return sock.destroy();
     let buf = Buffer.alloc(0);
@@ -32,7 +34,9 @@ export async function startFakeClamd(): Promise<FakeClamd> {
       if (!headerSeen) {
         const nul = buf.indexOf(0);
         if (nul < 0) return;
-        if (buf.subarray(0, nul).toString() !== 'zINSTREAM') return sock.end('UNKNOWN COMMAND\0');
+        const cmd = buf.subarray(0, nul).toString();
+        if (cmd === 'zVERSION') return sock.end(`ClamAV 1.4.3/${27000 + state.signatures.size}/Sat Nov  1 03:00:00 2026\0`);
+        if (cmd !== 'zINSTREAM') return sock.end('UNKNOWN COMMAND\0');
         headerSeen = true;
         buf = buf.subarray(nul + 1);
       }
@@ -42,8 +46,10 @@ export async function startFakeClamd(): Promise<FakeClamd> {
           state.scans++;
           if (state.mode === 'silent') return; // never answers: the client must time out
           if (state.mode === 'garbage') return sock.end('stream: maybe\0');
-          const infected = Buffer.concat(body).includes(EICAR);
-          return sock.end(infected ? 'stream: Eicar-Test-Signature FOUND\0' : 'stream: OK\0');
+          const data = Buffer.concat(body);
+          if (data.includes(EICAR)) return sock.end('stream: Eicar-Test-Signature FOUND\0');
+          for (const [bytes, name] of state.signatures) if (data.includes(bytes)) return sock.end(`stream: ${name} FOUND\0`);
+          return sock.end('stream: OK\0');
         }
         if (buf.length < 4 + len) return;
         body.push(buf.subarray(4, 4 + len));

@@ -4,6 +4,7 @@ import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { AuditAdminService } from '../audit/audit-admin.service.js';
+import { RescanService } from '../scanning/rescan.service.js';
 import { logger } from '../common/logger.js';
 
 const QUEUE = 'maintenance';
@@ -11,9 +12,11 @@ const QUEUE = 'maintenance';
 /**
  * Scheduled maintenance, run through BullMQ so each job runs once even if
  * the API is restarted mid-way:
- *  - every 5 min: sign the audit chain head (checkpoint)
+ *  - every minute: sign the audit chain head if it moved (checkpoint);
+ *                  trustvault-anchor.timer publishes it to Sigstore's log
  *  - every hour:   delete expired sessions; verify the full audit chain
- *  - every day:    permanently remove documents in the trash past retention
+ *  - every day:    permanently remove documents in the trash past retention;
+ *                  re-scan every stored file with the latest malware signatures
  */
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
@@ -25,6 +28,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(AuditAdminService) private readonly auditAdmin: AuditAdminService,
+    @Inject(RescanService) private readonly rescan: RescanService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -33,10 +37,12 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     // BullMQ keys live under the same prefix the Redis ACL allows.
     const prefix = `${this.env.REDIS_PREFIX}bull`;
     this.queue = new Queue(QUEUE, { connection, prefix });
-    await this.queue.upsertJobScheduler('checkpoint', { every: 5 * 60_000 }, { name: 'checkpoint' });
+    await this.queue.upsertJobScheduler('checkpoint', { every: 60_000 }, { name: 'checkpoint' });
     await this.queue.upsertJobScheduler('sessions', { every: 60 * 60_000 }, { name: 'sessions' });
     await this.queue.upsertJobScheduler('verify', { every: 60 * 60_000 }, { name: 'verify' });
     await this.queue.upsertJobScheduler('retention', { every: 24 * 60 * 60_000 }, { name: 'retention' });
+    // 04:15 UTC: after the night's signature updates and the 03:30 backup.
+    await this.queue.upsertJobScheduler('rescan', { pattern: '15 4 * * *', tz: 'UTC' }, { name: 'rescan' });
 
     this.worker = new Worker(QUEUE, async (job) => this.run(job.name), { connection, prefix, concurrency: 1 });
     this.worker.on('failed', (job, err) => logger.error({ err, job: job?.name }, 'maintenance job failed'));
@@ -54,6 +60,8 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       }
       case 'retention':
         return this.retention();
+      case 'rescan':
+        return this.rescan.run();
       default:
         throw new Error(`unknown job ${name}`);
     }

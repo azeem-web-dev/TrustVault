@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish new TrustVault audit checkpoints every minute
+
+[Timer]
+# The API signs a checkpoint each minute there are new events; this picks
+# it up 30 seconds later.
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

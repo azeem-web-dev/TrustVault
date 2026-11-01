@@ -73,7 +73,7 @@ Admins must use a second factor (passkey or TOTP).
 - `audit_events`: actor, action, target, result (allowed/denied + reason), IP, user agent, time.
 - Written in the same transaction as the action; if the audit insert fails, the action fails.
 - Each row stores `hash = SHA-256(prev_hash || canonical(row))`.
-- Every 5 minutes (when there are new events), keyd signs the chain head with Ed25519 → `audit_checkpoints`. The public key is published in the repo.
+- Every minute (when there are new events), keyd signs the chain head with Ed25519 → `audit_checkpoints`. The public key is published in the repo. A separate, unprivileged service publishes each checkpoint to Sigstore's public transparency log (Rekor) within about a minute.
 - App DB role: `INSERT, SELECT` only on audit tables; triggers reject `UPDATE`/`DELETE`/`TRUNCATE`.
 - Outside witness (added after the first release): a GitHub Actions workflow pulls signed checkpoints every 15 minutes from a public read-only endpoint and commits them to the `witness` branch; the server holds no credential for it (THREATS.md L8).
 - Admin "Verify chain" recomputes hashes and checks signatures.

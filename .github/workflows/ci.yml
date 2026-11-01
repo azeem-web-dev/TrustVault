@@ -53,6 +53,10 @@ jobs:
           cd ../web && npx tsc --noEmit
       - name: Tests
         run: cd apps/api && npx vitest run
+      - name: Passkeys in a real browser (Chrome's virtual authenticator, real pages and API)
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: cd apps/api && npm run test:e2e
       - name: Mutation check (remove each authorisation rule; tests must fail)
         if: github.event_name == 'push'
         run: node tools/mutation-check.mjs

@@ -32,6 +32,7 @@ The demo accounts are published because the brief asks for them, so they are **p
 | [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md) | Measured: login response time does not reveal which emails have accounts |
 | [docs/RESTORE.md](docs/RESTORE.md) | Backups and how to restore from one |
 | [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
+| [Sigstore public log](https://search.sigstore.dev/?logIndex=3633615638) | Every signed audit checkpoint, published within about a minute; nobody can remove an entry |
 
 ## How it works
 
@@ -51,22 +52,29 @@ PostgreSQL 16 (API connects as a role that owns nothing)
   ├─ triggers: grant rules, owner-only changes, externals never in groups
   ├─ files: AES-256-GCM ciphertext, one random key per version, bound to its row
   └─ audit_events: hash chain assigned by a trigger; UPDATE/DELETE/TRUNCATE refused even for the owner
-Redis (localhost, ACL-restricted): rate limits, BullMQ jobs (checkpoints, retention, verification)
+Redis (localhost, ACL-restricted): rate limits, BullMQ jobs (checkpoints every minute, retention, verification,
+  nightly re-scan of every stored file with the latest malware signatures; infected versions are quarantined)
 Nightly: encrypted backup (database + master key + config, age-encrypted to an offline key)
+
+trustvault-anchor (every minute; own throwaway user, no DB password, no keyd, no open port)
+  └─ reads the public checkpoint list on localhost ──HTTPS──► rekor.sigstore.dev (Sigstore transparency log)
+     each new checkpoint becomes a permanent public entry; Rekor's signed receipt is checked before moving on
 
 GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (signed heads only)
   └─ checks nothing it saw before changed, commits new heads to the `witness` branch
      (the server has no credential for it, so root on the server cannot rewrite what was witnessed)
+  └─ checks every Sigstore entry signed with the audit key still matches the server
 ```
 
 ## Tests
 
 ```bash
-cd apps/api && npx vitest run            # 180+ tests against a real Postgres and Redis
+cd apps/api && npx vitest run            # 200 tests against a real Postgres and Redis
+cd apps/api && npm run test:e2e          # passkeys in real Chrome through the real pages (needs Chrome)
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
 node tools/mutation-check.mjs            # removes each authorisation rule; every removal must fail a test
 cd keyd && cargo test                    # key service
-node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl   # verify an audit export offline, against the witness
+node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl --rekor   # verify an audit export, against the witness and Sigstore
 ```
 
 | Test file | Proves |
@@ -79,7 +87,10 @@ node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl   # verify a
 | `admin-mfa.test.ts` | second factor, replay, protected demo accounts, admin audit view, alerts, export verified by the offline tool |
 | `audit-db.test.ts` | direct attacks on the audit table as the app role and as the table owner |
 | `witness.test.ts` | the outside witness catches a rewritten history even when the forger holds the real signing key |
+| `anchor.test.ts` | checkpoints reach the public log in order, only with a valid receipt; a checkpoint changed or removed after publishing is caught |
 | `passkeys.test.ts` | the full passkey ceremony with a software authenticator (real keys and bytes), and every refusal |
+| `e2e/passkey.e2e.ts` | the same in real Chrome (virtual authenticator) through the real Next.js pages and API |
+| `rescan.test.ts` | a file stored clean and caught by a later signature is quarantined; downloads refused; the app cannot release it |
 | `scanner.unit.test.ts` | only an exact "clean" from ClamAV passes; production refuses to start without it |
 
 ## Run it locally

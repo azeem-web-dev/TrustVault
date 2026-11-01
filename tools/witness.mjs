@@ -18,6 +18,13 @@
 //      still the witnessed hash (each hash commits to every event before it,
 //      so any rewrite of older history changes it)
 //   4. verifies the signature of every new checkpoint and appends it.
+//   5. checks the server against Sigstore's public log (tools/rekor.mjs),
+//      where the server's anchor service puts each checkpoint within about
+//      a minute: every entry there signed with the pinned key must match a
+//      checkpoint the server still reports, and no checkpoint may go
+//      unanchored for more than an hour. This closes the gap between
+//      witness runs: history cannot be rewritten once anchored, even
+//      before this workflow next looks.
 // If anything fails it writes nothing and exits 1, so the workflow fails
 // and GitHub emails the repository owner.
 //
@@ -27,6 +34,7 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { checkpointDigest, entriesForKey, REKOR_URL } from './rekor.mjs';
 
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
@@ -82,6 +90,37 @@ export function witness(log, pinnedKey, server, now = new Date()) {
   return { ok: problems.length === 0, problems, newEntries };
 }
 
+/** Anchoring later than this means the server's anchor service is not working. */
+export const ANCHOR_DEADLINE_MS = 60 * 60_000;
+
+/**
+ * Pure decision: compares the server's checkpoints with the public log.
+ * `seen`: public log entries verified on earlier runs. `fresh`: entries
+ * signed with the pinned key not seen before ({ uuid, digest, logIndex,
+ * integratedTime }) plus `invalid` receipts. Every fresh entry must match a
+ * checkpoint the server reports now; earlier ones were matched to a seq
+ * when first seen, and step 2 keeps checking that seq. Returns
+ * { problems, newSeen, byDigest }.
+ */
+export function compareRekor(serverCheckpoints, seen, fresh, now = new Date()) {
+  const problems = [];
+  for (const u of fresh.invalid ?? []) problems.push(`public log entry ${u} has an invalid receipt`);
+  const serverByDigest = new Map(serverCheckpoints.map((c) => [checkpointDigest(c), c]));
+  const newSeen = [];
+  for (const e of fresh.entries) {
+    const c = serverByDigest.get(e.digest);
+    if (!c) problems.push(`public log entry ${e.logIndex} (anchored ${e.integratedTime}) matches no checkpoint on the server: a checkpoint was removed or changed after it was published`);
+    else newSeen.push({ uuid: e.uuid, logIndex: e.logIndex, integratedTime: e.integratedTime, digest: e.digest, seq: String(c.seq) });
+  }
+  const byDigest = new Map([...seen, ...newSeen].map((e) => [e.digest, e]));
+  for (const c of serverCheckpoints) {
+    if (!byDigest.has(checkpointDigest(c)) && now - new Date(c.createdAt) > ANCHOR_DEADLINE_MS) {
+      problems.push(`checkpoint ${c.seq} (signed ${c.createdAt}) is still not in the public log: the anchor service is not working`);
+    }
+  }
+  return { problems, newSeen, byDigest };
+}
+
 export function readLog(file) {
   if (!existsSync(file)) return [];
   return readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
@@ -116,7 +155,7 @@ async function main() {
   const base = arg('--url')?.replace(/\/+$/, '');
   const dir = arg('--dir');
   if (!base || !dir || !base.startsWith('https://')) {
-    console.error('usage: node tools/witness.mjs --url https://<host> --dir <witness-folder>');
+    console.error('usage: node tools/witness.mjs --url https://<host> --dir <witness-folder> [--rekor <url> | --no-rekor]');
     process.exit(2);
   }
   const logFile = join(dir, 'checkpoints.jsonl');
@@ -126,6 +165,21 @@ async function main() {
 
   const server = await fetchServer(base, log.at(-1)?.seq);
   const result = witness(log, pinned, server);
+  const seenFile = join(dir, 'public-log.jsonl');
+  let newSeen = [];
+  if (!process.argv.includes('--no-rekor') && server.signingKey?.publicKey) {
+    const seen = readLog(seenFile);
+    const fresh = await entriesForKey(pinned ?? server.signingKey.publicKey, { url: arg('--rekor') ?? REKOR_URL, known: new Set(seen.map((e) => e.uuid)) });
+    const cmp = compareRekor(server.checkpoints, seen, fresh);
+    newSeen = cmp.newSeen;
+    result.problems.push(...cmp.problems);
+    result.ok = result.problems.length === 0;
+    for (const e of result.newEntries) {
+      const r = cmp.byDigest.get(checkpointDigest(e));
+      if (r) Object.assign(e, { rekorLogIndex: r.logIndex, rekorIntegratedTime: r.integratedTime });
+    }
+    console.log(`public log: ${seen.length + newSeen.length} entries signed with the audit key (${newSeen.length} new)`);
+  }
   if (!result.ok) {
     console.log(`WITNESS ALARM: ${result.problems.length} problem(s). Nothing was recorded.`);
     for (const p of result.problems) console.log(` - ${p}`);
@@ -136,6 +190,7 @@ async function main() {
     console.log(`pinned signing key ${server.signingKey.keyId}`);
   }
   if (result.newEntries.length) appendFileSync(logFile, result.newEntries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  if (newSeen.length) appendFileSync(seenFile, newSeen.map((e) => JSON.stringify(e)).join('\n') + '\n');
   console.log(`OK: ${log.length} earlier checkpoints still match; ${result.newEntries.length} new checkpoint(s) witnessed.`);
 }
 

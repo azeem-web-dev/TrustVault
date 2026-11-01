@@ -48,7 +48,7 @@ export class AuditAdminController {
     return this.svc.verify(actor);
   }
 
-  /** Sign the current chain head now (also runs every 10 minutes). */
+  /** Sign the current chain head now (also runs every minute when there are new events). */
   @Post('audit/checkpoint')
   @HttpCode(200)
   async checkpoint() {

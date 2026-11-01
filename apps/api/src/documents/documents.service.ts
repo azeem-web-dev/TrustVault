@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
@@ -132,7 +132,7 @@ export class DocumentsService {
           folder: { select: { id: true, name: true } },
           versions: {
             orderBy: { versionNo: 'desc' },
-            select: { versionNo: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true, sha256: true, uploadedBy: { select: { displayName: true } } },
+            select: { versionNo: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true, sha256: true, uploadedBy: { select: { displayName: true } }, quarantine: { select: { signature: true, foundAt: true } } },
           },
         },
       });
@@ -144,6 +144,7 @@ export class DocumentsService {
         versions: doc.versions.map((v) => ({
           versionNo: v.versionNo, fileName: v.fileName, mimeType: v.mimeType, sizeBytes: v.sizeBytes,
           createdAt: v.createdAt, sha256: Buffer.from(v.sha256).toString('hex'), uploadedBy: v.uploadedBy.displayName,
+          quarantine: v.quarantine ? { signature: v.quarantine.signature, foundAt: v.quarantine.foundAt } : null,
         })),
       };
     });
@@ -205,11 +206,19 @@ export class DocumentsService {
       const doc = await tx.document.findUnique({ where: { id }, select: { currentVersionNo: true } });
       const wanted = versionNo ?? doc?.currentVersionNo;
       const version = wanted
-        ? await tx.documentVersion.findUnique({ where: { documentId_versionNo: { documentId: id, versionNo: wanted } }, include: { blob: true } })
+        ? await tx.documentVersion.findUnique({ where: { documentId_versionNo: { documentId: id, versionNo: wanted } }, include: { blob: true, quarantine: true } })
         : null;
       if (!version || !version.blob) {
         await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'no_such_version', targetType: 'document', targetId: id, documentId: id, details: { versionNo: wanted ?? null } });
         throw new NotFoundException('Version not found');
+      }
+      if (version.quarantine) {
+        // The nightly re-scan found malware in this version after it was stored.
+        await this.audit.record({
+          action: 'document.download', outcome: 'DENIED', reason: 'quarantined', targetType: 'document', targetId: id, documentId: id,
+          details: { versionNo: version.versionNo, signature: version.quarantine.signature },
+        });
+        throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
       }
       // Audited and committed BEFORE any byte leaves the server: if the
       // audit write fails, nothing is sent.

@@ -168,6 +168,23 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 ---
 
+## 2026-11-01 — Shrinking the remaining gaps (audit tail, new malware, real browser)
+
+**Asked (Claude):** "fix the remaining open gaps too": the newest ~20 minutes of audit events had no outside copy, signature scanning misses brand-new malware, and passkeys had never run in a real browser.
+
+**Decisions I made, and why:**
+- **Publish checkpoints to Sigstore's public transparency log (Rekor), but not from the API.** The GitHub witness can only look every 15 minutes, and GitHub delays scheduled jobs. Pushing each checkpoint somewhere public as soon as it is signed closes most of that window, and Rekor needs no credential: it accepts any correctly signed entry and never lets anyone remove it. I asked the owner before publishing anything there (entries are permanent). The API itself still has no internet access; a separate one-shot service with a throwaway user, no database password and no key service access reads the public checkpoint list on localhost and submits new ones, checking Rekor's signed receipt against a pinned key before it records anything. Checkpoints are now signed every minute instead of every five.
+- **Rekor keeps only a fingerprint (SHA-256) of each checkpoint, not its text.** So a checker cannot read sequence numbers back from the log. Instead the GitHub witness lists every entry signed with the audit key and requires each one to match a checkpoint the server still reports; one that matches nothing means a published checkpoint was removed or changed. For an exported bundle that starts at event 1, `verify-audit.mjs --rekor` requires every entry published before the bundle's newest published checkpoint to match the bundle's chain.
+- **New malware: re-scan, not just scan.** Nothing catches malware nobody has a signature for. What can be done is to look again once someone does: every night each stored version is decrypted and scanned with that day's signatures, and a version found infected is quarantined (downloads refused and audited, admin alert). The app may add a quarantine but not remove one. The job reads blobs through two narrow database functions, because row-level security shows nothing to a job running as no user.
+- **Passkeys in real Chrome.** The test starts the real API and the real Next.js app and drives Chrome through the actual pages, with Chrome's built-in virtual authenticator standing in for a phone or key. It runs in CI on every push.
+
+**What went wrong:**
+- **My own editing scripts corrupted files.** Python edits run through the shell turned the two characters `\0` into real NUL bytes in the scanner code, turned a `\n` inside a mutation definition into a real line break (a syntax error), and saved files with Windows line endings. All were caught before anything was committed (a file showing up as "binary", a syntax check, git's line-ending warning) and fixed; later edits used a different method.
+- **I suspected a UI bug that was not there.** The browser test's screenshot showed the Account page without the newly added passkey, and an exact-text check for it timed out. The API already returned both passkeys. The page was fine: the screenshot was taken before the list reloaded, and the exact match could never succeed because the name and its "Added …" line share one element. The test now waits for the list item instead.
+- **Checked the new checks fail when broken.** Seven new mutations (a receipt for the wrong checkpoint, an unverified receipt, an unmatched public entry, a checkpoint left unpublished, a full bundle disagreeing with the log, a quarantined version downloaded, an infected file treated as clean): each made at least one test fail.
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:

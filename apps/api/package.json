@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "measure:timing": "vitest run --config vitest.timing.config.ts"
+    "measure:timing": "vitest run --config vitest.timing.config.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
@@ -39,6 +40,7 @@
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
+    "playwright-core": "1.64.0",
     "prisma": "^7.10.1",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",

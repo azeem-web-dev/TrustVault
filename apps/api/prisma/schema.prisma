@@ -197,6 +197,7 @@ model DocumentVersion {
   document   Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
   uploadedBy User          @relation(fields: [uploadedById], references: [id])
   blob       DocumentBlob?
+  quarantine VersionQuarantine?
 
   @@unique([documentId, versionNo])
   @@map("document_versions")
@@ -215,6 +216,19 @@ model DocumentBlob {
   version DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
 
   @@map("document_blobs")
+}
+
+/// A stored version the nightly re-scan found infected. Downloads of it are
+/// refused. Insert-only for the app (see the migration).
+model VersionQuarantine {
+  versionId String   @id @map("version_id") @db.Uuid
+  signature String
+  scanner   String
+  foundAt   DateTime @default(now()) @map("found_at") @db.Timestamptz(6)
+
+  version DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@map("version_quarantine")
 }
 
 /// One permission on one document, for a named user or a group.

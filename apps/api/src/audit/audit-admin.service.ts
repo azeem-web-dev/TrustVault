@@ -92,7 +92,7 @@ export class AuditAdminService {
     return result;
   }
 
-  /** Signs the current chain head. Run by the scheduler every 10 minutes, or on demand. */
+  /** Signs the current chain head. Run by the scheduler every minute (a no-op if nothing happened), or on demand. */
   async checkpoint(): Promise<{ seq: string } | null> {
     const head = await this.prisma.auditEvent.findFirst({ orderBy: { seq: 'desc' }, select: { seq: true, hash: true } });
     if (!head) return null;
@@ -171,7 +171,7 @@ export class AuditAdminService {
    */
   async alerts(hours = 24) {
     const since = new Date(Date.now() - hours * 3_600_000);
-    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures] = await Promise.all([
+    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures, malware, rescanFailures] = await Promise.all([
       this.prisma.$queryRaw<{ actor_email: string | null; n: bigint; documents: bigint }[]>`
         SELECT actor_email, count(*) AS n, count(DISTINCT target_id) AS documents FROM audit_events
          WHERE occurred_at >= ${since} AND outcome = 'DENIED' AND action LIKE 'document.%'
@@ -206,8 +206,14 @@ export class AuditAdminService {
       this.prisma.$queryRaw<{ occurred_at: Date; details: unknown }[]>`
         SELECT occurred_at, details FROM audit_events
          WHERE occurred_at >= ${since} AND action = 'audit.verify' AND outcome = 'FAILED' ORDER BY seq DESC LIMIT 5`,
+      this.prisma.$queryRaw<{ occurred_at: Date; document_id: string | null; signature: string | null; version_no: string | null }[]>`
+        SELECT occurred_at, document_id::text AS document_id, details ->> 'signature' AS signature, details ->> 'versionNo' AS version_no FROM audit_events
+         WHERE occurred_at >= ${since} AND action = 'document.quarantine' ORDER BY seq DESC LIMIT 20`,
+      this.prisma.$queryRaw<{ occurred_at: Date }[]>`
+        SELECT occurred_at FROM audit_events
+         WHERE occurred_at >= ${since} AND action = 'malware.rescan' AND outcome = 'FAILED' ORDER BY seq DESC LIMIT 5`,
     ]);
-    const titles = await this.titles([...afterRevoke, ...externalGrants, ...breakGlass, ...integrity].map((r) => r.document_id).filter((x): x is string => Boolean(x)));
+    const titles = await this.titles([...afterRevoke, ...externalGrants, ...breakGlass, ...integrity, ...malware].map((r) => r.document_id).filter((x): x is string => Boolean(x)));
     const num = (v: bigint) => Number(v);
     const t = (id: string | null) => (id ? (titles.get(id) ?? null) : null);
     return {
@@ -215,6 +221,8 @@ export class AuditAdminService {
       alerts: [
         ...verifyFailures.map((r) => ({ severity: 'critical', kind: 'audit_verification_failed', at: r.occurred_at, message: 'Audit chain verification failed', details: r.details })),
         ...integrity.map((r) => ({ severity: 'critical', kind: 'file_integrity', at: r.occurred_at, message: `A stored file failed its integrity check (${r.reason})`, documentId: r.document_id, documentTitle: t(r.document_id) })),
+        ...malware.map((r) => ({ severity: 'critical', kind: 'malware_found', at: r.occurred_at, message: `Malware (${r.signature ?? '?'}) found in a stored file, version ${r.version_no ?? '?'}; that version is quarantined`, documentId: r.document_id, documentTitle: t(r.document_id) })),
+        ...rescanFailures.map((r) => ({ severity: 'high', kind: 'rescan_failed', at: r.occurred_at, message: 'The nightly malware re-scan could not finish: the scanner was not available' })),
         ...afterRevoke.map((r) => ({ severity: 'high', kind: 'access_after_revoke', at: r.last_attempt, message: `${r.actor_email ?? 'unknown'} tried ${num(r.attempts)}× to reach a document after their access was revoked`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...deniedByUser.map((r) => ({ severity: 'high', kind: 'repeated_denials', message: `${r.actor_email ?? 'unknown'} was refused ${num(r.n)} times across ${num(r.documents)} documents` })),
         ...bulkDownloads.map((r) => ({ severity: 'medium', kind: 'bulk_download', message: `${r.actor_email ?? 'unknown'} downloaded ${num(r.n)} files (${num(r.documents)} documents) within one hour` })),
