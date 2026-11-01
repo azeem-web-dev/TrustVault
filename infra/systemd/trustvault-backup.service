@@ -1,0 +1,24 @@
+[Unit]
+Description=TrustVault encrypted backup (database, master key, config)
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/trustvault-backup
+Nice=10
+IOSchedulingClass=idle
+# Runs as root to read the master key and switch to postgres; sandboxed so
+# the only place it can write is the backup folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/backups/trustvault
+UMask=0077
