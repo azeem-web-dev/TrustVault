@@ -13,3 +13,4 @@ target/
 /tmp/
 .DS_Store
 apps/api/src/generated/
+next-env.d.ts

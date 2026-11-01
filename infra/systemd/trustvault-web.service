@@ -1,0 +1,51 @@
+[Unit]
+Description=TrustVault web (Next.js)
+After=network-online.target trustvault-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trustvault
+Group=trustvault
+WorkingDirectory=/opt/trustvault/app/apps/web
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+ExecStart=/usr/bin/node /opt/trustvault/app/node_modules/next/dist/bin/next start -p 4101 -H 127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Next writes its fetch/image cache under .next/cache.
+ReadWritePaths=/opt/trustvault/app/apps/web/.next/cache
+InaccessiblePaths=/root /home /etc/trustvault
+UMask=0077
+MemoryMax=768M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+[Unit]
+Description=TrustVault API
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trustvault
+Group=trustvault
+WorkingDirectory=/opt/trustvault/app/apps/api
+EnvironmentFile=/etc/trustvault/api.env
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=3
+
+# --- Sandbox: a compromise of the API stays inside this box ---------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Only loopback: Postgres, Redis, and (later) the key service socket.
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Nothing on disk is writable except its own log directory.
+ReadWritePaths=/var/log/trustvault
+InaccessiblePaths=/root /home /etc/trustvault/db.secrets /etc/trustvault/migrate.env
+UMask=0077
+MemoryMax=768M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
