@@ -38,7 +38,6 @@ There are two kinds of permission and they never mix.
 | File previews | Rendering untrusted files server-side is a large attack surface. Files are only downloaded, as attachments, under a sandbox CSP. |
 | Auth0 / Keycloak / JWTs | Tokens stay valid until they expire, which breaks "revoke works immediately". |
 | Open Policy Agent | A second language and a network hop for the decision I most need to explain; `decide()` plus RLS gives two independent locks instead. |
-| Antivirus scanning | No scanner on this server. Accepted in THREATS.md (U6): files are never executed or previewed. |
 | Kubernetes, SIEM, cloud HSM | Out of proportion for one server. A sandboxed systemd service and the alerts page cover what matters at this size. |
 
 ## How I used AI, and where it was wrong
@@ -55,13 +54,15 @@ The full log is in [PROMPTS.md](../PROMPTS.md). The mistakes that mattered:
 6. **The retention job could delete without an audit record.**
 7. **Upload validation accepted a renamed binary as text.**
 8. **Two backup checks and one search layer had no test that would notice their removal.** Found by reading the mutation plan before running it; fixed with direct-to-database tests.
+9. **Login timing leaked which emails have accounts.** The design said it was equalised; when I finally measured it, a wrong password on a real account was 40 ms slower than an unknown email (one extra database write), and a simple threshold told them apart 78% of the time. The first fix (wrap the writes in a transaction) made it worse, 152 ms and 99%, because each round trip to the database was the cost, not the commit. The working fix makes the counter, lock and audit row one SQL statement, and pads every failed login to 450 ms. Measured again: chance.
 
 ## What is not finished
 
-- **External witness for the audit chain.** Checkpoints are signed by keyd but stored on the same server. Someone with root could rewrite the database and have keyd sign the forged head. Publishing checkpoints off-server (a separate repository, or a timestamping service) would close this. Accepted for now (THREATS.md L8).
-- **No antivirus scanning** of uploads (U6).
-- **Timing of the login response** is equalised by design (a dummy Argon2 verify for unknown accounts) but I have not measured it.
-- **Master key backup** is an operational step (copy `/etc/tvkeyd/master.key` offline), not automated. Losing it loses every file.
-- **Passkeys** are implemented and the server side is tested for refusals, but there is no automated test of a full browser passkey ceremony; I tested TOTP end to end in the browser.
+These were open gaps in the first version and are now built and tested: the outside witness for the audit chain (THREATS.md L8), malware scanning of uploads (U6), the login timing measurement (S2), automated encrypted backups of the database and master key (K4), and an end-to-end passkey test (S12). What is still open:
+
+- **Backups stay on server 136.** They are encrypted to a key that is not on the server, and tested by restoring one, but losing the machine loses them. Copying them off-site was offered and declined for now; it is one `scp` (docs/RESTORE.md).
+- **The newest ~20 minutes of audit events** are protected by the hash chain and signatures, but not yet by the outside witness (L5).
+- **Signature-based malware scanning** does not catch brand-new malware. Files are still never opened on the server.
+- **Passkeys in a real browser.** The full WebAuthn ceremony is tested with a software authenticator that produces real keys and bytes; I have not run it with a phone or security key against the live site.
 - **Demo video:** the script is in [docs/DEMO.md](DEMO.md); the recording is mine to make.
-- **One server.** No replication or automated backups of the database.
+- **One server.** No database replication.

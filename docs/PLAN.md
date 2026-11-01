@@ -73,13 +73,14 @@ Admins must use a second factor (passkey or TOTP).
 - `audit_events`: actor, action, target, result (allowed/denied + reason), IP, user agent, time.
 - Written in the same transaction as the action; if the audit insert fails, the action fails.
 - Each row stores `hash = SHA-256(prev_hash || canonical(row))`.
-- Every N events / every hour, keyd signs the chain head with Ed25519 → `audit_checkpoints`. The public key is published in the repo.
+- Every 5 minutes (when there are new events), keyd signs the chain head with Ed25519 → `audit_checkpoints`. The public key is published in the repo.
 - App DB role: `INSERT, SELECT` only on audit tables; triggers reject `UPDATE`/`DELETE`/`TRUNCATE`.
-- Planned but not built: exporting the chain head off the server automatically. Admins can export signed bundles manually; the gap is recorded in THREATS.md L8.
+- Outside witness (added after the first release): a GitHub Actions workflow pulls signed checkpoints every 15 minutes from a public read-only endpoint and commits them to the `witness` branch; the server holds no credential for it (THREATS.md L8).
 - Admin "Verify chain" recomputes hashes and checks signatures.
 
 ## Files
 - Upload: size cap, MIME from magic bytes (not extension or browser header) against an allowlist, filename sanitised and stored as metadata only, SHA-256 recorded.
+- Malware scan (added after the first release): every upload is streamed to ClamAV before it is stored; no clean answer, no upload.
 - Storage: per-version data key (random), AES-256-GCM bound to document+version, key wrapped by keyd. Encrypted bytes kept in Postgres (`bytea`) so a file and its permissions live and die in one transaction.
 - Download: always `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, strict CSP; nothing uploaded is ever rendered inline on our origin.
 

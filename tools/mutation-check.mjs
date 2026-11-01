@@ -76,6 +76,24 @@ const MUTATIONS = [
   code('users: protected demo accounts cannot be changed', 'src/users/users.service.ts',
     "if (u.isProtected) throw new ForbiddenException('This is a protected demo account and cannot be changed');", '',
     ['test/admin-mfa.test.ts']),
+  code('mfa: a passkey assertion must verify', 'src/auth/mfa.service.ts',
+    'if (!passkey || !verification?.verified) {', 'if (!passkey) {', ['test/passkeys.test.ts']),
+
+  // --- malware scanning -------------------------------------------------------
+  code('uploads: infected files refused', 'src/documents/documents.service.ts',
+    'if (!result.clean) {', 'if (false) {', ['test/documents.test.ts']),
+  code('uploads: no answer from the scanner means no upload', 'src/scanning/malware-scanner.ts',
+    "throw new ScannerUnavailable(`unexpected scanner reply: ${reply.slice(0, 120) || '(empty)'}`);", 'return { clean: true };',
+    ['test/scanner.unit.test.ts', 'test/documents.test.ts']),
+
+  // --- outside witness for the audit chain ------------------------------------
+  code('witness: a witnessed checkpoint may not change', '../../tools/witness.mjs',
+    'else if (s.headHash !== w.headHash || s.signature !== w.signature) problems.push(', 'else if (false) problems.push(',
+    ['test/witness.test.ts']),
+  code('witness: the chain at the last witnessed seq must be unchanged', '../../tools/witness.mjs',
+    'if (last && server.eventHashAtLast !== last.headHash) {', 'if (false) {', ['test/witness.test.ts']),
+  code('verify-audit: bundles must agree with the witness', '../../tools/verify-audit.mjs',
+    'if (chainHash !== w.headHash) problems.push(', 'if (false) problems.push(', ['test/witness.test.ts']),
 
   // --- the database's own locks ---------------------------------------------
   sql('database: row-level security on documents',
@@ -175,7 +193,7 @@ async function main() {
     '',
     '| # | Rule removed | Where | Tests run | Result |',
     '|---|---|---|---|---|',
-    ...results.map((r) => `| ${r.n} | ${r.name} | ${r.kind === 'code' ? `\`${r.file}\`` : 'database'} | ${r.tests.map((t) => `\`${t.replace('test/', '')}\``).join(', ')} | **${r.verdict}** — ${r.summary} |`),
+    ...results.map((r) => `| ${r.n} | ${r.name} | ${r.kind === 'code' ? `\`${r.file.replace('../../', '')}\`` : 'database'} | ${r.tests.map((t) => `\`${t.replace('test/', '')}\``).join(', ')} | **${r.verdict}** — ${r.summary} |`),
     '',
   ];
   writeFileSync(join(ROOT, 'docs/MUTATION_REPORT.md'), lines.join('\n'));

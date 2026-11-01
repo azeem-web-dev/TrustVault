@@ -141,6 +141,33 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 ---
 
+## 2026-11-01 — Login timing: "equalised by design" was not true (authentication)
+
+**Asked (Claude):** "Fix the remaining gaps" — one of them was that login timing was equalised by design (a dummy Argon2 verify for unknown emails) but never measured. So it wrote `npm run measure:timing`: hundreds of failed logins of three kinds (unknown email, real account with a wrong password, locked account), interleaved randomly, through the full HTTP stack with production Argon2 settings, then fits an attacker's best threshold on half the samples and scores it on the other half.
+
+**What was wrong:** the first run failed its own check. A wrong password on a real account was 40 ms slower than an unknown email, and the threshold guessed right **78%** of the time — anyone could have tested which emails have accounts. The cause: the wrong-password path also updated the failed-login counter, one extra database round trip.
+
+**Then the AI's first fix made it worse:** it moved the counter update and the audit row into one transaction, reasoning that the extra *commit* was the cost. Measured again: 152 ms and **99%**. A breakdown of each step showed every query cost about 50 ms on this machine (the database is behind a forwarded port) and an interactive transaction adds BEGIN and COMMIT round trips; the number of round trips was the leak, not commits.
+
+**What I did instead:** the counter, the lock and the audit row are now **one SQL statement** (a data-modifying CTE), so every failure path costs one Argon2 verify plus one statement. As a second layer, every failed login is padded to 450 ms. Measured again with the padding off: 56% and 51% (chance); with it on: see [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md). A new test checks the single statement still locks for 15 minutes and then doubles, with the right audit reason.
+
+---
+
+## 2026-11-01 — Closing the audit and upload gaps (audit trail)
+
+**Asked (Claude):** build an outside witness for the audit chain, malware scanning, encrypted backups and a full passkey test.
+
+**Decisions I made, and why:**
+- **Witness is pulled, not pushed.** If the server pushed checkpoints somewhere, it would need a credential, and whoever owns the server would own that credential. Instead a public read-only endpoint serves checkpoints only, and a scheduled GitHub Actions job pulls them into the `witness` branch. The test that matters re-signs a forged history **with the real signing key** — the witness still rejects it, because the heads already recorded on GitHub cannot be matched.
+- **The scanner fails closed,** and only an exact `stream: OK` counts as clean. The tests run the real clamd protocol code against a fake daemon that can refuse connections, answer nonsense or never answer.
+- **Passkeys are tested with a software authenticator** that builds real WebAuthn bytes and P-256 signatures, so the server's verification runs unchanged.
+
+**What was wrong:** the witness test helper first read only the first 1000 checkpoints. Checkpoints can never be deleted from the test database, so after enough test runs the newest ones would have fallen off the page and the test would have failed for no real reason. It now pages exactly as the real tool does. Small, but it would have looked like a real alarm.
+
+**And one in the mutation check itself:** running the full suite showed the local test database's audit log had been wiped earlier. The mutation check disables the audit table's append-only trigger and then runs the test "even the table owner cannot TRUNCATE audit rows". With the trigger gone the TRUNCATE succeeded: the test failed as intended (mutation caught), but it also emptied the log, leaving signed checkpoints that pointed at events that no longer existed. Only the test database was affected. Those owner attempts now run inside a transaction that is always rolled back, so a missing guard fails the test without destroying anything; the orphaned test checkpoints were removed.
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:

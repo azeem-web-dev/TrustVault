@@ -29,6 +29,9 @@ The demo accounts are published because the brief asks for them, so they are **p
 | [docs/MUTATION_REPORT.md](docs/MUTATION_REPORT.md) | Each authorisation rule removed in turn, and the test that caught it |
 | [docs/PLAN.md](docs/PLAN.md) | The design and the decisions behind it |
 | [docs/DEMO.md](docs/DEMO.md) | The five-minute demo script |
+| [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md) | Measured: login response time does not reveal which emails have accounts |
+| [docs/RESTORE.md](docs/RESTORE.md) | Backups and how to restore from one |
+| [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
 
 ## How it works
 
@@ -38,6 +41,7 @@ Browser ──HTTPS──► nginx (TLS, HSTS, rate limits, X-Forwarded-For over
                     │               ├─ SecurityGuard: Origin → session → CSRF → 2nd factor → role
                     │               ├─ decide()  ← LOCK 1: every document route, deny by default
                     │               ├─ prisma.asUser(): sets app.user_id for the transaction
+                    │               ├─ uploads ──unix socket──► clamd (ClamAV; no clean answer, no upload)
                     │               └─ keyd client ──unix socket──► tvkeyd (Rust, user tvkeyd, no network)
                     │                                               master key · wraps file keys · signs checkpoints
                     └── /* ─────► Next.js web (user trustvault, sandboxed)
@@ -48,15 +52,21 @@ PostgreSQL 16 (API connects as a role that owns nothing)
   ├─ files: AES-256-GCM ciphertext, one random key per version, bound to its row
   └─ audit_events: hash chain assigned by a trigger; UPDATE/DELETE/TRUNCATE refused even for the owner
 Redis (localhost, ACL-restricted): rate limits, BullMQ jobs (checkpoints, retention, verification)
+Nightly: encrypted backup (database + master key + config, age-encrypted to an offline key)
+
+GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (signed heads only)
+  └─ checks nothing it saw before changed, commits new heads to the `witness` branch
+     (the server has no credential for it, so root on the server cannot rewrite what was witnessed)
 ```
 
 ## Tests
 
 ```bash
-cd apps/api && npx vitest run            # 150+ tests against a real Postgres and Redis
+cd apps/api && npx vitest run            # 180+ tests against a real Postgres and Redis
+cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
 node tools/mutation-check.mjs            # removes each authorisation rule; every removal must fail a test
 cd keyd && cargo test                    # key service
-node tools/verify-audit.mjs bundle.json  # verify an exported audit bundle offline
+node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl   # verify an audit export offline, against the witness
 ```
 
 | Test file | Proves |
@@ -64,10 +74,13 @@ node tools/verify-audit.mjs bundle.json  # verify an exported audit bundle offli
 | `access.unit.test.ts` | `decide()` alone: every rule, deny by default |
 | `rls.test.ts` | the database alone (no API code): RLS policies and guard triggers |
 | `search-filter.test.ts` | the search access filter alone (run where RLS does not apply) |
-| `documents.test.ts` | end to end: 13 document routes refused for 4 kinds of outsider, search leaks nothing, revocation is immediate, uploads validated, files encrypted, blob swaps detected, break-glass, suggestions |
+| `documents.test.ts` | end to end: 13 document routes refused for 4 kinds of outsider, search leaks nothing, revocation is immediate, uploads validated and malware-scanned (fails closed), files encrypted, blob swaps detected, break-glass, suggestions |
 | `auth.test.ts` | sessions, lockout, rate limits, CSRF, Origin, session death on deactivate / role / password change |
 | `admin-mfa.test.ts` | second factor, replay, protected demo accounts, admin audit view, alerts, export verified by the offline tool |
 | `audit-db.test.ts` | direct attacks on the audit table as the app role and as the table owner |
+| `witness.test.ts` | the outside witness catches a rewritten history even when the forger holds the real signing key |
+| `passkeys.test.ts` | the full passkey ceremony with a software authenticator (real keys and bytes), and every refusal |
+| `scanner.unit.test.ts` | only an exact "clean" from ClamAV passes; production refuses to start without it |
 
 ## Run it locally
 
@@ -90,7 +103,9 @@ cd ../web && npm run dev                   # web on http://localhost:3005 (set P
 ```bash
 sudo bash infra/server/provision.sh     # users, databases, roles, pg_hba, Redis ACL
 sudo bash infra/server/install-app.sh   # env files, systemd units, nginx, TLS (certbot)
-sudo bash infra/server/install-keyd.sh  # build and start the key service; generates the master key (back it up)
+sudo bash infra/server/install-keyd.sh  # build and start the key service; generates the master key
+sudo bash infra/server/install-clamav.sh          # malware scanner for uploads; checks it detects EICAR
+sudo bash infra/server/install-backup.sh age1...  # nightly encrypted backup to an offline key (docs/RESTORE.md)
 sudo bash infra/server/deploy.sh        # fetch, install, build, migrate, restart, health check
 ```
 

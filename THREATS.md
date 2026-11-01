@@ -10,7 +10,7 @@ Test files live in `apps/api/test/`. "live" means checked by hand against https:
 
 ## The model in one paragraph
 
-Every document request passes **two independent locks**. Lock 1 is `decide()` in `apps/api/src/documents/access.ts`, a pure function over raw facts that denies by default. Lock 2 is Postgres **row-level security**, driven by `tv_doc_level()`, written separately in SQL. The API connects as a role that owns nothing, so RLS always applies, and it sets `app.user_id` per transaction. Grants and group membership are read live on every request; nothing is cached. The audit log is written by the database itself: hash-chained by a trigger, append-only by both privileges and triggers, and signed periodically by a separate key service.
+Every document request passes **two independent locks**. Lock 1 is `decide()` in `apps/api/src/documents/access.ts`, a pure function over raw facts that denies by default. Lock 2 is Postgres **row-level security**, driven by `tv_doc_level()`, written separately in SQL. The API connects as a role that owns nothing, so RLS always applies, and it sets `app.user_id` per transaction. Grants and group membership are read live on every request; nothing is cached. The audit log is written by the database itself: hash-chained by a trigger, append-only by both privileges and triggers, signed every five minutes by a separate key service, and copied off the server by an outside witness that the server cannot write to.
 
 ---
 
@@ -51,13 +51,13 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | # | Threat | Defence | Status / proof |
 |---|---|---|---|
 | L1 | Edit or delete audit rows through the app | App role has INSERT and SELECT only; triggers refuse UPDATE/DELETE/TRUNCATE **even for the table owner**; the trigger, not the app, assigns `seq`, time and hashes | **done**: `audit-db.test.ts` |
-| L2 | Someone with full database access rewrites history | Hash chain (`audit_verify()` finds the first altered row), unique `prev_hash` (no forks), Ed25519-signed checkpoints every 10 minutes from keyd, which the database cannot forge | **done**: "audit_verify finds the exact row if history is rewritten", "verifies the chain and signed checkpoints" |
+| L2 | Someone with full database access rewrites history | Hash chain (`audit_verify()` finds the first altered row), unique `prev_hash` (no forks), Ed25519-signed checkpoints every 5 minutes from keyd, which the database cannot forge | **done**: "audit_verify finds the exact row if history is rewritten", "verifies the chain and signed checkpoints" |
 | L3 | Action succeeds but its audit row is lost | Audit insert in the same transaction as the action; downloads are audited and committed before the first byte is sent; retention purge and audit in one transaction | **done** by construction; download path covered in document tests |
 | L4 | Refused attempts are not recorded | Every refusal writes a DENIED row with the real reason, outside the failing transaction | **done**: refusal tests read the rows back |
-| L5 | Cutting off the newest events (tail truncation) | Checkpoints record the head; verification reports a missing checkpointed event. **partial** between checkpoints (up to 10 minutes) | partial (see L8) |
+| L5 | Cutting off the newest events (tail truncation) | Checkpoints every 5 minutes record the head, and the outside witness (L8) keeps a copy off the server. A missing checkpointed event is reported by in-app verification, by the witness, and by `verify-audit.mjs --witness`. Remaining: events newer than the last witnessed checkpoint (up to about 20 minutes: 5-minute checkpoints, a 15-minute witness schedule, and GitHub's scheduling delay) | **done** for everything witnessed; window stated |
 | L6 | Log injection: newlines or HTML in file names shown in the admin view | Values stored as data (JSON / text columns), rendered by React (escaped); never interpreted | **done** by construction |
 | L7 | Exported evidence altered before reaching an auditor | `tools/verify-audit.mjs` re-verifies offline, optionally against a pinned public key | **done**: "exports a bundle the offline tool verifies — and the tool catches an edited event" |
-| L8 | Root on the server rewrites the database **and** asks keyd to sign the forged head | **accepted / partial**: root can do anything on this one machine. Mitigations: keyd refuses to sign anything but checkpoint messages; the public key is published; exported bundles are kept off-server. Not built: anchoring checkpoints to an external witness | accepted |
+| L8 | Root on the server rewrites the database **and** asks keyd to sign the forged head | **Outside witness.** A public, read-only endpoint (`GET /api/witness/checkpoints`) serves the signed checkpoints and nothing else. Every 15 minutes a GitHub Actions workflow (`.github/workflows/witness.yml`), for which this server holds no credential, fetches them. It checks that every checkpoint it saw before is unchanged, checks the chain's current hash at the last witnessed checkpoint, verifies new signatures against the pinned key, and commits them to the protected `witness` branch. On any failure nothing is recorded, the workflow fails and GitHub emails the owner. A forger holding keyd's key can sign a new history, but cannot match the heads already on GitHub, and `verify-audit.mjs --witness` rejects any exported bundle that disagrees with them | **done**: `witness.test.ts` (a forgery re-signed with the real key; events rewritten behind untouched checkpoints; deleted, backdated and badly signed checkpoints; a key swap; a recomputed bundle that passes on its own but fails against the witness); mutation check; live |
 | L9 | Concurrent writers fork or reorder the chain | Advisory lock until commit; trigger refuses REPEATABLE READ; unique `prev_hash` | **done**: "concurrent writers produce one unbroken chain" |
 
 ## S. Accounts and sessions
@@ -65,7 +65,7 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | # | Threat | Defence | Status / proof |
 |---|---|---|---|
 | S1 | Password guessing / credential stuffing | Argon2id (64 MiB, 3 passes); per-IP and per-account limits in Redis (fail closed if Redis is down); account lock after 5 failures, doubling to 24 h, atomic counter; nginx limit on `/auth/login` | **done**: lockout, parallel-guess and rate-limit tests |
-| S2 | Account enumeration by message or timing | One message for every failure; unknown accounts verify against a dummy hash | **done** (message); timing equalised by design but not measured |
+| S2 | Account enumeration by message or timing | One message for every failure. Every failure path does the same work: one Argon2 verify (a dummy hash for unknown accounts) and one database statement (a wrong password's counter, lock and audit row are a single SQL statement). On top of that, every failed login is padded to at least 450 ms | **done, measured**: `npm run measure:timing` ([docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md)). The first measurement found a real leak (78% attacker accuracy; fixed, see PROMPTS.md). After the fix an attacker's best threshold scores at chance |
 | S3 | Session theft through XSS | `__Host-` HttpOnly Secure SameSite=Strict cookie; nonce + `strict-dynamic` CSP on every page; uploads never rendered inline; CSRF token in memory only | **done**: cookie test; CSP checked live |
 | S4 | CSRF | SameSite=Strict, Origin check, per-session CSRF token compared in constant time | **done**: CSRF and cross-origin tests (including a cross-site upload) |
 | S5 | Session fixation | New random token at login and at every MFA step; the browser's old session is ended | **done**: "logging in again… replaces the old session", "the password-only session token no longer works" |
@@ -75,6 +75,7 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | S9 | Lockout used to deny service to a known user | **accepted** trade-off: capped at 24 h, admin can clear it; the alternative is unlimited guessing | accepted |
 | S10 | Spoofed `X-Forwarded-For` to dodge IP limits or falsify the audit IP | nginx overwrites the header; Express trusts loopback only | **done**: live, a forged `1.2.3.4` was logged as the real IP |
 | S11 | Lost phone locks an admin out | Another admin can reset a user's second factor (audited, sessions end). An admin cannot reset their own | **done** |
+| S12 | Passkey phishing, cloning or replay | WebAuthn binds each assertion to our origin and RP id; user verification (PIN or biometric) required; each challenge works once and only in the session it was issued to; the signature counter must increase | **done**: `passkeys.test.ts` runs the whole ceremony with a software authenticator (real P-256 keys, real WebAuthn bytes): enrol, sign in, wrong origin, other key, unknown credential, replay, counter going backwards, challenge from another session, no user verification, wrong RP id |
 
 ## U. Uploads and downloads
 
@@ -85,8 +86,9 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | U3 | Active content: PDF JavaScript, macro Office files | Refused | **done**: PDF-JS and `vbaProject.bin` cases |
 | U4 | Path traversal in file names or archive entries | File names are metadata only (sanitised); ZIP entries with `..`, `/` or `\` refused; nothing is unpacked | **done** |
 | U5 | Oversized uploads, zip bombs | 25 MB cap enforced while streaming (413); nginx cap; archives never decompressed | **done**: size test |
-| U6 | Malware in an allowed type | **accepted**: no antivirus scanner on this server. Files are only downloaded, never executed or previewed server-side | accepted |
+| U6 | Malware in an allowed type | Every upload and new version is streamed to ClamAV (clamd, signatures kept current by freshclam) before it is encrypted and stored. Infected: 422 and a DENIED audit row naming the signature. Scanner down, slow, or any answer but an exact `OK`: 503, a FAILED audit row, nothing stored (fails closed). Files too large or deep to scan fully are reported as found and refused. Production refuses to start without the scanner. New versions are scanned only after the permission check, so outsiders cannot use the scanner. Remaining: signature scanning misses new, unknown malware; files are still never executed or previewed server-side | **done**: "uploads are scanned for malware..." (EICAR, an editor's new version, an outsider never reaching the scanner, scanner down / garbage / silent), `scanner.unit.test.ts`; mutation check; live EICAR test |
 | U7 | Upload flooding | 60 uploads / 10 min per user | **done** by construction |
+| U8 | The malware scanner itself is attacked through a crafted file | clamd runs as its own user under Ubuntu's AppArmor profile, on a Unix socket only (no TCP), memory-capped; it never sees a path, only a stream | **done** by configuration (`install-clamav.sh`) |
 
 ## K. Keys and cryptography
 
@@ -95,7 +97,7 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | K1 | Encryption keys stolen together with the database | Data keys are stored only wrapped; the master key lives in keyd, a separate process and Linux user. The API never holds it | **done**: live, keyd refused root and every uid but the API's |
 | K2 | A compromised API gets keyd to sign forged audit data | keyd signs only `tv-checkpoint-v1|…` messages | **done**: keyd unit test, live probe |
 | K3 | Key material swapped to disk or in a core dump | keyd `mlockall`, non-dumpable, `LimitCORE=0` | **done**: `VmLck` checked live |
-| K4 | Master key lost | **accepted risk, operational**: losing `/etc/tvkeyd/master.key` loses every stored file. It must be backed up offline | accepted |
+| K4 | Master key or database lost | Nightly encrypted backup (`trustvault-backup.timer`): database dump, master key and config in one archive, encrypted with `age` to a public key whose private half is not on the server; 14 days kept; restore tested ([docs/RESTORE.md](docs/RESTORE.md)). **Remaining, by the owner's choice:** the backups stay on this one server, so losing the machine loses them. Copying them off-site is one `scp` | **partial**: backup and restore tested on the server |
 
 ## I. Infrastructure
 
@@ -106,9 +108,10 @@ Every document request passes **two independent locks**. Lock 1 is `decide()` in
 | I3 | Verbose errors leak internals | One exception filter; unexpected errors are a generic 500 with a request id | **done** |
 | I4 | CORS misconfiguration | Same origin; CORS never enabled | **done** |
 | I5 | Supply-chain install scripts run on the server | `npm ci --ignore-scripts`, then only the three approved packages rebuilt; keyd built by an unprivileged user | **done** |
-| I6 | Full root compromise of the server | **accepted**: root can read process memory, including keyd. The audit chain and exported bundles still show everything up to that point | accepted |
+| I6 | Full root compromise of the server | **accepted**: root can read process memory, including keyd's, and every file. It cannot alter audit history the outside witness has already recorded without being detected (L8), and it cannot decrypt older backups (they are encrypted to an offline key) | accepted |
 | I7 | Demo credentials are published | **accepted**: required by the brief. Demo accounts can only reach demo documents | accepted |
 | I8 | A visitor uses the published admin login to break the demo for the next visitor | Demo accounts are protected: cannot be deactivated, demoted, renamed, have their password or second factor changed | **done**: "protected demo accounts…" |
+| I9 | The witness endpoint leaks information | It returns checkpoint numbers, hashes, signatures and times only (no names, actions or document ids) and is rate limited. It does reveal roughly how much activity there is (the event count) | **done**: "answers without signing in and reveals no event content"; activity volume accepted |
 
 ## Not built, on purpose
 

@@ -60,7 +60,15 @@ describe('audit log: append-only and hash-chained', () => {
     ['TRUNCATE', `TRUNCATE audit_events`],
   ])('even the table owner cannot %s audit rows', async (_op, sql) => {
     await insert(app);
-    await expect(owner.query(sql)).rejects.toThrow(/append-only/);
+    // Inside a transaction that is always rolled back: if the guard is ever
+    // missing (the mutation check removes it on purpose), the test fails
+    // without actually wiping the log.
+    await owner.query('BEGIN');
+    try {
+      await expect(owner.query(sql)).rejects.toThrow(/append-only/);
+    } finally {
+      await owner.query('ROLLBACK');
+    }
   });
 
   it('the app role cannot rewind the sequence', async () => {

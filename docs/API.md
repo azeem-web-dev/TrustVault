@@ -13,7 +13,8 @@ Base URL: `https://vault.rayyanazeem.cloud/api`. JSON in and out, except uploads
 | **Document access** | Every route under `/documents/:id` is decided by `decide()` (`apps/api/src/documents/access.ts`), then again by Postgres row-level security. A refusal is always `404 Document not found`, the same as a document that does not exist, and is written to the audit log with the reason. |
 | **Unknown fields** | Request bodies are strict: an unexpected field (`ownerId`, `role`, ...) is `400`. |
 | **Errors** | `{"message": "...", "requestId": "..."}`. Unexpected errors are `500` with no details. |
-| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. `429` with `retryAfterSeconds`. |
+| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes and passkey attempts: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. Witness: 60/min per IP. `429` with `retryAfterSeconds`. |
+| **Uploads** | Every file is scanned by ClamAV before it is stored. Infected: `422`. Scanner unavailable: `503` and nothing is stored. Both are audited. |
 
 Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, **OWNER** (may upload), **VIEWER**, **EXTERNAL** (read-only, must have an expiry, no groups, no directory).
 
@@ -21,7 +22,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 
 | Method | Path | Who may call | Notes |
 |---|---|---|---|
-| POST | `/auth/login` | **public** | `{email, password}` → sets cookie, returns `{user, csrfToken, mfaRequired, mfaEnrolled, mfaMethods}`. Same `401` message for every failure. |
+| POST | `/auth/login` | **public** | `{email, password}` → sets cookie, returns `{user, csrfToken, mfaRequired, mfaEnrolled, mfaMethods}`. Same `401` message for every failure, and every failure takes at least 450 ms, so neither reveals whether the email has an account. |
 | POST | `/auth/logout` | signed in (*partial*) | Ends this session. |
 | GET | `/auth/me` | signed in (*partial*) | Own profile, CSRF token, MFA state. |
 | POST | `/auth/password` | signed in | `{currentPassword, newPassword}` (12+ chars). Ends **all** your sessions. Refused for demo accounts. |
@@ -35,6 +36,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | POST | `/auth/mfa/passkeys/verify` | signed in (*partial*) | `{response}` second sign-in step. Issues a new session token. |
 | DELETE | `/auth/mfa/passkeys/:id` | signed in, MFA passed | Admins cannot remove their last factor. |
 | GET | `/health` | **public** | `{ok:true}` only. |
+| GET | `/witness/checkpoints` | **public** | `since` (seq, default 1), `limit` (1 to 1000). Signed audit checkpoints `{seq, headHash, signature, keyId, createdAt}`, the signing public key, and `eventHashAtSince` (the chain's current hash at `since`). No event content. Used by the outside witness (`tools/witness.mjs`). |
 
 ## Documents
 
@@ -42,10 +44,10 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 |---|---|---|---|
 | GET | `/documents` | signed in | Search: `q`, `owner`, `category`, `from`, `to`, `scope=all\|mine\|shared\|trash`, `folderId`, `page`. Only documents you own or hold a live grant on; counts come from the same filtered set. |
 | GET | `/documents/categories` | signed in | Categories of documents you can see. |
-| POST | `/documents` | role **OWNER** | Multipart: `file`, `title`, `category`, `description?`, `folderId?`. Max 25 MB. Type decided from content (PDF without JavaScript, PNG, JPEG, docx/xlsx/pptx without macros, UTF-8 text/CSV/Markdown). |
+| POST | `/documents` | role **OWNER** | Multipart: `file`, `title`, `category`, `description?`, `folderId?`. Max 25 MB. Type decided from content (PDF without JavaScript, PNG, JPEG, docx/xlsx/pptx without macros, UTF-8 text/CSV/Markdown). Malware-scanned (`422` / `503`). |
 | GET | `/documents/:id` | **READ+** | Metadata, versions, your level. |
 | PATCH | `/documents/:id` | **EDIT+** for `title`, `category`, `description`; **owner** for `folderId` | |
-| POST | `/documents/:id/versions` | **EDIT+** | Multipart `file`. |
+| POST | `/documents/:id/versions` | **EDIT+** | Multipart `file`. Scanned only after the permission check. |
 | GET | `/documents/:id/download` | **READ+** | Current version. Audited **before** the first byte is sent. `Content-Disposition: attachment`, `CSP: sandbox`, `nosniff`, `no-store`, `X-Document-SHA256`. |
 | GET | `/documents/:id/versions/:n/download` | **READ+** | A specific version. |
 | GET | `/documents/:id/history` | **MANAGE+** | Audit events for this document, including refusals and break-glass use. |
@@ -88,7 +90,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | DELETE | `/admin/groups/:id/members/:userId` | Access through the group ends on the member's next request. |
 | GET | `/admin/audit` | `action` (prefix), `outcome`, `actor`, `documentId`, `from`, `to`, `before`, `limit`. Newest first, with document titles (never contents). |
 | POST | `/admin/audit/verify` | Recomputes every hash and checks every signed checkpoint. |
-| POST | `/admin/audit/checkpoint` | Signs the current chain head now (also every 10 minutes). |
-| GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `node tools/verify-audit.mjs`. |
+| POST | `/admin/audit/checkpoint` | Signs the current chain head now (also every 5 minutes). |
+| GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `node tools/verify-audit.mjs` (add `--witness checkpoints.jsonl` from the `witness` branch to check it against the outside witness). |
 | GET | `/admin/alerts` | `hours` (1 to 720). |
 | POST | `/admin/break-glass` | `{documentId, reason}` (20+ chars): one hour of READ on one document. Audited, alerted, visible in the document's history. |
