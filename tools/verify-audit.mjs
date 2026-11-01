@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Offline verifier for a TrustVault audit bundle (Admin → Audit → Export).
 //
-//   node tools/verify-audit.mjs trustvault-audit-1-500.json [expected-public-key-base64]
+//   node tools/verify-audit.mjs trustvault-audit-1-500.json [expected-public-key-base64] [--witness checkpoints.jsonl]
 //
 // Needs nothing but Node. It does not talk to the server or the database,
 // so it is a check you can run without trusting either. It verifies:
@@ -11,6 +11,10 @@
 //   3. every signed checkpoint matches the chain at its seq, and its
 //      Ed25519 signature is valid for the bundle's public key — and, if you
 //      pass the key you recorded earlier, that it is the same key.
+//   4. with --witness: every head recorded by the outside witness (the
+//      `witness` branch, see tools/witness.mjs) that falls inside the bundle
+//      matches the bundle's chain. The server cannot have rewritten history
+//      after the witness saw it without failing this check.
 // Exit code 0 = intact, 1 = tampered or malformed.
 
 import { createHash, createPublicKey, verify } from 'node:crypto';
@@ -30,7 +34,7 @@ export function canonical(e) {
   );
 }
 
-export function verifyBundle(bundle, expectedKey) {
+export function verifyBundle(bundle, expectedKey, witnessed = null) {
   const problems = [];
   if (bundle.format !== 'trustvault-audit-bundle-v1') problems.push('unknown bundle format');
   const events = bundle.events ?? [];
@@ -60,18 +64,32 @@ export function verifyBundle(bundle, expectedKey) {
     const msg = Buffer.from(`tv-checkpoint-v1|${c.seq}|${c.headHash}`, 'utf8');
     if (pub && !verify(null, msg, pub, Buffer.from(c.signature, 'base64'))) problems.push(`checkpoint ${c.seq}: bad signature`);
   }
-  return { ok: problems.length === 0, events: events.length, checkpoints: (bundle.checkpoints ?? []).length, problems };
+  let witnessMatched = 0;
+  for (const w of witnessed ?? []) {
+    const chainHash = hashes.get(String(w.seq));
+    if (!chainHash) continue; // outside this bundle's range
+    if (chainHash !== w.headHash) problems.push(`seq ${w.seq}: differs from the head the outside witness recorded at ${w.witnessedAt}`);
+    else witnessMatched++;
+  }
+  return { ok: problems.length === 0, events: events.length, checkpoints: (bundle.checkpoints ?? []).length, witnessMatched, problems };
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('verify-audit.mjs')) {
-  const [file, expectedKey] = process.argv.slice(2);
-  if (!file) {
-    console.error('usage: node tools/verify-audit.mjs <bundle.json> [expected-public-key-base64]');
+  const args = process.argv.slice(2);
+  const wi = args.indexOf('--witness');
+  const witnessFile = wi >= 0 ? args.splice(wi, 2)[1] : null;
+  const [file, expectedKey] = args;
+  if (!file || (wi >= 0 && !witnessFile)) {
+    console.error('usage: node tools/verify-audit.mjs <bundle.json> [expected-public-key-base64] [--witness checkpoints.jsonl]');
     process.exit(2);
   }
-  const result = verifyBundle(JSON.parse(readFileSync(file, 'utf8')), expectedKey);
+  const witnessed = witnessFile
+    ? readFileSync(witnessFile, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+    : null;
+  const result = verifyBundle(JSON.parse(readFileSync(file, 'utf8')), expectedKey, witnessed);
   if (result.ok) {
-    console.log(`INTACT: ${result.events} events and ${result.checkpoints} signed checkpoints verified.`);
+    const w = witnessed ? `, and ${result.witnessMatched} head(s) recorded by the outside witness match` : '';
+    console.log(`INTACT: ${result.events} events and ${result.checkpoints} signed checkpoints verified${w}.`);
     process.exit(0);
   }
   console.log(`TAMPERED: ${result.problems.length} problem(s)`);

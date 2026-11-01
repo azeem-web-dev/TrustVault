@@ -1,0 +1,55 @@
+# Outside witness for the audit chain (THREATS.md L8).
+#
+# Every 15 minutes GitHub — not the TrustVault server — fetches the signed
+# audit checkpoints from the public witness endpoint, checks that nothing it
+# saw before has changed, and commits new checkpoints to the `witness`
+# branch. The server holds no credential for this repository, so whoever
+# controls the server cannot rewrite what was witnessed. If a check fails,
+# nothing is committed and this workflow fails, which emails the owner.
+name: Audit witness
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: audit-witness
+  cancel-in-progress: false
+
+jobs:
+  witness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the witness tool (main)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: main
+          persist-credentials: false
+
+      - name: Check out the witness log
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: witness
+          path: log
+
+      - name: Witness
+        run: node main/tools/witness.mjs --url https://vault.rayyanazeem.cloud --dir log
+
+      - name: Commit new checkpoints
+        working-directory: log
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing new to record."
+            exit 0
+          fi
+          git config user.name "trustvault-witness"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          head=$(tail -n 1 checkpoints.jsonl | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).seq))')
+          git add checkpoints.jsonl signing-key.json
+          git commit -q -m "Witness audit checkpoints up to seq ${head}"
+          git push -q origin HEAD:witness

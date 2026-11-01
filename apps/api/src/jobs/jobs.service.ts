@@ -11,7 +11,7 @@ const QUEUE = 'maintenance';
 /**
  * Scheduled maintenance, run through BullMQ so each job runs once even if
  * the API is restarted mid-way:
- *  - every 10 min: sign the audit chain head (checkpoint)
+ *  - every 5 min: sign the audit chain head (checkpoint)
  *  - every hour:   delete expired sessions; verify the full audit chain
  *  - every day:    permanently remove documents in the trash past retention
  */
@@ -33,7 +33,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     // BullMQ keys live under the same prefix the Redis ACL allows.
     const prefix = `${this.env.REDIS_PREFIX}bull`;
     this.queue = new Queue(QUEUE, { connection, prefix });
-    await this.queue.upsertJobScheduler('checkpoint', { every: 10 * 60_000 }, { name: 'checkpoint' });
+    await this.queue.upsertJobScheduler('checkpoint', { every: 5 * 60_000 }, { name: 'checkpoint' });
     await this.queue.upsertJobScheduler('sessions', { every: 60 * 60_000 }, { name: 'sessions' });
     await this.queue.upsertJobScheduler('verify', { every: 60 * 60_000 }, { name: 'verify' });
     await this.queue.upsertJobScheduler('retention', { every: 24 * 60 * 60_000 }, { name: 'retention' });

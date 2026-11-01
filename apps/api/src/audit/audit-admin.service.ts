@@ -105,6 +105,32 @@ export class AuditAdminService {
   }
 
   /**
+   * Public view for outside witnesses: signed checkpoints from `since`
+   * (inclusive), plus the hash the chain has *now* at `since`. A witness
+   * that already holds checkpoint `since` compares both; if the database
+   * was rewritten, the current hash there no longer matches what it
+   * recorded, because every hash commits to all events before it.
+   */
+  async witnessView(since: bigint, limit: number) {
+    const [checkpoints, anchor, key] = await Promise.all([
+      this.prisma.auditCheckpoint.findMany({ where: { seq: { gte: since } }, orderBy: { seq: 'asc' }, take: limit }),
+      this.prisma.auditEvent.findUnique({ where: { seq: since }, select: { hash: true } }),
+      this.keys.publicKey(),
+    ]);
+    return {
+      format: 'trustvault-witness-v1',
+      signingKey: { keyId: key.keyId, publicKey: key.publicKey.toString('base64'), algorithm: 'Ed25519' },
+      since: since.toString(),
+      eventHashAtSince: anchor ? Buffer.from(anchor.hash).toString('hex') : null,
+      checkpoints: checkpoints.map((c) => ({
+        seq: c.seq.toString(), headHash: Buffer.from(c.headHash).toString('hex'),
+        signature: Buffer.from(c.signature).toString('base64'), keyId: c.keyId, createdAt: c.createdAt.toISOString(),
+      })),
+      hasMore: checkpoints.length === limit,
+    };
+  }
+
+  /**
    * Evidence bundle: events in a range with every field the hash covers,
    * the checkpoints, and the public key. tools/verify-audit.mjs checks it
    * offline with nothing but Node — no database, no trust in this server.
