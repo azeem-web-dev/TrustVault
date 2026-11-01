@@ -113,14 +113,15 @@ export class AuditAdminService {
     if (toSeq !== undefined && toSeq < fromSeq) throw new BadRequestException('Invalid range');
     const limit = 50_000;
     const rows = await this.prisma.$queryRaw<Record<string, unknown>[]>`
-      SELECT seq::text AS seq, id::text AS id,
+      SELECT e.seq::text AS seq, e.id::text AS id,
              to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS occurred_at,
              actor_id::text AS actor_id, actor_email, action, outcome::text AS outcome, reason, target_type, target_id,
              document_id::text AS document_id, ip, user_agent, request_id, details::text AS details,
              encode(prev_hash, 'hex') AS prev_hash, encode(hash, 'hex') AS hash
-        FROM audit_events
-       WHERE seq >= ${fromSeq} AND (${toSeq ?? null}::bigint IS NULL OR seq <= ${toSeq ?? null}::bigint)
-       ORDER BY seq LIMIT ${limit}`;
+        FROM audit_events e
+       WHERE e.seq >= ${fromSeq} AND (${toSeq ?? null}::bigint IS NULL OR e.seq <= ${toSeq ?? null}::bigint)
+       -- e.seq, the bigint column: the output alias "seq" is text and would sort 1, 10, 100, 2...
+       ORDER BY e.seq LIMIT ${limit}`;
     if (rows.length === 0) throw new NotFoundException('No events in that range');
     const lastSeq = BigInt(rows.at(-1)!.seq as string);
     const checkpoints = await this.prisma.auditCheckpoint.findMany({ where: { seq: { gte: fromSeq, lte: lastSeq } }, orderBy: { seq: 'asc' } });

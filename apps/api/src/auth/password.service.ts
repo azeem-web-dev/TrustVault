@@ -7,7 +7,11 @@ import { z } from 'zod';
 // (19 MiB, 2 passes); roughly 100-200 ms per hash on the server, which is
 // fine for logins (rate limited) and expensive for anyone with a stolen
 // database.
-const PARAMS = { algorithm: Algorithm.Argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 } as const;
+const PRODUCTION_PARAMS = { algorithm: Algorithm.Argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 } as const;
+// The test suite creates hundreds of accounts; full-strength hashing there
+// only makes it slow. Never used outside NODE_ENV=test (vitest sets it).
+const TEST_PARAMS = { algorithm: Algorithm.Argon2id, memoryCost: 4096, timeCost: 1, parallelism: 1 } as const;
+export const PARAMS = process.env.NODE_ENV === 'test' ? TEST_PARAMS : PRODUCTION_PARAMS;
 
 /** Length rules only: length beats composition rules, and 128 caps hashing cost. */
 export const PasswordSchema = z
