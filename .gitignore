@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+target/
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/tmp/
+.DS_Store
+apps/api/src/generated/
