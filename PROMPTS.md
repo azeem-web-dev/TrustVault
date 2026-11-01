@@ -45,3 +45,104 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 - Added a unique index on `prev_hash`, so a fork is structurally impossible: a second event claiming the same predecessor fails to insert.
 - Field encoding uses length prefixes (`<bytes>:<value>`, NULL as `~`) so text cannot be shifted between fields without changing the hash.
 - Wrote a probe that attacks the table as the app role and as the table owner. All of UPDATE/DELETE/TRUNCATE/setval are refused, forged `seq`/`hash`/`occurred_at` values are overwritten by the trigger, and `audit_verify()` reports the chain intact. These become automated tests next.
+
+---
+
+## 2026-11-01 — Row-level security for documents and grants (authorisation)
+
+**Asked (Claude):** "Write row-level security for documents, versions, blobs and grants, driven by an SQL access-level function, so the database refuses rows even if the API's check is skipped. Managers see a document's grants; anyone sees grants made to them."
+
+**Got:** policies on every document table plus `tv_doc_level()`. The grants policy was `user_id = current user OR level >= MANAGE`.
+
+**What was wrong:** that grants policy hid every grant made to a **group** from the group's own members. A READ member could open a group-shared document (the documents policy used `tv_doc_level()`, which does see group grants), but "Shared with me" search, which filters through the grants relation, would never list it. It showed up while I wrote `decide()`'s fact loader and asked which grant rows a member can actually read.
+
+**What I did instead:** a follow-up migration lets members see grants to their own groups (it reveals only that their group has access), and `decide()` now reads raw facts through `tv_access_facts()` rather than through RLS-filtered tables, so the TypeScript and SQL decisions stay independent. Fix: [ef71800](https://github.com/azeem-web-dev/TrustVault/commit/ef71800). Covered by "removing someone from a group removes their access through it at once" (checks `scope=shared`).
+
+---
+
+## 2026-11-01 — Uploads failed for every owner (authorisation)
+
+**Asked (Claude):** the same RLS work; then the document upload endpoint.
+
+**Got:** a `documents_select` policy of `tv_doc_level(id, me) >= 1` and an upload that inserts the document with Prisma.
+
+**What was wrong:** every upload returned 500: `new row violates row-level security policy for table "documents"`. Prisma's insert uses `RETURNING`, and Postgres then checks the new row against the **SELECT** policy too. `tv_doc_level()` looks the document up with a snapshot that cannot see the row being inserted, so it returned 0, even for the owner. 27 of 40 document tests failed on the first run.
+
+**What I did instead:** the SELECT policy also matches "the caller is the active owner of this row" from the row's own columns. Same rule, no read-back. It's in its own migration with the explanation, rather than an edited old one. Fix: [ef71800](https://github.com/azeem-web-dev/TrustVault/commit/ef71800).
+
+---
+
+## 2026-11-01 — A check order that leaked, and a lost-update race
+
+**Asked (Claude):** ownership transfer, self-service sharing rules, login lockout.
+
+**Got / what was wrong:**
+1. Transfer checked "you already own this document" **before** `decide()`, so a stranger got 400 instead of 404, which is a small leak of the check order. Caught by the test that calls all 13 document routes as outsiders and expects 404 from every one.
+2. Self-grant was refused with the MANAGE error instead of "you cannot change your own access". The result was right but the message was misleading; caught by a test.
+3. The failed-login counter was read, then written `count + 1`. Parallel wrong guesses would overwrite each other and never reach the lockout. Caught reviewing the generated code before running it.
+
+**What I did instead:** authorisation runs first in every handler; the self-check comes before the level check; the counter uses an atomic `increment` and a test fires 5 wrong passwords in parallel. Fixes: [ef71800](https://github.com/azeem-web-dev/TrustVault/commit/ef71800), [a3d69d5](https://github.com/azeem-web-dev/TrustVault/commit/a3d69d5).
+
+---
+
+## 2026-11-01 — Audit trail: evidence export that would have looked forged
+
+**Asked (Claude):** "Export an evidence bundle of audit events with every hashed field, and write an offline verifier that needs only Node."
+
+**Got:** an export query selecting `seq::text AS seq ... ORDER BY seq`, and a verifier.
+
+**What was wrong:** `ORDER BY seq` sorted by the **text alias**, not the bigint column: 1, 10, 100, 1000, 101... Every exported chain came out of order, and the verifier reported 276 "prev_hash does not link" problems on an untouched log. An auditor would have concluded the log was tampered with. The database-side `audit_verify()` was fine; only the export was wrong. Caught because the test runs the real verifier on a real export.
+
+**What I did instead:** order by the table column (`e.seq`), with a comment. The test also edits one event and checks the verifier says TAMPERED. Fix: [84db532](https://github.com/azeem-web-dev/TrustVault/commit/84db532).
+
+---
+
+## 2026-11-01 — Retention could delete without a record (audit trail)
+
+**Asked (Claude):** "A daily job that permanently removes documents in the trash past the retention period, and audits each removal."
+
+**Got:** the job called the purge function, then wrote one audit row per removed document as separate statements.
+
+**What was wrong:** if an audit insert failed after the purge committed, documents would be gone with no record. That breaks the rule that the audit insert is part of the action.
+
+**What I did instead:** purge and audit inside one transaction. Fix: [ef71800](https://github.com/azeem-web-dev/TrustVault/commit/ef71800).
+
+---
+
+## 2026-11-01 — Upload validation accepted a renamed binary
+
+**Asked (Claude):** "Validate uploads by content: allow PDF, images, Office files, plain text; refuse markup, executables, macros."
+
+**Got:** a detector that treated anything without NUL bytes that decoded as UTF-8 as text.
+
+**What was wrong:** the test "refuses Windows executable" (an `MZ` header followed by `0x01` bytes) was accepted as `report.txt`. A binary with no zero bytes is valid UTF-8.
+
+**What I did instead:** text must also contain no control characters other than tab, newline, carriage return and form feed. Fix: [ef71800](https://github.com/azeem-web-dev/TrustVault/commit/ef71800).
+
+---
+
+## 2026-11-01 — Tests that would not have noticed a missing check
+
+**Asked (Claude):** "List every authorisation check, remove each one, and confirm a test fails." This is the brief's own test, as a script (`tools/mutation-check.mjs`).
+
+**What was wrong (found before running it, by reading which tests exercise which line):**
+1. The session lookup re-checks "account deactivated" and "password changed since this session" on every request. But every API path that deactivates or changes a password **also deletes the sessions**, so removing those re-checks would have left every test green. They are a backup layer that no test exercised.
+2. Search has an app-side access filter and RLS underneath. Remove the app filter and RLS still hides everything, so no API test can tell. Defence in depth makes a single layer untestable through the API.
+
+**What I did instead:** (1) tests that deactivate an account, move `password_changed_at` or expire an external account **directly in the database**, so only the per-request check stands between the old cookie and the app; (2) moved the search filter into `buildSearchWhere()` and tested it with a database connection as the table owner (which RLS does not apply to), so the app filter is tested alone. RLS is tested alone in `rls.test.ts`, and `decide()` alone in `access.unit.test.ts`. The mutation report shows each removal caught: [docs/MUTATION_REPORT.md](docs/MUTATION_REPORT.md).
+
+---
+
+## 2026-11-01 — Toolchain surprises (not security, recorded because they cost time)
+
+- NestJS 12 ships as ES modules, and TypeScript 7 was the default install; Nest's dependency injection needs the older decorator metadata. Pinned TypeScript 5.9 and used explicit `@Inject()` on every constructor parameter, so injection works the same under the dev runner, the test runner and the build.
+- Ubuntu 24.04's default Rust (1.75) cannot build current crates (edition 2024). Used the archive's versioned `rustc-1.91` instead of piping an install script into a shell.
+- The Redis ACL I wrote refused `KEYS` in my own test cleanup. Correct behaviour, so the tests use `SCAN`.
+
+---
+
+## Reused instructions (updated)
+
+Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:
+
+> Every route that names a document calls `access.require()` first, before any other check or message. Never cache permissions. Every allow and deny writes an audit row; allows in the same transaction as the action, denials outside it. Run document queries only through `prisma.asUser()`. New authorisation code is not done until a test fails when the check is removed. PROMPTS.md records only what actually happened.

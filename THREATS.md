@@ -1,80 +1,118 @@
 # THREATS.md
 
-Ways I believe TrustVault could be broken, what I did about each, and what I accepted. Status: **planned** → **done** (with the test that proves it) → **accepted** (with the reason).
+How I believe TrustVault could be broken, what I did about each, how I know it holds, and what I knowingly accepted. Statuses:
 
-This list is started on day one from the design and grows as I build and attack the deployed system.
+- **done**: defended, and the test named in the right-hand column fails if the defence is removed. `node tools/mutation-check.mjs` removes the main checks one by one to prove it; see [docs/MUTATION_REPORT.md](docs/MUTATION_REPORT.md).
+- **accepted**: a known weakness I chose to leave, with the reason.
+- **partial**: some defence, with the gap stated.
 
-## Access to documents
+Test files live in `apps/api/test/`. "live" means checked by hand against https://vault.rayyanazeem.cloud.
 
-| # | Threat | Plan | Status |
+## The model in one paragraph
+
+Every document request passes **two independent locks**. Lock 1 is `decide()` in `apps/api/src/documents/access.ts`, a pure function over raw facts that denies by default. Lock 2 is Postgres **row-level security**, driven by `tv_doc_level()`, written separately in SQL. The API connects as a role that owns nothing, so RLS always applies, and it sets `app.user_id` per transaction. Grants and group membership are read live on every request; nothing is cached. The audit log is written by the database itself: hash-chained by a trigger, append-only by both privileges and triggers, and signed periodically by a separate key service.
+
+---
+
+## A. Reaching a document you were not given
+
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| A1 | Change a document ID in the URL/API (IDOR) | Every route calls `decide()`; random UUIDs; RLS as second layer | planned |
-| A2 | Guess or enumerate IDs; tell "exists" from "forbidden" | UUIDs; `404` for both; denial logged | planned |
-| A3 | Search, counts or autocomplete reveal titles of documents I can't read | Permission filter inside the search SQL; counts computed after filtering | planned |
-| A4 | Old versions reachable after revoke | Version routes call `decide()` on the parent document | planned |
-| A5 | Trash / deleted documents still downloadable | Deleted documents give no access except owner restore | planned |
-| A6 | Access list ("who can see this") readable by viewers | Requires MANAGE | planned |
-| A7 | Mass assignment: send `ownerId`, `role`, `level` in a body | Strict Zod schemas reject unknown keys; server sets owner from session | **done** (auth) — `rejects unknown fields (mass assignment)` |
-| A8 | Privilege escalation through grants (EDIT grants self MANAGE, MANAGE grants MANAGE) | "Cannot grant above own level" rule, tested | planned |
-| A9 | Admin reads document contents | Admin role ≠ document access; break-glass audited and alerted | planned |
-| A10 | Grant to a deactivated user or external user without expiry | Rejected at grant time and ignored at decide time | planned |
-| A11 | Bypass the app and hit storage directly | No public storage; encrypted bytes only in Postgres; DB not exposed | planned |
-| A12 | AI suggestion widens access by itself | AI code returns suggestions only; owner confirms; both audited | planned |
+| A1 | Change a document id in the URL or API body (IDOR) | `decide()` on every route that names a document, then RLS. Refusal = 404 + audit row | **done**: `documents.test.ts` "every document route returns 404 to a user with no grant" (13 routes × 4 kinds of outsider), `rls.test.ts`; live |
+| A2 | Tell "exists" from "forbidden" by status code, message or timing of the response | Same 404 and message for missing, forbidden and malformed ids | **done**: "a document id that does not exist looks exactly like one you cannot see" |
+| A3 | Search, result counts, categories or autocomplete reveal documents you cannot read | Search has its own access filter (`buildSearchWhere`) **and** RLS; counts and categories come from the filtered set | **done**: "search never returns, counts or hints…", `search-filter.test.ts` tests lock 1 alone (as table owner, no RLS) |
+| A4 | Old versions still downloadable after access is removed | Version routes go through the same `decide()` and RLS on the parent document | **done**: "revoking a grant…", route list includes `versions/1/download` |
+| A5 | Documents in the trash still reachable by people who had a grant | Non-owners get level 0 on a deleted document in both locks | **done**: `access.unit.test.ts` trash cases, "trashed documents disappear for everyone with a grant" |
+| A6 | The "who has access" list reveals collaborators to readers | Needs MANAGE | **done**: READ test covers `/access` → 404 |
+| A7 | Mass assignment: send `ownerId`, `role`, `level`, `grantedById` in a body | Strict schemas reject unknown fields; owner and granter always come from the session; RLS `WITH CHECK owner_id = current user`, `granted_by_id = current user` | **done**: "you cannot set yourself as owner…", "rejects unknown fields", `rls.test.ts` "nobody can write a grant in someone else's name" |
+| A8 | Privilege escalation through grants (EDIT grants itself MANAGE, MANAGE grants MANAGE, change someone else's MANAGE) | App rules plus `grants_guard` trigger: nobody grants above their level; MANAGE is owner-only; you cannot change your own access | **done**: "MANAGE: … cannot give MANAGE", "a manager cannot sneak a MANAGE grant in…", "nobody can grant themselves more access", `rls.test.ts` guard cases |
+| A9 | Administrator reads documents | ADMIN role is not access in either lock. Break-glass only: written reason, one hour, READ, alerted, visible to the owner | **done**: `access.unit.test.ts` admin cases, "break-glass gives one hour of READ…"; live: password-only admin gets 403 on documents |
+| A10 | Grants to deactivated users, or to externals beyond READ / without expiry | App checks plus trigger; external grants capped at the account's own expiry | **done**: "external people get READ only…", `rls.test.ts` |
+| A11 | External users gain access through a group | Externals cannot join groups (trigger), and both locks ignore group grants for externals anyway | **done**: unit case, `search-filter.test.ts`, "externals cannot be added to a group" |
+| A12 | Bypass the app and read storage directly | No file storage outside Postgres; bytes are AES-256-GCM ciphertext; the DB listens on localhost only and TrustVault roles are rejected by `pg_hba` on every other database | **done**: "the database holds only ciphertext"; provisioning checks |
+| A13 | Swap encrypted blobs between documents with database write access | Each blob is encrypted with additional data `document id, version id, version number`; a moved blob fails decryption and is reported | **done**: "a blob moved to another document fails its integrity check" |
+| A14 | AI suggestion widens access on its own | The suggestion code only reads; a grant needs an explicit owner action; suggestion and decision are both audited (`source: suggestion_confirmed_by_owner`) | **done**: "suggests people… grants nothing, and audits the suggestion" |
+| A15 | Ownership transfer leaves the old owner a silent permission | Old owner keeps nothing; the new owner must be an active OWNER (trigger enforces too) | **done**: "transfer: the new owner gets everything, the old owner keeps nothing" |
+| A16 | Order of checks leaks information (e.g. "you already own this" before "not found") | Authorisation runs first in every handler | **done**: found by a test during the build (PROMPTS.md), now covered by the 13-route test |
 
-## Revocation
+## R. Taking access away
 
-| # | Threat | Plan | Status |
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| R1 | Old session still works after deactivation, role change or password change | Sessions deleted in the same transaction; every request re-reads session + user; `password_changed_at` invalidates older sessions | **done** — `deactivating a user ends their live session…`, `changing a user role…`, `changing your password ends every session…` |
-| R2 | Permission cached somewhere (Redis, memory, browser) | No permission cache; `Cache-Control: no-store` | planned |
-| R3 | Share link keeps working after revoke | Links stored hashed, checked on every use, expiry required | planned |
-| R4 | Group removal not immediate | Membership read live | planned |
-| R5 | Download in progress at revoke time | **Accepted**: completes; already-downloaded copies cannot be recalled | accepted |
+| R1 | Old session keeps working after deactivation, role change or password change | Admin actions delete sessions in the same transaction; **and** every request re-reads session and user (status, expiry, `password_changed_at`) as a backup | **done**: auth tests incl. "the session lookup re-checks the account…" (changes the account behind the API's back) |
+| R2 | A permission cached somewhere (Redis, memory, browser) | No permission cache anywhere; `Cache-Control: no-store` on every API response and download | **done**: revocation tests pass on the very next request |
+| R3 | Removing someone from a group does not take effect | Membership read live in both locks | **done**: "removing someone from a group removes their access through it at once" |
+| R4 | A grant past its expiry keeps working | Expiry checked on every request in both locks | **done**: "a grant that has expired stops working", unit cases |
+| R5 | Share links outliving revocation | **Not built on purpose**: there are no anonymous links. Outsiders get EXTERNAL accounts with an expiry | n/a (design decision, see docs/PLAN.md) |
+| R6 | A download already streaming when access is revoked | **accepted**: it completes. A file already on someone's disk cannot be recalled; the audit log records that it was downloaded | accepted |
 
-## Audit trail
+## L. The audit trail
 
-| # | Threat | Plan | Status |
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| L1 | Edit or delete audit rows through the app | App DB role has INSERT/SELECT only; triggers block UPDATE/DELETE/TRUNCATE even for the owner; trigger assigns seq/time/hash | **done** — `test/audit-db.test.ts` |
-| L2 | DB superuser rewrites history | Hash chain + Ed25519 checkpoints signed by keyd + daily off-server export of the head | planned |
-| L3 | Action succeeds but audit write fails | Same transaction; audit failure aborts the action | **done** for user/session changes; documents next |
-| L4 | Refused attempts not recorded | Denials written as audit rows with reason, outside the failing transaction | **done** for login, CSRF, role — `records refused logins…`, `…attempt is audited` |
-| L5 | Log injection (newlines, HTML in filenames shown in admin view) | Structured storage, escaped rendering | planned |
-| L6 | Cutting off the newest audit rows (tail truncation) | Checkpoints + off-server head export detect it | planned |
+| L1 | Edit or delete audit rows through the app | App role has INSERT and SELECT only; triggers refuse UPDATE/DELETE/TRUNCATE **even for the table owner**; the trigger, not the app, assigns `seq`, time and hashes | **done**: `audit-db.test.ts` |
+| L2 | Someone with full database access rewrites history | Hash chain (`audit_verify()` finds the first altered row), unique `prev_hash` (no forks), Ed25519-signed checkpoints every 10 minutes from keyd, which the database cannot forge | **done**: "audit_verify finds the exact row if history is rewritten", "verifies the chain and signed checkpoints" |
+| L3 | Action succeeds but its audit row is lost | Audit insert in the same transaction as the action; downloads are audited and committed before the first byte is sent; retention purge and audit in one transaction | **done** by construction; download path covered in document tests |
+| L4 | Refused attempts are not recorded | Every refusal writes a DENIED row with the real reason, outside the failing transaction | **done**: refusal tests read the rows back |
+| L5 | Cutting off the newest events (tail truncation) | Checkpoints record the head; verification reports a missing checkpointed event. **partial** between checkpoints (up to 10 minutes) | partial (see L8) |
+| L6 | Log injection: newlines or HTML in file names shown in the admin view | Values stored as data (JSON / text columns), rendered by React (escaped); never interpreted | **done** by construction |
+| L7 | Exported evidence altered before reaching an auditor | `tools/verify-audit.mjs` re-verifies offline, optionally against a pinned public key | **done**: "exports a bundle the offline tool verifies — and the tool catches an edited event" |
+| L8 | Root on the server rewrites the database **and** asks keyd to sign the forged head | **accepted / partial**: root can do anything on this one machine. Mitigations: keyd refuses to sign anything but checkpoint messages; the public key is published; exported bundles are kept off-server. Not built: anchoring checkpoints to an external witness | accepted |
+| L9 | Concurrent writers fork or reorder the chain | Advisory lock until commit; trigger refuses REPEATABLE READ; unique `prev_hash` | **done**: "concurrent writers produce one unbroken chain" |
 
-## Authentication and sessions
+## S. Accounts and sessions
 
-| # | Threat | Plan | Status |
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| S1 | Password brute force / credential stuffing | Argon2id (64 MiB, t=3); Redis limits per IP (20/15 min) and account (10/15 min), fail closed; lock after 5 failures doubling to 24 h with an atomic counter; nginx 10/min on login | **done** — `locks the account…`, `counts parallel wrong guesses…`, `rate-limits one IP…` |
-| S2 | Account enumeration via login messages or timing | One message for every failure; unknown accounts verify against a dummy Argon2 hash | **done** (message) — `gives the same answer…`; timing equalised by design, not yet measured |
-| S3 | Session theft via XSS | `__Host-` HttpOnly cookie; nonce + strict-dynamic CSP on every page; CSRF token in memory only | **done** — `sets a __Host- cookie…`; CSP checked live |
-| S4 | CSRF | `SameSite=Strict`; Origin must match; per-session CSRF token, constant-time compare | **done** — `logout needs the CSRF token…`, `a CSRF token from another session does not work`, `refuses a cross-origin login attempt` |
-| S5 | Session fixation | Fresh random token on every login; the browser's previous session is ended; role change ends sessions | **done** — `logging in again from the same browser replaces the old session` |
-| S6 | Admin account takeover | Admin requires passkey or TOTP | planned |
-| S7 | Attacker locks a known user out with wrong passwords (lockout as denial of service) | **Accepted trade-off**: lockout is capped (doubling up to 24 h) and an admin can clear it; the alternative is unlimited guessing | accepted |
-| S8 | Spoofed `X-Forwarded-For` to dodge IP limits or falsify the audit IP | nginx overwrites the header; Express trusts loopback only | **done** — checked live: a forged `1.2.3.4` was logged as the real IP |
+| S1 | Password guessing / credential stuffing | Argon2id (64 MiB, 3 passes); per-IP and per-account limits in Redis (fail closed if Redis is down); account lock after 5 failures, doubling to 24 h, atomic counter; nginx limit on `/auth/login` | **done**: lockout, parallel-guess and rate-limit tests |
+| S2 | Account enumeration by message or timing | One message for every failure; unknown accounts verify against a dummy hash | **done** (message); timing equalised by design but not measured |
+| S3 | Session theft through XSS | `__Host-` HttpOnly Secure SameSite=Strict cookie; nonce + `strict-dynamic` CSP on every page; uploads never rendered inline; CSRF token in memory only | **done**: cookie test; CSP checked live |
+| S4 | CSRF | SameSite=Strict, Origin check, per-session CSRF token compared in constant time | **done**: CSRF and cross-origin tests (including a cross-site upload) |
+| S5 | Session fixation | New random token at login and at every MFA step; the browser's old session is ended | **done**: "logging in again… replaces the old session", "the password-only session token no longer works" |
+| S6 | Admin account takeover with a stolen password | Second factor required for every admin (TOTP or passkey); a password-only session reaches only sign-in routes | **done**: `admin-mfa.test.ts` |
+| S7 | TOTP code replayed or guessed | Each code works once (atomic "newer step" update); 5 tries per 5 minutes | **done**: replay and rate-limit tests |
+| S8 | Attacker with a password adds their own second factor | Enrolling another factor requires the existing one in this session | **done** by construction (`requireMfaIfEnrolled`) |
+| S9 | Lockout used to deny service to a known user | **accepted** trade-off: capped at 24 h, admin can clear it; the alternative is unlimited guessing | accepted |
+| S10 | Spoofed `X-Forwarded-For` to dodge IP limits or falsify the audit IP | nginx overwrites the header; Express trusts loopback only | **done**: live, a forged `1.2.3.4` was logged as the real IP |
+| S11 | Lost phone locks an admin out | Another admin can reset a user's second factor (audited, sessions end). An admin cannot reset their own | **done** |
 
-## Uploads and files
+## U. Uploads and downloads
 
-| # | Threat | Plan | Status |
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| U1 | Fake file type (extension/MIME spoofing) | Magic-byte detection against an allowlist | planned |
-| U2 | Uploaded HTML/SVG runs script on our origin | Always `attachment`, `nosniff`, strict CSP, never rendered inline | planned |
-| U3 | Path traversal in filenames | Filenames are metadata only; storage key is a UUID | planned |
-| U4 | Huge uploads / zip bombs exhaust the server | Size cap at nginx and app; archives not unpacked | planned |
-| U5 | Malware uploaded and shared | **Accepted for now**: no AV scanner on this server; files are only ever downloaded, never executed or previewed server-side | accepted |
+| U1 | Fake file type (extension or Content-Type spoofing) | Type from magic bytes only; the stored name gets the real extension | **done**: "accepts a real Word document and stores the detected type" |
+| U2 | HTML/SVG/script uploaded and opened on our origin (stored XSS) | Markup refused; downloads always `attachment` + `CSP: sandbox` + `nosniff` | **done**: HTML/SVG cases, download header test |
+| U3 | Active content: PDF JavaScript, macro Office files | Refused | **done**: PDF-JS and `vbaProject.bin` cases |
+| U4 | Path traversal in file names or archive entries | File names are metadata only (sanitised); ZIP entries with `..`, `/` or `\` refused; nothing is unpacked | **done** |
+| U5 | Oversized uploads, zip bombs | 25 MB cap enforced while streaming (413); nginx cap; archives never decompressed | **done**: size test |
+| U6 | Malware in an allowed type | **accepted**: no antivirus scanner on this server. Files are only downloaded, never executed or previewed server-side | accepted |
+| U7 | Upload flooding | 60 uploads / 10 min per user | **done** by construction |
 
-## Infrastructure
+## K. Keys and cryptography
 
-| # | Threat | Plan | Status |
+| # | Threat | Defence | Status / proof |
 |---|---|---|---|
-| I1 | A TrustVault compromise spreads to other services on the shared server | Dedicated user; systemd sandbox (`systemd-analyze security` = 1.1); pg_hba rejects TrustVault roles on every other database; Redis ACL per key prefix | **done** — checked on the server |
-| I2 | Encryption keys stolen together with the database | Keys live in keyd (separate user, Unix socket); DB holds only wrapped data keys | planned |
-| I3 | Secrets committed to git | `.env` ignored, secrets only on the server, gitleaks in CI | planned |
-| I4 | Verbose errors leak internals | One exception filter; unexpected errors become a generic 500 + request id | **done** — `malformed JSON gives a clean 400…` |
-| I5 | CORS misconfiguration | Same origin (nginx routes /api); CORS never enabled; Origin checked on writes | **done** |
-| I6 | Full server compromise (root) | **Accepted**: root could read keyd memory. Off-server audit export still proves what happened up to that point | accepted |
-| I7 | Seed credentials published in README | **Accepted**: required by the brief for judging; seed accounts can only reach seed documents | accepted |
-| I8 | Anyone with the published demo admin password can deactivate the other demo accounts or create users, breaking the demo for the next visitor | Planned: demo accounts flagged as protected (cannot be deactivated, demoted or have their password reset through the API) and a nightly demo reset | planned |
-| I9 | A compromised dependency's npm install script runs on the server | `npm ci --ignore-scripts`, then rebuild only the three approved packages | **done** |
+| K1 | Encryption keys stolen together with the database | Data keys are stored only wrapped; the master key lives in keyd, a separate process and Linux user. The API never holds it | **done**: live, keyd refused root and every uid but the API's |
+| K2 | A compromised API gets keyd to sign forged audit data | keyd signs only `tv-checkpoint-v1|…` messages | **done**: keyd unit test, live probe |
+| K3 | Key material swapped to disk or in a core dump | keyd `mlockall`, non-dumpable, `LimitCORE=0` | **done**: `VmLck` checked live |
+| K4 | Master key lost | **accepted risk, operational**: losing `/etc/tvkeyd/master.key` loses every stored file. It must be backed up offline | accepted |
+
+## I. Infrastructure
+
+| # | Threat | Defence | Status / proof |
+|---|---|---|---|
+| I1 | A TrustVault compromise spreads to the other services on this shared server | Dedicated users; systemd sandbox (API `systemd-analyze` 1.1, keyd 0.5); `pg_hba` rejects TrustVault roles everywhere else; Redis ACL per key prefix with admin commands removed | **done**: checked on the server |
+| I2 | Secrets committed to git | `.env` ignored; secrets only on the server; gitleaks in CI | **done** |
+| I3 | Verbose errors leak internals | One exception filter; unexpected errors are a generic 500 with a request id | **done** |
+| I4 | CORS misconfiguration | Same origin; CORS never enabled | **done** |
+| I5 | Supply-chain install scripts run on the server | `npm ci --ignore-scripts`, then only the three approved packages rebuilt; keyd built by an unprivileged user | **done** |
+| I6 | Full root compromise of the server | **accepted**: root can read process memory, including keyd. The audit chain and exported bundles still show everything up to that point | accepted |
+| I7 | Demo credentials are published | **accepted**: required by the brief. Demo accounts can only reach demo documents | accepted |
+| I8 | A visitor uses the published admin login to break the demo for the next visitor | Demo accounts are protected: cannot be deactivated, demoted, renamed, have their password or second factor changed | **done**: "protected demo accounts…" |
+
+## Not built, on purpose
+
+- **Anonymous share links.** Every outsider is a named EXTERNAL account with an expiry, so there is never a link that works for whoever holds it.
+- **End-to-end encryption.** It would stop the server from validating uploads, searching and auditing. The threat it addresses (a fully compromised server) is accepted above (I6, L8).
+- **Previews.** Rendering untrusted files server-side is a large attack surface; files are only ever downloaded.
+- **Folder inheritance.** Folders organise and never grant. "Given a folder to see one file, can now see forty" is the first problem in the brief.

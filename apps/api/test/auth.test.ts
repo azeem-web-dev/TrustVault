@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { as, auditRows, createUser, login, ORIGIN, resetState, startApp, type TestApp } from './helpers.js';
+import { as, auditRows, createUser, login, ORIGIN, ownerDb, resetState, startApp, withDb, type TestApp } from './helpers.js';
 
 let t: TestApp;
 
@@ -193,6 +193,32 @@ describe('sessions end immediately', () => {
     const res = await t.http.post('/api/auth/login').set('Cookie', first.cookie).set('Origin', ORIGIN).send({ email: u.email, password: u.password });
     expect(res.status).toBe(200);
     await as(t, first).get('/api/auth/me').expect(401);
+  });
+});
+
+describe('the session lookup re-checks the account on every request (backup layer)', () => {
+  // The admin actions above also delete sessions directly. These tests change
+  // the account behind the API's back, so only the per-request check in
+  // SessionService.resolve() stands between the old cookie and the app.
+  it('a session dies if the account is deactivated by any route, even without its session row being deleted', async () => {
+    const u = await createUser({ email: 'direct@t.io', role: 'VIEWER' });
+    const s = await login(t, u);
+    await withDb(ownerDb(), (db) => db.query(`UPDATE users SET status = 'DEACTIVATED', deactivated_at = now() WHERE id = $1`, [u.id]));
+    await as(t, s).get('/api/auth/me').expect(401);
+  });
+
+  it('a session dies if the password changed after it was created', async () => {
+    const u = await createUser({ email: 'pwdirect@t.io', role: 'VIEWER' });
+    const s = await login(t, u);
+    await withDb(ownerDb(), (db) => db.query(`UPDATE users SET password_changed_at = now() + interval '1 second' WHERE id = $1`, [u.id]));
+    await as(t, s).get('/api/auth/me').expect(401);
+  });
+
+  it('a session dies when an external account passes its expiry', async () => {
+    const u = await createUser({ email: 'exp@p.io', role: 'EXTERNAL' });
+    const s = await login(t, u);
+    await withDb(ownerDb(), (db) => db.query(`UPDATE users SET access_expires_at = now() - interval '1 second' WHERE id = $1`, [u.id]));
+    await as(t, s).get('/api/auth/me').expect(401);
   });
 });
 

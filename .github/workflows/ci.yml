@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API tests (real Postgres + Redis)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-superuser
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      PUBLIC_ORIGIN: https://vault.test
+      DATABASE_URL: postgresql://tv_dev_app:ci-app@127.0.0.1:5432/trustvault_test
+      TEST_DATABASE_URL: postgresql://tv_dev_app:ci-app@127.0.0.1:5432/trustvault_test
+      TEST_DATABASE_OWNER_URL: postgresql://tv_dev_owner:ci-owner@127.0.0.1:5432/trustvault_test
+      REDIS_URL: redis://127.0.0.1:6379
+      KEY_PROVIDER: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Create database roles (same layout as production)
+        run: PGPASSWORD=ci-superuser psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f infra/ci/setup-db.sql
+      - name: Install (no install scripts except the approved ones)
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild prisma @prisma/engines esbuild
+      - name: Generate a throwaway master key for the local key provider
+        run: echo "LOCAL_MASTER_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Type-check
+        run: |
+          cd apps/api && npx prisma generate && npx tsc --noEmit -p tsconfig.json
+          cd ../web && npx tsc --noEmit
+      - name: Tests
+        run: cd apps/api && npx vitest run
+      - name: Mutation check (remove each authorisation rule; tests must fail)
+        if: github.event_name == 'push'
+        run: node tools/mutation-check.mjs
+      - name: Build web
+        run: cd apps/web && npx next build
+
+  keyd:
+    name: keyd (Rust) tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cd keyd && cargo test --release
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

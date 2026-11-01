@@ -4,25 +4,70 @@ A document platform where the wrong person can never read the file, and you can 
 
 **Live:** https://vault.rayyanazeem.cloud
 
-> **Status (2026-11-01):** accounts, sessions, roles, admin user management, the tamper-evident audit log and the deployment are done and tested. Documents, sharing, search and the admin activity view are next. [docs/PLAN.md](docs/PLAN.md) has the full plan.
+## Demo accounts
 
-## Demo accounts (live site)
+| Role | Email | Password | What to try |
+|---|---|---|---|
+| Admin | `admin@trustvault.demo` | `Demo-admin-b4401f3310b7` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity, break-glass. |
+| Owner | `olivia.owner@trustvault.demo` | `Demo-owner-32d56b2cda22` | Owns five documents shared in different ways. Share, revoke, see history. |
+| Owner | `oscar.owner@trustvault.demo` | `Demo-owner-32d56b2cda22` | Owns *Architecture review* (Engineering group can edit, Olivia can manage). |
+| Viewer | `victor.viewer@trustvault.demo` | `Demo-viewer-354fb61f99cd` | Sees 3 documents (one direct, two through groups). Try to reach *Salary bands 2026*. |
+| External | `erin.external@partner.demo` | `Demo-external-956110021bd0` | Sees only the NDA shared with her, read-only, until it expires. |
 
-| Role | Email | Password |
-|---|---|---|
-| Admin | admin@trustvault.demo | `Demo-admin-b4401f3310b7` |
-| Owner | olivia.owner@trustvault.demo | `Demo-owner-32d56b2cda22` |
-| Owner | oscar.owner@trustvault.demo | `Demo-owner-32d56b2cda22` |
-| Viewer | victor.viewer@trustvault.demo | `Demo-viewer-354fb61f99cd` |
-| External | erin.external@partner.demo | `Demo-external-956110021bd0` |
+**Admin authenticator secret:** `NZVD2J3RUX6P7RSZ3FSGBT2ACTCWOPRZ`
 
-These are published on purpose, because the brief asks for them. See THREATS.md I7 and I8 for what that costs and how it is contained.
+The demo accounts are published because the brief asks for them, so they are **protected**: nobody can deactivate, demote, rename them or change their password or second factor (THREATS.md I7, I8). Each code works once (replay-protected). If a code is refused, wait for the next one.
 
 ## What to read
 
-- [docs/PLAN.md](docs/PLAN.md): stack, permission model, revocation, audit design, what I chose not to build
-- [THREATS.md](THREATS.md): how it could be broken, what I did about each, what I accepted
-- [PROMPTS.md](PROMPTS.md): how I used AI and where it was wrong
+| File | What it is |
+|---|---|
+| [docs/WRITEUP.md](docs/WRITEUP.md) | What I built, what I deliberately did not, the permission model in my own words, how I used AI and where it was wrong, what is unfinished |
+| [THREATS.md](THREATS.md) | Every way I think it could be broken, the defence, the test that proves it, and what I accepted |
+| [PROMPTS.md](PROMPTS.md) | AI usage, dated, with each mistake and the commit that fixed it |
+| [docs/API.md](docs/API.md) | Every endpoint and who is allowed to call it |
+| [docs/MUTATION_REPORT.md](docs/MUTATION_REPORT.md) | Each authorisation rule removed in turn, and the test that caught it |
+| [docs/PLAN.md](docs/PLAN.md) | The design and the decisions behind it |
+| [docs/DEMO.md](docs/DEMO.md) | The five-minute demo script |
+
+## How it works
+
+```
+Browser ──HTTPS──► nginx (TLS, HSTS, rate limits, X-Forwarded-For overwritten)
+                    ├── /api/* ──► NestJS API (user trustvault, systemd sandbox, loopback only)
+                    │               ├─ SecurityGuard: Origin → session → CSRF → 2nd factor → role
+                    │               ├─ decide()  ← LOCK 1: every document route, deny by default
+                    │               ├─ prisma.asUser(): sets app.user_id for the transaction
+                    │               └─ keyd client ──unix socket──► tvkeyd (Rust, user tvkeyd, no network)
+                    │                                               master key · wraps file keys · signs checkpoints
+                    └── /* ─────► Next.js web (user trustvault, sandboxed)
+
+PostgreSQL 16 (API connects as a role that owns nothing)
+  ├─ row-level security on every document table  ← LOCK 2: tv_doc_level(), written separately in SQL
+  ├─ triggers: grant rules, owner-only changes, externals never in groups
+  ├─ files: AES-256-GCM ciphertext, one random key per version, bound to its row
+  └─ audit_events: hash chain assigned by a trigger; UPDATE/DELETE/TRUNCATE refused even for the owner
+Redis (localhost, ACL-restricted): rate limits, BullMQ jobs (checkpoints, retention, verification)
+```
+
+## Tests
+
+```bash
+cd apps/api && npx vitest run            # 150+ tests against a real Postgres and Redis
+node tools/mutation-check.mjs            # removes each authorisation rule; every removal must fail a test
+cd keyd && cargo test                    # key service
+node tools/verify-audit.mjs bundle.json  # verify an exported audit bundle offline
+```
+
+| Test file | Proves |
+|---|---|
+| `access.unit.test.ts` | `decide()` alone: every rule, deny by default |
+| `rls.test.ts` | the database alone (no API code): RLS policies and guard triggers |
+| `search-filter.test.ts` | the search access filter alone (run where RLS does not apply) |
+| `documents.test.ts` | end to end: 13 document routes refused for 4 kinds of outsider, search leaks nothing, revocation is immediate, uploads validated, files encrypted, blob swaps detected, break-glass, suggestions |
+| `auth.test.ts` | sessions, lockout, rate limits, CSRF, Origin, session death on deactivate / role / password change |
+| `admin-mfa.test.ts` | second factor, replay, protected demo accounts, admin audit view, alerts, export verified by the offline tool |
+| `audit-db.test.ts` | direct attacks on the audit table as the app role and as the table owner |
 
 ## Run it locally
 
@@ -30,30 +75,23 @@ Needs Node 22+, PostgreSQL 16 and Redis 7.
 
 ```bash
 git clone https://github.com/azeem-web-dev/TrustVault.git && cd TrustVault
-npm ci
-cp apps/api/.env.example apps/api/.env      # fill in the database and Redis URLs
+npm ci --ignore-scripts && npm rebuild prisma @prisma/engines esbuild
+sudo bash infra/server/provision.sh        # or create the roles in infra/ci/setup-db.sql by hand
+cp apps/api/.env.example apps/api/.env     # fill in URLs; LOCAL_MASTER_KEY=$(openssl rand -base64 32)
 cd apps/api
-npx prisma migrate deploy                   # runs as DATABASE_OWNER_URL
-npx tsx --env-file=.env prisma/seed.ts      # demo accounts, dev-only passwords
-npm run dev                                 # API on http://127.0.0.1:4100
-# in a second terminal, from the repo root:
-npm run dev:web                             # web on http://localhost:3000
+npx prisma migrate deploy                  # runs as DATABASE_OWNER_URL
+npx tsx --env-file=.env prisma/seed.ts     # demo data with dev-only passwords
+npm run dev                                # API on http://127.0.0.1:4100
+cd ../web && npm run dev                   # web on http://localhost:3005 (set PUBLIC_ORIGIN to match)
 ```
 
-The database needs two roles: an owner for migrations, and a low-privilege app role that is a member of `trustvault_app`. `infra/server/provision.sh` creates both, plus the Redis ACL users.
-
-### Tests
-
-```bash
-cd apps/api && npx vitest run
-```
-
-The tests run against a real Postgres and Redis (`TEST_DATABASE_URL`, `TEST_DATABASE_OWNER_URL`, `REDIS_URL`). They include direct-to-database attacks on the audit log.
-
-## Deploy (Ubuntu 24.04)
+## Deploy (Ubuntu 24.04, from a clean machine)
 
 ```bash
 sudo bash infra/server/provision.sh     # users, databases, roles, pg_hba, Redis ACL
-sudo bash infra/server/install-app.sh   # env files, systemd units, nginx, TLS
-sudo bash infra/server/deploy.sh        # fetch, build, migrate, restart, health check
+sudo bash infra/server/install-app.sh   # env files, systemd units, nginx, TLS (certbot)
+sudo bash infra/server/install-keyd.sh  # build and start the key service; generates the master key (back it up)
+sudo bash infra/server/deploy.sh        # fetch, install, build, migrate, restart, health check
 ```
+
+Then seed with production passwords (`SEED_PASSWORD_*`, `SEED_ADMIN_TOTP_SECRET` in `/etc/trustvault/seed.passwords`); see `apps/api/prisma/seed.ts`.

@@ -41,6 +41,40 @@ const LIST_SELECT = {
 
 type ListRow = Prisma.DocumentGetPayload<{ select: typeof LIST_SELECT }>;
 
+/**
+ * Layer 1 of search: documents the caller owns or holds a live grant on
+ * (directly, or through a group unless they are external). Row-level
+ * security applies the same rule again in the database (layer 2).
+ */
+export function accessFilter(actor: Pick<Actor, 'userId' | 'role'>, now: Date = new Date()): Prisma.DocumentWhereInput {
+  const me = actor.userId;
+  const liveGrant: Prisma.GrantWhereInput = { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] };
+  const mine: Prisma.GrantWhereInput =
+    actor.role === 'EXTERNAL'
+      ? { userId: me }
+      : { OR: [{ userId: me }, { group: { members: { some: { userId: me } } } }] };
+  return { OR: [{ ownerId: me }, { grants: { some: { AND: [liveGrant, mine] } } }] };
+}
+
+/** The full search condition. Exported so the access part can be tested without row-level security. */
+export function buildSearchWhere(actor: Pick<Actor, 'userId' | 'role'>, f: SearchFilters, now: Date = new Date()): Prisma.DocumentWhereInput {
+  const me = actor.userId;
+  const and: Prisma.DocumentWhereInput[] = [];
+  if (f.scope === 'trash') and.push({ status: 'DELETED', ownerId: me });
+  else {
+    and.push({ status: 'ACTIVE' }, accessFilter(actor, now));
+    if (f.scope === 'mine') and.push({ ownerId: me });
+    else if (f.scope === 'shared') and.push({ ownerId: { not: me } });
+  }
+  if (f.q) and.push({ OR: [{ title: { contains: f.q, mode: 'insensitive' } }, { description: { contains: f.q, mode: 'insensitive' } }] });
+  if (f.owner) and.push({ owner: { OR: [{ displayName: { contains: f.owner, mode: 'insensitive' } }, { email: { contains: f.owner, mode: 'insensitive' } }] } });
+  if (f.category) and.push({ category: { equals: f.category, mode: 'insensitive' } });
+  if (f.from) and.push({ createdAt: { gte: f.from } });
+  if (f.to) and.push({ createdAt: { lte: f.to } });
+  if (f.folderId) and.push({ folderId: f.folderId, ownerId: me });
+  return { AND: and };
+}
+
 @Injectable()
 export class DocumentsService {
   constructor(
@@ -61,30 +95,7 @@ export class DocumentsService {
    */
   async search(actor: Actor, f: SearchFilters) {
     const me = actor.userId;
-    const now = new Date();
-    const liveGrant: Prisma.GrantWhereInput = { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] };
-    const mine: Prisma.GrantWhereInput =
-      actor.role === 'EXTERNAL'
-        ? { userId: me }
-        : { OR: [{ userId: me }, { group: { members: { some: { userId: me } } } }] };
-    const sharedWithMe: Prisma.DocumentWhereInput = { grants: { some: { AND: [liveGrant, mine] } } };
-
-    const where: Prisma.DocumentWhereInput = { AND: [] };
-    const and = where.AND as Prisma.DocumentWhereInput[];
-
-    if (f.scope === 'trash') and.push({ status: 'DELETED', ownerId: me });
-    else {
-      and.push({ status: 'ACTIVE' });
-      if (f.scope === 'mine') and.push({ ownerId: me });
-      else if (f.scope === 'shared') and.push({ ownerId: { not: me } }, sharedWithMe);
-      else and.push({ OR: [{ ownerId: me }, sharedWithMe] });
-    }
-    if (f.q) and.push({ OR: [{ title: { contains: f.q, mode: 'insensitive' } }, { description: { contains: f.q, mode: 'insensitive' } }] });
-    if (f.owner) and.push({ owner: { OR: [{ displayName: { contains: f.owner, mode: 'insensitive' } }, { email: { contains: f.owner, mode: 'insensitive' } }] } });
-    if (f.category) and.push({ category: { equals: f.category, mode: 'insensitive' } });
-    if (f.from) and.push({ createdAt: { gte: f.from } });
-    if (f.to) and.push({ createdAt: { lte: f.to } });
-    if (f.folderId) and.push({ folderId: f.folderId, ownerId: me });
+    const where = buildSearchWhere(actor, f);
 
     return this.prisma.asUser(me, async (tx) => {
       const [total, rows] = await Promise.all([
@@ -102,7 +113,7 @@ export class DocumentsService {
   /** Categories of documents I can see (for the search filter). */
   async categories(actor: Actor): Promise<string[]> {
     return this.prisma.asUser(actor.userId, async (tx) => {
-      const rows = await tx.document.findMany({ where: { status: 'ACTIVE' }, distinct: ['category'], select: { category: true }, orderBy: { category: 'asc' }, take: 200 });
+      const rows = await tx.document.findMany({ where: { AND: [{ status: 'ACTIVE' }, accessFilter(actor)] }, distinct: ['category'], select: { category: true }, orderBy: { category: 'asc' }, take: 200 });
       return rows.map((r) => r.category);
     });
   }
