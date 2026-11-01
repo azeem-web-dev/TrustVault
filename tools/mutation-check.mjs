@@ -100,7 +100,7 @@ async function runSql(statement) {
 
 function runTests(files) {
   const r = spawnSync('npx', ['vitest', 'run', ...files], { cwd: API, shell: process.platform === 'win32', encoding: 'utf8', env: process.env });
-  const summary = (r.stdout + r.stderr).split('\n').find((l) => /Tests\s+\d/.test(l))?.trim() ?? '(no summary)';
+  const summary = (r.stdout + r.stderr).split('\n').find((l) => /Tests\s+\d/.test(l))?.trim().replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ') ?? '(no summary)';
   return { failed: r.status !== 0, summary };
 }
 
