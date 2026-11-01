@@ -1,5 +1,7 @@
 import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { RedisService } from '../redis/redis.service.js';
@@ -44,9 +46,29 @@ export class AuthService {
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(PasswordService) private readonly passwords: PasswordService,
     @Inject(SessionService) private readonly sessions: SessionService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
+  /**
+   * Every failed login takes at least LOGIN_FAILURE_FLOOR_MS. The failure
+   * paths already do the same work (one Argon2 verify, one database
+   * commit); the floor covers what is left, so the response time does not
+   * say whether the email has an account. Measured in docs/LOGIN_TIMING.md.
+   */
   async login(rawEmail: string, password: string, previousToken?: string): Promise<LoginResult> {
+    const started = performance.now();
+    try {
+      return await this.attemptLogin(rawEmail, password, previousToken);
+    } catch (err) {
+      if (err instanceof UnauthorizedException) {
+        const wait = started + this.env.LOGIN_FAILURE_FLOOR_MS - performance.now();
+        if (wait > 0) await sleep(wait);
+      }
+      throw err;
+    }
+  }
+
+  private async attemptLogin(rawEmail: string, password: string, previousToken?: string): Promise<LoginResult> {
     const email = normaliseEmail(rawEmail);
     const ctx = currentContext();
     await this.enforceRateLimits(email, ctx?.ip ?? 'unknown');
@@ -64,22 +86,29 @@ export class AuthService {
     if (!user) return deny('unknown_account');
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return deny('account_locked');
     if (!passwordOk) {
-      // Atomic increment: parallel wrong guesses each count, none are lost.
-      const { failedLoginCount: failures } = await this.prisma.user.update({
-        where: { id: user.id },
-        data: { failedLoginCount: { increment: 1 } },
-        select: { failedLoginCount: true },
-      });
-      const lockMinutes = failures >= LOCK_AFTER
-        ? Math.min(LOCK_BASE_MINUTES * 2 ** (failures - LOCK_AFTER), LOCK_MAX_MINUTES)
-        : 0;
-      if (lockMinutes > 0) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { lockedUntil: new Date(Date.now() + lockMinutes * 60_000) },
-        });
-      }
-      return deny(lockMinutes > 0 ? `wrong_password_locked_${lockMinutes}m` : 'wrong_password');
+      // Counter, lock and audit row in ONE SQL statement: the same single
+      // round trip as every other failure path's audit write. Doing them as
+      // separate queries made a wrong password on a real account measurably
+      // slower than an unknown email (docs/LOGIN_TIMING.md). The UPDATE's
+      // row lock keeps the counter exact when guesses arrive in parallel.
+      await this.prisma.$executeRaw`
+        WITH u AS (
+          UPDATE users
+             SET failed_login_count = failed_login_count + 1,
+                 locked_until = CASE WHEN failed_login_count + 1 >= ${LOCK_AFTER}
+                   THEN now() + make_interval(mins => LEAST(${LOCK_BASE_MINUTES} * power(2, failed_login_count + 1 - ${LOCK_AFTER}), ${LOCK_MAX_MINUTES})::int)
+                   ELSE locked_until END
+           WHERE id = ${user.id}::uuid
+       RETURNING failed_login_count AS failures
+        )
+        INSERT INTO audit_events (id, actor_id, actor_email, action, outcome, reason, ip, user_agent, request_id)
+        SELECT gen_random_uuid(), ${user.id}::uuid, ${email}, 'auth.login', 'DENIED'::"AuditOutcome",
+               CASE WHEN failures >= ${LOCK_AFTER}
+                 THEN 'wrong_password_locked_' || LEAST(${LOCK_BASE_MINUTES} * power(2, failures - ${LOCK_AFTER}), ${LOCK_MAX_MINUTES})::int || 'm'
+                 ELSE 'wrong_password' END,
+               ${ctx?.ip ?? null}, ${ctx?.userAgent ?? null}, ${ctx?.requestId ?? null}
+          FROM u`;
+      throw new UnauthorizedException(LOGIN_FAILED);
     }
     if (user.status !== 'ACTIVE') return deny('account_deactivated');
     if (user.accessExpiresAt && user.accessExpiresAt.getTime() <= Date.now()) return deny('access_expired');

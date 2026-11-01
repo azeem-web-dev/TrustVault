@@ -9,9 +9,11 @@ import { z } from 'zod';
 // database.
 const PRODUCTION_PARAMS = { algorithm: Algorithm.Argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 } as const;
 // The test suite creates hundreds of accounts; full-strength hashing there
-// only makes it slow. Never used outside NODE_ENV=test (vitest sets it).
+// only makes it slow. Never used outside NODE_ENV=test (vitest sets it),
+// and not by the login timing measurement (TV_REAL_ARGON2=1), which must
+// time the real thing.
 const TEST_PARAMS = { algorithm: Algorithm.Argon2id, memoryCost: 4096, timeCost: 1, parallelism: 1 } as const;
-export const PARAMS = process.env.NODE_ENV === 'test' ? TEST_PARAMS : PRODUCTION_PARAMS;
+export const PARAMS = process.env.NODE_ENV === 'test' && process.env.TV_REAL_ARGON2 !== '1' ? TEST_PARAMS : PRODUCTION_PARAMS;
 
 /** Length rules only: length beats composition rules, and 128 caps hashing cost. */
 export const PasswordSchema = z

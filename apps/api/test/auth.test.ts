@@ -111,6 +111,30 @@ describe('brute-force protection', () => {
     expect(rows[0]).toMatchObject({ reason: 'account_locked' });
   });
 
+  it('locks for 15 minutes, then doubles: the counter, lock and audit row are written together', async () => {
+    const u = await createUser({ email: 'double@t.io', role: 'VIEWER' });
+    const wrong = () => t.http.post('/api/auth/login').send({ email: u.email, password: 'wrong-password-here' }).expect(401);
+    for (let i = 0; i < 5; i++) await wrong();
+    const lockState = async () => withDb(ownerDb(), async (db) =>
+      (await db.query(`SELECT failed_login_count AS n, extract(epoch FROM locked_until - now()) / 60 AS mins FROM users WHERE id = $1`, [u.id])).rows[0]);
+    let state = await lockState();
+    expect(state.n).toBe(5);
+    expect(Number(state.mins)).toBeGreaterThan(14.5);
+    expect(Number(state.mins)).toBeLessThanOrEqual(15);
+    const fifth = (await auditRows(`actor_id = $1 AND action = 'auth.login'`, [u.id])).at(-1)!;
+    expect(fifth.reason).toBe('wrong_password_locked_15m');
+
+    // The lock runs out; the next wrong guess locks again for twice as long.
+    await withDb(ownerDb(), (db) => db.query(`UPDATE users SET locked_until = NULL WHERE id = $1`, [u.id]));
+    const r = await wrong();
+    state = await lockState();
+    expect(state.n).toBe(6);
+    expect(Number(state.mins)).toBeGreaterThan(29.5);
+    const rows = await auditRows(`request_id = $1`, [r.headers['x-request-id']]);
+    expect(rows[0]).toMatchObject({ outcome: 'DENIED', reason: 'wrong_password_locked_30m', actor_email: 'double@t.io' });
+    expect(rows[0]!.ip).not.toBeNull();
+  });
+
   it('counts parallel wrong guesses (no lost updates)', async () => {
     const u = await createUser({ email: 'race@t.io', role: 'VIEWER' });
     await Promise.all(

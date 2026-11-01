@@ -10,7 +10,8 @@
     "test": "vitest run",
     "lint": "tsc --noEmit -p tsconfig.json",
     "db:migrate": "prisma migrate deploy",
-    "db:seed": "tsx --env-file=.env prisma/seed.ts"
+    "db:seed": "tsx --env-file=.env prisma/seed.ts",
+    "measure:timing": "vitest run --config vitest.timing.config.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
