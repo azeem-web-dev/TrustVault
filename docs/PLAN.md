@@ -2,6 +2,8 @@
 
 Started 2026-11-01. This file records the decisions and why I made them. It changes as the build goes; the git history shows how.
 
+**Status:** built and deployed. Where the build differs from this plan it is noted inline; the threat-by-threat state is in [THREATS.md](../THREATS.md) and the honest list of gaps in [WRITEUP.md](WRITEUP.md#what-is-not-finished).
+
 ## The three rules everything is built around
 
 1. **A document is reachable only by someone who was granted it** — decided on the server, every request, every route.
@@ -63,7 +65,7 @@ Admins must use a second factor (passkey or TOTP).
 ## Revocation
 - Grants and group membership read live, no cache.
 - Revoke / deactivate / role change deletes sessions in the same transaction.
-- External share links: random token stored hashed, expiry required, checked on every use.
+- ~~External share links~~ — decided against during the build: outsiders get named EXTERNAL accounts with an expiry instead, so there is never a link that works for whoever holds it.
 - `Cache-Control: no-store` on every document response.
 - Accepted: a download already streaming finishes; a file already on someone's disk cannot be recalled.
 
@@ -73,12 +75,12 @@ Admins must use a second factor (passkey or TOTP).
 - Each row stores `hash = SHA-256(prev_hash || canonical(row))`.
 - Every N events / every hour, keyd signs the chain head with Ed25519 → `audit_checkpoints`. The public key is published in the repo.
 - App DB role: `INSERT, SELECT` only on audit tables; triggers reject `UPDATE`/`DELETE`/`TRUNCATE`.
-- Daily: chain head exported off the server (git commit to a separate repo) so even a DB superuser cannot silently rewrite history.
+- Planned but not built: exporting the chain head off the server automatically. Admins can export signed bundles manually; the gap is recorded in THREATS.md L8.
 - Admin "Verify chain" recomputes hashes and checks signatures.
 
 ## Files
 - Upload: size cap, MIME from magic bytes (not extension or browser header) against an allowlist, filename sanitised and stored as metadata only, SHA-256 recorded.
-- Storage: per-file data key (random), AES-256-GCM, key wrapped by keyd. Encrypted bytes kept in Postgres (`bytea`) so a file and its permissions live and die in one transaction.
+- Storage: per-version data key (random), AES-256-GCM bound to document+version, key wrapped by keyd. Encrypted bytes kept in Postgres (`bytea`) so a file and its permissions live and die in one transaction.
 - Download: always `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, strict CSP; nothing uploaded is ever rendered inline on our origin.
 
 ## Feature scope

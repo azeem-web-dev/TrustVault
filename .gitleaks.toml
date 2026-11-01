@@ -1,0 +1,17 @@
+# Secret scanning for TrustVault (run in CI by gitleaks).
+#
+# Uses the default rules, with one narrow exception: the README publishes
+# the demo accounts' passwords and the demo admin's authenticator secret
+# on purpose, because the brief requires credentials for one account of
+# each role. Those accounts are protected in the app (THREATS.md I7, I8)
+# and only reach demo documents. Nothing else is allowlisted; real
+# secrets live only on the server in /etc/trustvault and /etc/tvkeyd.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published demo credentials (intentional, see THREATS.md I7)"
+paths = [
+  '''^README\.md$''',
+]
