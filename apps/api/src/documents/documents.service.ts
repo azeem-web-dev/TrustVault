@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
@@ -8,6 +8,7 @@ import type { Actor } from '../common/request-context.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
+import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
 
 export interface UploadedFile {
   buffer: Buffer;
@@ -82,6 +83,7 @@ export class DocumentsService {
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
+    @Inject(MALWARE_SCANNER) private readonly scanner: MalwareScanner,
   ) {}
 
   // ------------------------------------------------------------------ search
@@ -153,6 +155,7 @@ export class DocumentsService {
     const checked = this.checkFile(file);
     const documentId = randomUUID();
     const versionId = randomUUID();
+    await this.scanForMalware('document.upload', checked);
     return this.prisma.asUser(actor.userId, async (tx) => {
       if (meta.folderId) await this.ownFolder(tx, actor.userId, meta.folderId);
       await tx.document.create({
@@ -171,6 +174,9 @@ export class DocumentsService {
     const checked = this.checkFile(file);
     return this.prisma.asUser(actor.userId, async (tx) => {
       await this.access.require(tx, actor, id, 'upload_version');
+      // Scanned only after the permission check, so the scanner is not an
+      // oracle or a cheap load generator for people with no access.
+      await this.scanForMalware('document.upload_version', checked, id);
       // Row lock so two simultaneous uploads cannot both become version N.
       const locked = await tx.$queryRaw<{ current_version_no: number }[]>`SELECT current_version_no FROM documents WHERE id = ${id}::uuid FOR UPDATE`;
       if (locked.length === 0) throw new NotFoundException('Document not found');
@@ -323,6 +329,28 @@ export class DocumentsService {
     } catch (err) {
       if (err instanceof RejectedFile) throw new BadRequestException(err.message);
       throw err;
+    }
+  }
+
+  /**
+   * Refuses infected files (422) and refuses everything when the scanner
+   * cannot answer (503). Both are audited outside any transaction, so the
+   * record survives the failed request.
+   */
+  private async scanForMalware(action: string, f: ReturnType<DocumentsService['checkFile']>, documentId?: string) {
+    const base = { action, targetType: 'document', ...(documentId ? { targetId: documentId, documentId } : {}) };
+    const details = { fileName: f.fileName, sha256: f.hash.toString('hex'), sizeBytes: f.buffer.length, scanner: this.scanner.name };
+    let result;
+    try {
+      result = await this.scanner.scan(f.buffer);
+    } catch (err) {
+      const why = err instanceof ScannerUnavailable ? err.message : 'scanner error';
+      await this.audit.record({ ...base, outcome: 'FAILED', reason: 'malware_scanner_unavailable', details: { ...details, error: why } });
+      throw new ServiceUnavailableException('Uploads are paused: the malware scanner is not available. Try again shortly.');
+    }
+    if (!result.clean) {
+      await this.audit.record({ ...base, outcome: 'DENIED', reason: 'malware_detected', details: { ...details, signature: result.signature } });
+      throw new UnprocessableEntityException('This file was rejected by the malware scanner');
     }
   }
 

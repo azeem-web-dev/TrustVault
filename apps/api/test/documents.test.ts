@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { EICAR } from './fake-clamd.js';
 import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
 
 // End-to-end: real HTTP, real Postgres with row-level security, real
@@ -295,6 +296,58 @@ describe('uploads are validated by content, not by name', () => {
     const res = await as(t, A).upload('/api/documents', big, 'big.pdf', { title: 't', category: 'c' });
     expect(res.status).toBe(413);
   });
+});
+
+describe('uploads are scanned for malware, and the scanner fails closed', () => {
+  const docCount = () => withDb(ownerDb(), async (db) => Number((await db.query('SELECT count(*) FROM documents')).rows[0].count));
+  const withMode = async (mode: typeof t.clamd.mode, fn: () => Promise<void>) => {
+    t.clamd.mode = mode;
+    try { await fn(); } finally { t.clamd.mode = 'normal'; }
+  };
+
+  it('every accepted upload went through the scanner', async () => {
+    const before = t.clamd.scans;
+    await upload(A);
+    expect(t.clamd.scans).toBe(before + 1);
+  });
+
+  it('refuses an infected file, stores nothing, and records the signature', async () => {
+    const res = await as(t, A).upload('/api/documents', Buffer.from(EICAR), 'notes.txt', { title: 'Totally fine', category: 'c' });
+    expect(res.status).toBe(422);
+    expect(await docCount()).toBe(0);
+    const rows = await auditRows(`action = 'document.upload' AND reason = 'malware_detected' AND actor_id = $1`, [alice.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.outcome).toBe('DENIED');
+    expect((rows[0]!.details as { signature: string }).signature).toBe('Eicar-Test-Signature');
+  });
+
+  it('refuses an infected new version from an editor, and keeps the old version current', async () => {
+    const id = await upload(A);
+    expect((await grant(A, id, { userId: V.userId, level: 'EDIT' })).status).toBe(200);
+    const res = await as(t, V).upload(`/api/documents/${id}/versions`, Buffer.from(EICAR), 'v2.txt');
+    expect(res.status).toBe(422);
+    expect((await as(t, A).get(`/api/documents/${id}`)).body.current.versionNo).toBe(1);
+  });
+
+  it('does not scan for someone with no access: they get 404 before the scanner is used', async () => {
+    const id = await upload(A);
+    const before = t.clamd.scans;
+    const res = await as(t, B).upload(`/api/documents/${id}/versions`, Buffer.from(EICAR), 'v2.txt');
+    expect(res.status).toBe(404);
+    expect(t.clamd.scans).toBe(before);
+  });
+
+  for (const [mode, what] of [['down', 'refuses connections'], ['garbage', 'gives an unexpected answer'], ['silent', 'never answers']] as const) {
+    it(`refuses every upload when the scanner ${what}`, async () => {
+      await withMode(mode, async () => {
+        const res = await as(t, A).upload('/api/documents', PDF, 'clean.pdf', { title: 'Clean', category: 'c' });
+        expect(res.status).toBe(503);
+      });
+      expect(await docCount()).toBe(0);
+      const rows = await auditRows(`action = 'document.upload' AND reason = 'malware_scanner_unavailable' AND actor_id = $1`, [alice.id]);
+      expect(rows.at(-1)!.outcome).toBe('FAILED');
+    });
+  }
 });
 
 describe('downloads cannot run as a page, and files are encrypted at rest', () => {

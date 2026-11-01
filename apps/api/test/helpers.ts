@@ -10,12 +10,13 @@ import { LocalKeyProvider } from '../src/crypto/key-provider.js';
 import { packWrapped } from '../src/auth/mfa.service.js';
 import { currentStep, newTotpSecret, totpAt } from '../src/auth/totp.js';
 import type { Role } from '../src/generated/prisma/enums.js';
+import { startFakeClamd, type FakeClamd } from './fake-clamd.js';
 
 try { process.loadEnvFile('.env'); } catch { /* CI */ }
 
 export const ORIGIN = 'https://vault.test';
 
-export function testEnv(): Env {
+export function testEnv(overrides: Record<string, string> = {}): Env {
   return loadEnv({
     ...process.env,
     NODE_ENV: 'test',
@@ -24,6 +25,11 @@ export function testEnv(): Env {
     REDIS_PREFIX: 'tvdev:test:',
     KEY_PROVIDER: 'local',
     JOBS_ENABLED: 'false',
+    // Failed logins are padded to a fixed time in production; the suite
+    // makes hundreds of them, so no padding here (timing is measured
+    // separately, with it on: npm run measure:timing).
+    LOGIN_FAILURE_FLOOR_MS: '0',
+    ...overrides,
   });
 }
 
@@ -51,13 +57,19 @@ export async function withDb<T>(client: pg.Client, fn: (c: pg.Client) => Promise
 export interface TestApp {
   app: NestExpressApplication;
   http: ReturnType<typeof request>;
+  /** The malware scanner the app talks to (real clamd protocol, fake engine). */
+  clamd: FakeClamd;
   close: () => Promise<void>;
 }
 
-export async function startApp(): Promise<TestApp> {
-  const app = await createApp(testEnv());
+export async function startApp(overrides: Record<string, string> = {}): Promise<TestApp> {
+  const clamd = await startFakeClamd();
+  const app = await createApp(testEnv({ SCANNER: 'clamd', CLAMD_SOCKET: clamd.address, CLAMD_TIMEOUT_MS: '1500', ...overrides }));
   await app.init();
-  return { app, http: request(app.getHttpServer()), close: () => app.close() };
+  return {
+    app, http: request(app.getHttpServer()), clamd,
+    close: async () => { await app.close(); await clamd.close(); },
+  };
 }
 
 /**

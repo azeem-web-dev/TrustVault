@@ -1,7 +1,8 @@
 [Unit]
 Description=TrustVault API
-After=network-online.target postgresql.service redis-server.service tvkeyd.service
-Wants=network-online.target
+After=network-online.target postgresql.service redis-server.service tvkeyd.service clamav-daemon.service
+# Not Requires: if the scanner is down the API keeps serving, and refuses uploads (fails closed).
+Wants=network-online.target clamav-daemon.service
 Requires=tvkeyd.service
 
 [Service]
@@ -12,6 +13,9 @@ WorkingDirectory=/opt/trustvault/app/apps/api
 EnvironmentFile=/etc/trustvault/api.env
 Environment=KEY_PROVIDER=keyd
 Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
+# Every upload is scanned by ClamAV before it is stored.
+Environment=SCANNER=clamd
+Environment=CLAMD_SOCKET=/run/clamav/clamd.ctl
 # Member of the key service's socket group; keyd also checks our uid.
 SupplementaryGroups=tvkeysock
 ExecStart=/usr/bin/node dist/main.js
@@ -43,12 +47,12 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# Only loopback: Postgres, Redis, and (later) the key service socket.
+# Only loopback: Postgres and Redis. keyd and clamd are Unix sockets.
 IPAddressDeny=any
 IPAddressAllow=localhost
 # Nothing on disk is writable except its own log directory.
-ReadWritePaths=/var/log/trustvault /run/tvkeyd
-InaccessiblePaths=/root /home /etc/trustvault/db.secrets /etc/trustvault/migrate.env /etc/trustvault/seed.passwords /etc/tvkeyd
+ReadWritePaths=/var/log/trustvault /run/tvkeyd /run/clamav
+InaccessiblePaths=/root /home /etc/trustvault/db.secrets /etc/trustvault/migrate.env /etc/trustvault/seed.passwords /etc/tvkeyd /var/backups/trustvault
 UMask=0077
 MemoryMax=768M
 TasksMax=256

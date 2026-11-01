@@ -34,8 +34,13 @@ unset OWNER_URL
 # Units live in the repo; install them on every deploy so a release that
 # changes the sandbox or environment takes effect with it.
 install -m 0644 "$APP/infra/systemd/trustvault-api.service" "$APP/infra/systemd/trustvault-web.service" /etc/systemd/system/
+if [ -d /etc/trustvault-backup ]; then
+  install -m 0750 "$APP/infra/server/backup.sh" /usr/local/sbin/trustvault-backup
+  install -m 0644 "$APP/infra/systemd/trustvault-backup.service" "$APP/infra/systemd/trustvault-backup.timer" /etc/systemd/system/
+fi
 systemctl daemon-reload
 systemctl is-active --quiet tvkeyd || { echo "deploy: tvkeyd is not running (run install-keyd.sh)" >&2; exit 1; }
+systemctl is-active --quiet clamav-daemon || { echo "deploy: clamav-daemon is not running (run install-clamav.sh)" >&2; exit 1; }
 systemctl restart trustvault-api trustvault-web
 for i in $(seq 1 30); do
   if curl -fsS http://127.0.0.1:4100/api/health >/dev/null && curl -fsS -o /dev/null http://127.0.0.1:4101/login; then

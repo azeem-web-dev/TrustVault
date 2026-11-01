@@ -21,9 +21,16 @@ const EnvSchema = z.object({
   /** 32 random bytes, base64. Development and tests only. */
   LOCAL_MASTER_KEY: z.string().optional(),
   KEYD_SOCKET: z.string().default('/run/tvkeyd/keyd.sock'),
+  /** Malware scanning of uploads. `clamd` is required in production. */
+  SCANNER: z.enum(['none', 'clamd']).default('none'),
+  /** clamd socket path, or tcp://host:port. */
+  CLAMD_SOCKET: z.string().default('/run/clamav/clamd.ctl'),
+  CLAMD_TIMEOUT_MS: z.coerce.number().int().min(500).max(300_000).default(60_000),
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(100).default(25),
   /** Documents in the trash longer than this are permanently removed. */
   TRASH_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  /** Minimum response time of a failed login, so timing does not reveal which emails have accounts. */
+  LOGIN_FAILURE_FLOOR_MS: z.coerce.number().int().min(0).max(5000).default(450),
   /** Background jobs (audit checkpoints, retention, session cleanup). */
   JOBS_ENABLED: bool.default(true),
 });
@@ -41,6 +48,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (env.NODE_ENV === 'production') {
     if (!env.PUBLIC_ORIGIN.startsWith('https://')) throw new Error('Invalid configuration: PUBLIC_ORIGIN must be https in production');
     if (env.KEY_PROVIDER !== 'keyd') throw new Error('Invalid configuration: production requires KEY_PROVIDER=keyd');
+    if (env.SCANNER !== 'clamd') throw new Error('Invalid configuration: production requires SCANNER=clamd');
   }
   if (env.KEY_PROVIDER === 'local') {
     const key = env.LOCAL_MASTER_KEY ? Buffer.from(env.LOCAL_MASTER_KEY, 'base64') : null;

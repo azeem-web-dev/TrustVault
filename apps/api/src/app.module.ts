@@ -8,6 +8,7 @@ import { KEY_PROVIDER, KeydKeyProvider, LocalKeyProvider, type KeyProvider } fro
 import { AuditService } from './audit/audit.service.js';
 import { AuditAdminService } from './audit/audit-admin.service.js';
 import { AuditAdminController } from './audit/audit-admin.controller.js';
+import { WitnessController } from './audit/witness.controller.js';
 import { PasswordService } from './auth/password.service.js';
 import { SessionService } from './auth/session.service.js';
 import { AuthService } from './auth/auth.service.js';
@@ -25,12 +26,17 @@ import { SharingService } from './documents/sharing.service.js';
 import { DocumentsController } from './documents/documents.controller.js';
 import { FoldersController } from './documents/folders.controller.js';
 import { JobsService } from './jobs/jobs.service.js';
+import { ClamdScanner, MALWARE_SCANNER, NoScanner, type MalwareScanner } from './scanning/malware-scanner.js';
 import { HealthController } from './health.controller.js';
 
 export function createKeyProvider(env: Env): KeyProvider {
   return env.KEY_PROVIDER === 'keyd'
     ? new KeydKeyProvider(env.KEYD_SOCKET)
     : new LocalKeyProvider(Buffer.from(env.LOCAL_MASTER_KEY!, 'base64'));
+}
+
+export function createScanner(env: Env): MalwareScanner {
+  return env.SCANNER === 'clamd' ? new ClamdScanner(env.CLAMD_SOCKET, env.CLAMD_TIMEOUT_MS) : new NoScanner();
 }
 
 @Module({})
@@ -40,11 +46,12 @@ export class AppModule {
       module: AppModule,
       controllers: [
         HealthController, AuthController, MfaController, UsersController, GroupsController, DirectoryController,
-        DocumentsController, FoldersController, AuditAdminController,
+        DocumentsController, FoldersController, AuditAdminController, WitnessController,
       ],
       providers: [
         { provide: ENV, useValue: env },
         { provide: KEY_PROVIDER, useValue: createKeyProvider(env) },
+        { provide: MALWARE_SCANNER, useValue: createScanner(env) },
         PrismaService,
         RedisService,
         RateLimitService,
