@@ -239,7 +239,7 @@ describe('verify-audit --rekor', () => {
     }));
   }
   const bundleOf = (events: Record<string, unknown>[], checkpoints: Checkpoint[], fromOne = true) => ({
-    format: 'trustvault-audit-bundle-v1', genesisPrevHash: fromOne ? genesis : null, events, checkpoints,
+    format: 'trustvault-audit-bundle-v1', genesisPrevHash: fromOne ? genesis : null, exportedAt: new Date().toISOString(), events, checkpoints,
     signingKey: { keyId: 'k', publicKey, algorithm: 'Ed25519' },
   });
 
@@ -264,7 +264,7 @@ describe('verify-audit --rekor', () => {
     // ...but the public log still holds the honest checkpoint at 4, published earlier.
     const r = rekorReport(forged, (await entriesForKey(publicKey, o)).entries);
     expect(r.ok).toBe(false);
-    expect(r.problems.join('\n')).toMatch(/checkpoint of a different history/);
+    expect(r.problems.join('\n')).toMatch(/checkpoint of a different history|this bundle does not contain/);
   });
 
   it('for a bundle that starts later, does not guess about entries before its range', async () => {

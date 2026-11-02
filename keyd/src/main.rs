@@ -20,7 +20,12 @@
 //!                       $CREDENTIALS_DIRECTORY/master.key (systemd LoadCredential)
 //!   KEYD_ALLOWED_UID    the only uid allowed to talk to us
 //!   KEYD_SOCKET_GID     group to give the socket file
+//!   KEYD_STATE_FILE     where the highest signed checkpoint seq is kept;
+//!                       defaults to $STATE_DIRECTORY/checkpoint-seq
+//!                       (systemd StateDirectory=). With neither set the
+//!                       value is kept in memory only (warning at startup).
 
+mod checkpoint;
 mod crypto;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -107,7 +112,24 @@ fn b64_input(v: &Option<String>) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(bytes)
 }
 
-fn handle(keys: &crypto::Keys, line: &str) -> Value {
+struct State {
+    keys: crypto::Keys,
+    checkpoints: checkpoint::Guard,
+}
+
+fn state_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("KEYD_STATE_FILE") {
+        return Some(p.into());
+    }
+    std::env::var("STATE_DIRECTORY").ok().map(|d| {
+        // systemd may pass several colon-separated directories; use the first.
+        let first = d.split(':').next().unwrap_or(&d).to_string();
+        std::path::Path::new(&first).join("checkpoint-seq")
+    })
+}
+
+fn handle(state: &State, line: &str) -> Value {
+    let keys = &state.keys;
     let req: Request = match serde_json::from_str(line) {
         Ok(r) => r,
         Err(_) => return json!({ "error": "bad request" }),
@@ -130,12 +152,12 @@ fn handle(keys: &crypto::Keys, line: &str) -> Value {
         }
         "sign" => {
             let msg = b64_input(&req.data)?;
-            // Only audit checkpoints are ever signed; refuse anything else so
-            // a compromised API cannot get arbitrary messages signed.
-            if !msg.starts_with(b"tv-checkpoint-v1|") {
-                return Err("refusing to sign: not a checkpoint".into());
-            }
-            Ok(json!({ "signature": B64.encode(keys.sign(&msg)), "key_id": crypto::SIGN_KEY_ID }))
+            // Only well-formed audit checkpoints are ever signed, and only
+            // with a seq above every one signed before (see checkpoint.rs):
+            // a compromised API can neither get arbitrary messages signed
+            // nor a far-future checkpoint that stops later signing.
+            let sig = state.checkpoints.sign_checkpoint(&msg, |m| keys.sign(m))?;
+            Ok(json!({ "signature": B64.encode(sig), "key_id": crypto::SIGN_KEY_ID }))
         }
         "pubkey" => Ok(json!({ "public_key": B64.encode(keys.public_key()), "key_id": crypto::SIGN_KEY_ID })),
         _ => Err("unknown op".into()),
@@ -146,7 +168,7 @@ fn handle(keys: &crypto::Keys, line: &str) -> Value {
     }
 }
 
-fn serve(keys: Arc<crypto::Keys>, stream: UnixStream, allowed_uid: u32) {
+fn serve(state: Arc<State>, stream: UnixStream, allowed_uid: u32) {
     match peer_uid(&stream) {
         Some(uid) if uid == allowed_uid => {}
         other => {
@@ -165,7 +187,7 @@ fn serve(keys: Arc<crypto::Keys>, stream: UnixStream, allowed_uid: u32) {
     if reader.read_line(&mut line).is_err() || line.is_empty() {
         return;
     }
-    let response = handle(&keys, line.trim_end());
+    let response = handle(&state, line.trim_end());
     let _ = writer.write_all(format!("{response}\n").as_bytes());
 }
 
@@ -181,12 +203,25 @@ fn main() {
     };
 
     let keys = match load_master().and_then(|m| crypto::Keys::from_master(&m)) {
-        Ok(k) => Arc::new(k),
+        Ok(k) => k,
         Err(e) => {
             log(&format!("cannot load master key: {e}"));
             std::process::exit(2);
         }
     };
+    let state_file = state_path();
+    if state_file.is_none() {
+        log("warning: no KEYD_STATE_FILE or STATE_DIRECTORY; last checkpoint seq is kept in memory only and resets on restart");
+    }
+    let checkpoints = match checkpoint::Guard::open(state_file) {
+        Ok(g) => g,
+        Err(e) => {
+            log(&format!("cannot load checkpoint state: {e}"));
+            std::process::exit(2);
+        }
+    };
+    log(&format!("last signed checkpoint seq {}", checkpoints.last_signed()));
+    let state = Arc::new(State { keys, checkpoints });
 
     let _ = std::fs::remove_file(&socket_path);
     let listener = match UnixListener::bind(&socket_path) {
@@ -217,11 +252,11 @@ fn main() {
         if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
             continue; // drop: too many concurrent requests
         }
-        let keys = Arc::clone(&keys);
+        let state = Arc::clone(&state);
         let active = Arc::clone(&active);
         active.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
-            serve(keys, stream, allowed_uid);
+            serve(state, stream, allowed_uid);
             active.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -231,8 +266,15 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn keys() -> crypto::Keys {
-        crypto::Keys::from_master(&[3u8; 32]).unwrap()
+    fn keys() -> State {
+        State {
+            keys: crypto::Keys::from_master(&[3u8; 32]).unwrap(),
+            checkpoints: checkpoint::Guard::open(None).unwrap(),
+        }
+    }
+
+    fn sign_req(msg: &str) -> String {
+        json!({"op":"sign","data":B64.encode(msg)}).to_string()
     }
 
     #[test]
@@ -248,6 +290,22 @@ mod tests {
     fn refuses_to_sign_non_checkpoints() {
         let r = handle(&keys(), &json!({"op":"sign","data":B64.encode(b"transfer $1M")}).to_string());
         assert!(r["error"].is_string());
+    }
+
+    #[test]
+    fn signs_increasing_checkpoints_and_refuses_replays_over_protocol() {
+        let k = keys();
+        let h = "ab".repeat(32);
+        let m5 = format!("tv-checkpoint-v1|5|{h}");
+        let r = handle(&k, &sign_req(&m5));
+        assert_eq!(r["key_id"], crypto::SIGN_KEY_ID);
+        assert_eq!(B64.decode(r["signature"].as_str().unwrap()).unwrap(), k.keys.sign(m5.as_bytes()).to_vec());
+        let again = handle(&k, &sign_req(&m5));
+        assert!(again["error"].as_str().unwrap().contains("not above the last signed seq 5"));
+        assert!(handle(&k, &sign_req(&format!("tv-checkpoint-v1|4|{h}")))["error"].is_string());
+        assert!(handle(&k, &sign_req(&format!("tv-checkpoint-v1|6|{h}")))["signature"].is_string());
+        // The old prefix-only check accepted this.
+        assert!(handle(&k, &sign_req("tv-checkpoint-v1|7|abcd"))["error"].is_string());
     }
 
     #[test]

@@ -14,7 +14,7 @@ interface ServerView { signingKey: { publicKey: string; keyId: string }; checkpo
 interface WitnessResult { ok: boolean; problems: string[]; newEntries: Witnessed[] }
 const tool = (name: string) => pathToFileURL(resolve(__dirname, `../../../tools/${name}`)).href;
 let witness: (log: Witnessed[], pinned: string | null, server: ServerView) => WitnessResult;
-let verifyBundle: (bundle: unknown, key?: string, witnessed?: Witnessed[] | null) => { ok: boolean; problems: string[]; witnessMatched: number };
+let verifyBundle: (bundle: unknown, key?: string, witnessed?: Witnessed[] | null, opts?: { partial?: boolean }) => { ok: boolean; problems: string[]; witnessMatched: number };
 let canonical: (e: Record<string, unknown>) => Buffer;
 
 let t: TestApp;
@@ -151,7 +151,8 @@ describe('the outside witness', () => {
   it('an exported bundle that agrees with the witness verifies; a recomputed forgery does not', async () => {
     const fromSeq = BigInt(log[0]!.seq);
     const bundle = (await svc.export({} as never, fromSeq, undefined)) as unknown as { events: Record<string, unknown>[]; checkpoints: unknown[] };
-    const honest = verifyBundle(bundle, undefined, log);
+    // The export starts mid-log (earlier tests wrote events), so it is a partial range.
+    const honest = verifyBundle(bundle, undefined, log, { partial: true });
     expect(honest.problems).toEqual([]);
     expect(honest.witnessMatched).toBeGreaterThanOrEqual(2);
 
@@ -166,9 +167,11 @@ describe('the outside witness', () => {
       prev = e.hash as string;
     }
     const forged = { ...bundle, events, checkpoints: [] };
-    expect(verifyBundle(forged, undefined, null).ok).toBe(true);
+    // A forgery with its checkpoints stripped no longer passes even on its
+    // own: zero signed checkpoints is a failure (THREATS.md L13).
+    expect(verifyBundle(forged, undefined, null, { partial: true }).problems.join(' ')).toMatch(/no signed checkpoints/);
     // ...but it no longer matches what the outside witness recorded.
-    const withWitness = verifyBundle(forged, undefined, log);
+    const withWitness = verifyBundle(forged, undefined, log, { partial: true });
     expect(withWitness.ok).toBe(false);
     expect(withWitness.problems.join('\n')).toMatch(/outside witness recorded/);
   });

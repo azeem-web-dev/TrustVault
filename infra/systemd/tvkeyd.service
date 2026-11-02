@@ -15,6 +15,10 @@ Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
 LoadCredential=master.key:/etc/tvkeyd/master.key
 RuntimeDirectory=tvkeyd
 RuntimeDirectoryMode=0750
+# Remembers the last audit checkpoint it signed, so it never signs an older
+# or equal one again (THREATS.md L12). Survives restarts; readable by tvkeyd only.
+StateDirectory=tvkeyd
+StateDirectoryMode=0700
 ExecStart=/usr/local/bin/tvkeyd
 Restart=on-failure
 RestartSec=2

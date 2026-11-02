@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   CaretDown, CheckCircle, DownloadSimple, Export, FunnelSimple, Globe, Hash, Key, ListMagnifyingGlass, LockKeyOpen, Prohibit, SealCheck,
-  SignIn, Stack, UploadSimple, UserGear, Desktop, Target, ArrowClockwise, Broadcast, GitCommit, ShieldWarning,
+  SignIn, Stack, UploadSimple, UserGear, Files, UsersThree, Desktop, Target, ArrowClockwise, Broadcast, GitCommit, ShieldWarning,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { ChainArt, SpotArt } from '@/components/art';
@@ -42,8 +42,10 @@ const EMPTY = { action: '', outcome: '', actor: '', documentId: '', from: '', to
 const QUICK: { label: string; action: string; icon: ReactNode }[] = [
   { label: 'Everything', action: '', icon: <Stack size={15} /> },
   { label: 'Downloads', action: 'document.download', icon: <DownloadSimple size={15} /> },
+  { label: 'All document activity', action: 'document.', icon: <Files size={15} /> },
+  { label: 'Uploads', action: 'document.upload', icon: <UploadSimple size={15} /> },
   { label: 'Permission changes', action: 'access.', icon: <LockKeyOpen size={15} /> },
-  { label: 'Uploads & edits', action: 'document.upload', icon: <UploadSimple size={15} /> },
+  { label: 'Group membership', action: 'group.member', icon: <UsersThree size={15} /> },
   { label: 'Sign-ins', action: 'auth.', icon: <SignIn size={15} /> },
   { label: 'Admin actions', action: 'admin.', icon: <UserGear size={15} /> },
 ];
@@ -294,7 +296,7 @@ function IntegrityPanel({ verify, busy, onVerify }: { verify: Verify | null; bus
         </ul>
       )}
       <p className="mt-4 break-all text-xs text-slate-500 dark:text-slate-400">Signing key ({verify.signingKey.keyId}): <span className="font-mono">{verify.signingKey.publicKey}</span></p>
-      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Exported bundles can be checked offline with <code className="rounded bg-white/70 px-1 font-mono dark:bg-white/10">node tools/verify-audit.mjs bundle.json --rekor</code>, without trusting this server.</p>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Exported bundles can be checked offline with <code className="rounded bg-white/70 px-1 font-mono dark:bg-white/10">node tools/verify-audit.mjs bundle.json --key &lt;signing key above&gt; --rekor</code>, without trusting this server.</p>
     </section>
   );
 }

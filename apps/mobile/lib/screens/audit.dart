@@ -17,8 +17,10 @@ const _emptyF = {'action': '', 'outcome': '', 'actor': '', 'documentId': '', 'fr
 final _quick = [
   ('Everything', '', PhosphorIconsDuotone.stack),
   ('Downloads', 'document.download', PhosphorIconsDuotone.downloadSimple),
+  ('All document activity', 'document.', PhosphorIconsDuotone.files),
+  ('Uploads', 'document.upload', PhosphorIconsDuotone.uploadSimple),
   ('Permission changes', 'access.', PhosphorIconsDuotone.lockKeyOpen),
-  ('Uploads & edits', 'document.upload', PhosphorIconsDuotone.uploadSimple),
+  ('Group membership', 'group.member', PhosphorIconsDuotone.usersThree),
   ('Sign-ins', 'auth.', PhosphorIconsDuotone.signIn),
   ('Admin actions', 'admin.', PhosphorIconsDuotone.userGear),
 ];
@@ -578,7 +580,7 @@ class _IntegrityPanel extends StatelessWidget {
             Mono(key['publicKey'] as String, size: 10.5, color: p.muted),
             const SizedBox(height: 6),
             Text(
-              'Exported bundles can be checked offline with node tools/verify-audit.mjs bundle.json --rekor, without trusting this server.',
+              'Exported bundles can be checked offline with node tools/verify-audit.mjs bundle.json --key <signing key above> --rekor, without trusting this server.',
               style: ts(context, size: 12, color: p.muted, height: 1.45),
             ),
           ],
