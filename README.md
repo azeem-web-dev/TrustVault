@@ -31,6 +31,7 @@ The demo accounts are published because the brief asks for them, so they are **p
 | [docs/DEMO.md](docs/DEMO.md) | The five-minute demo script |
 | [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md) | Measured: login response time does not reveal which emails have accounts |
 | [docs/RESTORE.md](docs/RESTORE.md) | Backups and how to restore from one |
+| [apps/mobile/README.md](apps/mobile/README.md) | The Android app: same screens and rules, how it signs in, how to build the APK |
 | [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
 | [Sigstore public log](https://search.sigstore.dev/?logIndex=3633615638) | Every signed audit checkpoint, published within about a minute; nobody can remove an entry |
 

@@ -12,6 +12,7 @@ A document platform for confidential files: salary letters, contracts, board min
 - **Encryption at rest:** a random AES-256-GCM key per file version, wrapped by a separate key service (Rust) running as its own Linux user. The API never holds the master key.
 - **Audit trail:** every upload, view, download, edit, deletion, permission change, sign-in and **refused attempt**. The database itself hash-chains the log and refuses edits and deletions. The key service signs a checkpoint every minute there is new activity, and each one is published to Sigstore's public transparency log within about a minute. Admins can verify the chain in one click or export a bundle that a dependency-free script verifies offline.
 - **Admin view:** filterable activity, integrity verification, alerts (repeated refusals, attempts after revocation, bulk downloads, external sharing, break-glass, blocked sign-ins, integrity failures), users, groups, and audited break-glass access.
+- **Android app** (`apps/mobile`, Flutter): the same screens and look as the website, against the same live API, so every server-side rule and audit entry applies unchanged. Sessions are kept in Android's encrypted storage and never backed up (THREATS.md S13).
 - **Access suggestions:** for a document, suggests people you shared similar documents with. Suggestions never grant; you confirm each one, and both are audited.
 
 ## The permission model, in my own words
@@ -66,3 +67,4 @@ These were open gaps in the first version and are now built and tested: the outs
 - **A physical phone or security key** has not been tried against the live site. Real Chrome with its virtual authenticator, through the real pages and API, is tested on every push.
 - **Demo video:** the script is in [docs/DEMO.md](DEMO.md); the recording is mine to make.
 - **One server.** No database replication.
+- **The Android app has no tests of its own** and no passkey support (passkeys are tied to the website address, so they are added and used on the website). So far it has only been checked by hand: the sign-in screen on an emulator, then installed on a phone. It is not in a store; the APK is built from `apps/mobile`.
