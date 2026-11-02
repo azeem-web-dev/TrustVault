@@ -205,6 +205,9 @@ export class DocumentsService {
    * no longer audited, and the decide() tests fail.
    */
   async download(actor: Actor, id: string, versionNo?: number) {
+    // The decision, the version fetch and the ALLOWED row happen under the
+    // shared locks require() takes; the commit releases them, and only then
+    // is anything decrypted or sent (THREATS.md R11).
     const found = await this.prisma.asUser(actor.userId, async (tx) => {
       const decision = await this.access.require(tx, actor, id, 'download');
       const doc = await tx.document.findUnique({ where: { id }, select: { currentVersionNo: true } });
@@ -225,12 +228,17 @@ export class DocumentsService {
         throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
       }
       // Audited and committed BEFORE any byte leaves the server: if the
-      // audit write fails, nothing is sent.
+      // audit write fails, nothing is sent. The database refuses this row if
+      // the grant or account expired since the check (R11).
       await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
-        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex') },
+        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), level: Level[decision.level] },
       }, tx);
       return version;
+    }).catch(async (err: unknown) => {
+      if (!String((err as Error)?.message).includes('access ended during the request')) throw err;
+      await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'access_ended_during_request', targetType: 'document', targetId: id, documentId: id });
+      throw new NotFoundException('Document not found');
     });
 
     const blob = found.blob!;

@@ -183,9 +183,16 @@ export class UsersService {
     });
   }
 
-  /** Row lock so two admins editing the same user cannot interleave. */
+  /**
+   * The person's access lock, then their row, so two admins editing the same
+   * user cannot interleave and none of the person's document requests is
+   * half-way through a decision (THREATS.md R11). Access lock first: the
+   * order every path uses. NO KEY UPDATE, not UPDATE, so it never blocks the
+   * foreign-key checks of someone sharing with this person meanwhile.
+   */
   private async lockUser(tx: Tx, id: string) {
-    const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM users WHERE id = ${id}::uuid FOR UPDATE`;
+    await tx.$executeRaw`SELECT tv_lock_user(${id}::uuid, true)`;
+    const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM users WHERE id = ${id}::uuid FOR NO KEY UPDATE`;
     if (rows.length === 0) throw new NotFoundException('User not found');
     return tx.user.findUniqueOrThrow({ where: { id }, select: { ...VIEW } });
   }
@@ -197,7 +204,7 @@ export class UsersService {
    */
   private async ensureAnotherAdmin(tx: Tx, exceptId: string): Promise<void> {
     const admins = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' AND id <> ${exceptId}::uuid FOR UPDATE`;
+      SELECT id FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' AND id <> ${exceptId}::uuid FOR NO KEY UPDATE`;
     if (admins.length === 0) throw new ConflictException('At least one active admin must remain');
   }
 }

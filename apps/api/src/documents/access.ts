@@ -41,6 +41,9 @@ export type DocAction = keyof typeof REQUIRED_LEVEL;
 /** Actions allowed on a document in the trash (owner only, see evaluate). */
 const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'download', 'restore', 'purge', 'view_history']);
 
+/** Actions that only read: they share the document's lock (see require()). */
+const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'download']);
+
 /** Raw facts from tv_access_facts(); no decision has been made yet. */
 export interface AccessFacts {
   document: { ownerId: string; status: 'ACTIVE' | 'DELETED' } | null;
@@ -113,14 +116,24 @@ export class AccessService {
    * does not exist, so the caller learns nothing about what is there.
    */
   async require(tx: Tx, actor: Actor, documentId: string, action: DocAction): Promise<Decision> {
-    // Anything that changes a document or its access takes a per-document lock
-    // first, held until commit. A revoke and an upload by the person being
-    // revoked are then ordered: the upload either finished before the revoke,
-    // or is decided after it and refused (THREATS.md R10). Reads stay parallel.
-    if (action !== 'view' && action !== 'download') {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentId}::text, 0))`;
-    }
-    const decision = evaluate(await this.facts(tx, documentId, actor.userId), actor.userId, action);
+    // One lock protocol for every document request (THREATS.md R10, R11):
+    // the caller's user lock shared, then the document's lock — shared to
+    // read, exclusive to change — both held until commit. Every change that
+    // gives or takes away access holds the exclusive lock on the same
+    // document or person until it commits (database triggers enforce it).
+    // So a request decided after a revoke commits is refused, and one decided
+    // before it finishes, audit row included, before the revoke can commit.
+    // Reads still run in parallel with each other.
+    await tx.$executeRaw`SELECT tv_lock_access(${actor.userId}::uuid, ${documentId}::uuid, ${!READ_ONLY.has(action)})`;
+    const [state] = await tx.$queryRaw<{ facts: AccessFacts; session_live: boolean }[]>`
+      SELECT tv_access_facts(${documentId}::uuid, ${actor.userId}::uuid) AS facts,
+             EXISTS (SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id
+                      WHERE s.id = ${actor.sessionId}::uuid AND s.user_id = ${actor.userId}::uuid AND s.revoked_at IS NULL
+                        AND s.expires_at > clock_timestamp() AND s.created_at >= u.password_changed_at) AS session_live`;
+    let decision = evaluate(state!.facts, actor.userId, action);
+    // The session was checked before the lock; a password reset or sign-out
+    // everywhere that committed since then ends it here too.
+    if (decision.allowed && !state!.session_live) decision = { allowed: false, level: Level.NONE, reason: 'session_ended' };
     if (!decision.allowed) {
       await this.audit.record({
         action: `document.${action}`,

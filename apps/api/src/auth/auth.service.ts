@@ -173,6 +173,8 @@ export class AuthService {
     }
     const passwordHash = await this.passwords.hash(next);
     await this.prisma.$transaction(async (tx) => {
+      // The person's access lock first, as every account change takes it (R11).
+      await tx.$executeRaw`SELECT tv_lock_user(${user.id}::uuid, true)`;
       // passwordChangedAt makes every older session invalid on its next request;
       // the delete below just cleans them up immediately.
       await tx.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: new Date() } });

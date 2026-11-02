@@ -77,6 +77,9 @@ export class GroupsController {
     await this.prisma.$transaction(async (tx) => {
       const g = await tx.group.findUnique({ where: { id: id(groupId) }, select: { name: true, _count: { select: { grants: true, members: true } } } });
       if (!g) throw new NotFoundException('Group not found');
+      // Every member's and every shared document's lock, in order, before the
+      // cascade: no download through this group is half-way (THREATS.md R11).
+      await tx.$executeRaw`SELECT tv_lock_group(${groupId}::uuid)`;
       await tx.group.delete({ where: { id: groupId } });
       await this.audit.record({ action: 'group.delete', outcome: 'ALLOWED', targetType: 'group', targetId: groupId, details: { name: g.name, grantsRemoved: g._count.grants, members: g._count.members } }, tx);
     });
@@ -86,6 +89,7 @@ export class GroupsController {
   @HttpCode(204)
   async addMember(@Param('id') groupId: string, @Body(new ZodPipe(MemberSchema)) body: z.infer<typeof MemberSchema>) {
     await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT tv_lock_user(${body.userId}::uuid, true)`;
       const user = await tx.user.findUnique({ where: { id: body.userId }, select: { role: true, status: true, email: true } });
       if (!user || user.status !== 'ACTIVE') throw new BadRequestException('User not found or inactive');
       if (user.role === 'EXTERNAL') throw new BadRequestException('External people cannot be added to groups');
@@ -102,6 +106,8 @@ export class GroupsController {
   @HttpCode(204)
   async removeMember(@Param('id') groupId: string, @Param('userId') userId: string) {
     await this.prisma.$transaction(async (tx) => {
+      // The member's lock: none of their requests is mid-decision (R11).
+      await tx.$executeRaw`SELECT tv_lock_user(${id(userId)}::uuid, true)`;
       const r = await tx.groupMember.deleteMany({ where: { groupId: id(groupId), userId: id(userId) } });
       if (r.count === 0) throw new NotFoundException('Member not found');
       await this.audit.record({ action: 'group.member_remove', outcome: 'ALLOWED', targetType: 'group', targetId: groupId, details: { userId } }, tx);

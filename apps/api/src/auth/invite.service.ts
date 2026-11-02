@@ -102,6 +102,9 @@ export class InviteService {
     if (!TOKEN_SHAPE.test(token)) return this.refuse('auth.invite_accepted', 'malformed_link', null);
     const hash = await this.passwords.hash(password);
     const result = await this.prisma.$transaction(async (tx) => {
+      // The person's access lock before any row lock (THREATS.md R11).
+      const [owner] = await tx.$queryRaw<{ user_id: string }[]>`SELECT user_id FROM password_reset_tokens WHERE token_hash = ${sha256(token)}`;
+      if (owner) await tx.$executeRaw`SELECT tv_lock_user(${owner.user_id}::uuid, true)`;
       const [row] = await tx.$queryRaw<{ id: string; user_id: string; purpose: string; expires_at: Date; used_at: Date | null }[]>`
         SELECT id, user_id, purpose, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ${sha256(token)} FOR UPDATE`;
       const problem = linkProblem(row ?? null);

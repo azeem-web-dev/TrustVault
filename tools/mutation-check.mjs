@@ -175,6 +175,23 @@ const MUTATIONS = [
     ['test/invite.test.ts']),
   code('users: reactivating a never-accepted invitation does not make it ACTIVE', 'src/users/users.service.ts',
     "const status = before.activatedAt ? 'ACTIVE' : 'INVITED';", "const status = 'ACTIVE';", ['test/invite.test.ts']),
+
+  // --- downloads and revokes in one order (THREATS.md R11) -------------------
+  code('order: every document request takes its locks before deciding', ACCESS,
+    'await tx.$executeRaw`SELECT tv_lock_access(${actor.userId}::uuid, ${documentId}::uuid, ${!READ_ONLY.has(action)})`;', '',
+    ['test/download-order.test.ts']),
+  code('order: reads share the document lock (downloads run in parallel)', ACCESS,
+    '${!READ_ONLY.has(action)})`;', '${true})`;', ['test/download-order.test.ts']),
+  code('order: a session ended while the request waited is refused', ACCESS,
+    "if (decision.allowed && !state!.session_live) decision", "if (false) decision", ['test/download-order.test.ts']),
+  sql('database: an ALLOWED download row is refused once access has lapsed',
+    'ALTER TABLE audit_events DISABLE TRIGGER audit_events_download_live', 'ALTER TABLE audit_events ENABLE TRIGGER audit_events_download_live',
+    ['test/download-order.test.ts']),
+  sql('database: grant writes take the document lock',
+    'ALTER TABLE grants DISABLE TRIGGER grants_0_lock', 'ALTER TABLE grants ENABLE TRIGGER grants_0_lock', ['test/download-order.test.ts']),
+  sql('database: membership and account writes take the person lock',
+    'ALTER TABLE group_members DISABLE TRIGGER group_members_0_lock; ALTER TABLE users DISABLE TRIGGER users_0_lock',
+    'ALTER TABLE group_members ENABLE TRIGGER group_members_0_lock; ALTER TABLE users ENABLE TRIGGER users_0_lock', ['test/download-order.test.ts']),
 ];
 
 function loadEnv() {

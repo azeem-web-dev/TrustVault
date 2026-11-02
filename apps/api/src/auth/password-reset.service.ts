@@ -96,6 +96,10 @@ export class PasswordResetService {
     }
     const hash = await this.passwords.hash(newPassword);
     const user = await this.prisma.$transaction(async (tx) => {
+      // The person's access lock before any row lock, the order every account
+      // change uses (THREATS.md R11).
+      const [owner] = await tx.$queryRaw<{ user_id: string }[]>`SELECT user_id FROM password_reset_tokens WHERE token_hash = ${sha256(token)}`;
+      if (owner) await tx.$executeRaw`SELECT tv_lock_user(${owner.user_id}::uuid, true)`;
       const [row] = await tx.$queryRaw<{ id: string; user_id: string; purpose: string; expires_at: Date; used_at: Date | null }[]>`
         SELECT id, user_id, purpose, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ${sha256(token)} FOR UPDATE`;
       if (!row) return { refused: 'unknown_link', userId: null };
