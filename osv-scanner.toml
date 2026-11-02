@@ -1,0 +1,17 @@
+# Reviewed allowlist for OSV-Scanner (CI job "audit"; see docs/SUPPLY_CHAIN.md).
+#
+# Policy: CI fails on ANY known vulnerability in package-lock.json,
+# keyd/Cargo.lock or apps/mobile/pubspec.lock that is not listed here.
+# Every entry needs: the advisory id, an `ignoreUntil` date (at most 90 days
+# out, so it is re-reviewed), and a `reason` that says why it is not
+# reachable or what the plan is. When the date passes, the finding fails CI
+# again. Prefer upgrading to allowlisting.
+#
+# Example (do not uncomment without a real finding):
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2027-02-01
+# reason = "Dev-only dependency, code path not used; upstream fix pending (issue #N). Reviewed by <name> on <date>."
+#
+# Current state (2026-11-03): no findings, allowlist empty.

@@ -1,0 +1,98 @@
+# Release build: one versioned tarball (API + web + keyd + deploy scripts),
+# SHA-256 sums, CycloneDX SBOMs and a Sigstore-signed build provenance
+# attestation (keyless, GitHub OIDC). The server verifies the attestation
+# with infra/server/verify-release.sh before installing anything
+# (docs/SUPPLY_CHAIN.md). Nothing here deploys.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, sign, attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write        # attach files to the GitHub release (tags only)
+      id-token: write        # Sigstore keyless signing via GitHub OIDC
+      attestations: write    # store the provenance attestation
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        with:
+          tool: cargo-cyclonedx@0.5.9
+
+      - name: Install (lockfile only, no install scripts except the approved ones)
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild prisma @prisma/engines esbuild
+
+      - name: Build API, web and keyd
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          (cd apps/api && npx prisma generate >/dev/null && npx tsc -p tsconfig.build.json)
+          (cd apps/web && npx next build)
+          (cd keyd && cargo build --release --locked)
+
+      - name: Assemble tarball, SBOMs and checksums
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          VER="${GITHUB_REF_NAME}"
+          [ "${GITHUB_REF_TYPE}" = tag ] || VER="main-$(git rev-parse --short HEAD)"
+          NAME="trustvault-${VER}"
+          S="out/${NAME}"
+          mkdir -p "$S/apps/api" "$S/apps/web" "$S/bin" "$S/sbom"
+          cp package.json package-lock.json "$S/"
+          cp -r apps/api/dist apps/api/prisma apps/api/prisma.config.ts apps/api/package.json "$S/apps/api/"
+          cp -r apps/web/.next apps/web/package.json apps/web/next.config.ts "$S/apps/web/"
+          rm -rf "$S/apps/web/.next/cache"
+          cp keyd/target/release/tvkeyd "$S/bin/tvkeyd"
+          cp -r infra tools "$S/"
+          npm sbom --sbom-format cyclonedx --omit dev --package-lock-only > "$S/sbom/npm.cdx.json"
+          (cd keyd && cargo cyclonedx --format json --override-filename tvkeyd.cdx && mv tvkeyd.cdx.json "../$S/sbom/")
+          echo "${GITHUB_SHA}" > "$S/COMMIT"
+          # Deterministic archive: sorted names, fixed owner and mtime, no gzip timestamp.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH}" \
+              -C out -cf - "${NAME}" | gzip -n -9 > "out/${NAME}.tar.gz"
+          (cd out && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" && cat "${NAME}.tar.gz.sha256")
+          cp "$S"/sbom/*.json out/
+          rm -rf "$S"
+          echo "ARTIFACT=out/${NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance (Sigstore, keyless)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.ARTIFACT }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: out/
+          retention-days: 90
+
+      - name: Attach to the GitHub release (tags only)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Signed build. Verify with infra/server/verify-release.sh."
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber
