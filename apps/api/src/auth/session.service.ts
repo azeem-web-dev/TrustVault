@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import type { Actor } from '../common/request-context.js';
+import { AuditService } from '../audit/audit.service.js';
 
 export const SESSION_COOKIE = '__Host-tv_session';
 
@@ -29,6 +30,7 @@ export class SessionService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(ENV) private readonly env: Env,
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
   async create(
@@ -69,14 +71,29 @@ export class SessionService {
     const user = session.user;
     const idleLimit = session.lastSeenAt.getTime() + this.env.SESSION_IDLE_MINUTES * 60_000;
     const invalid =
-      session.expiresAt.getTime() <= now ||
-      idleLimit <= now ||
-      user.status !== 'ACTIVE' ||
-      (user.accessExpiresAt !== null && user.accessExpiresAt.getTime() <= now) ||
+      session.revokedAt !== null ? (session.revokedReason ?? 'revoked')
+      : session.expiresAt.getTime() <= now ? 'session_expired'
+      : idleLimit <= now ? 'session_idle'
+      : user.status !== 'ACTIVE' ? 'user_inactive'
+      : user.accessExpiresAt !== null && user.accessExpiresAt.getTime() <= now ? 'user_access_expired'
       // A password change invalidates every session created before it.
-      session.createdAt.getTime() < user.passwordChangedAt.getTime();
+      : session.createdAt.getTime() < user.passwordChangedAt.getTime() ? 'password_changed'
+      : null;
     if (invalid) {
-      await this.prisma.session.deleteMany({ where: { id: session.id } });
+      // A cut-off person trying again is exactly what the record must show
+      // (THREATS.md L10). The row is kept (marked) until it expires, so the
+      // cookie stays dead and identifiable; only the first refusal is
+      // recorded, so a retry loop adds one audit row, not thousands. Marking
+      // and recording happen in one transaction: no mark without a record.
+      await this.prisma.$transaction(async (tx) => {
+        const marked = await tx.session.updateMany({
+          where: { id: session.id, rejectedAt: null },
+          data: { rejectedAt: new Date(now), revokedAt: session.revokedAt ?? new Date(now), revokedReason: session.revokedReason ?? invalid },
+        });
+        if (marked.count > 0) {
+          await this.audit.record({ action: 'auth.session_rejected', outcome: 'DENIED', reason: invalid, actorId: user.id, actorEmail: user.email, targetType: 'session', targetId: session.id }, tx);
+        }
+      });
       return null;
     }
 
@@ -97,14 +114,17 @@ export class SessionService {
     };
   }
 
-  async revoke(sessionId: string, tx?: Tx): Promise<void> {
-    await (tx ?? this.prisma).session.deleteMany({ where: { id: sessionId } });
+  /** Ends one session. Returns 1 if it was live, 0 if it had already ended. */
+  async revoke(sessionId: string, tx?: Tx, reason = 'ended'): Promise<number> {
+    const r = await (tx ?? this.prisma).session.updateMany({ where: { id: sessionId, revokedAt: null }, data: { revokedAt: new Date(), revokedReason: reason } });
+    return r.count;
   }
 
   /** Ends every session of a user (optionally keeping one). Returns how many. */
-  async revokeAllForUser(userId: string, tx?: Tx, keepSessionId?: string): Promise<number> {
-    const result = await (tx ?? this.prisma).session.deleteMany({
-      where: { userId, ...(keepSessionId ? { NOT: { id: keepSessionId } } : {}) },
+  async revokeAllForUser(userId: string, tx?: Tx, keepSessionId?: string, reason = 'ended'): Promise<number> {
+    const result = await (tx ?? this.prisma).session.updateMany({
+      where: { userId, revokedAt: null, ...(keepSessionId ? { NOT: { id: keepSessionId } } : {}) },
+      data: { revokedAt: new Date(), revokedReason: reason },
     });
     return result.count;
   }

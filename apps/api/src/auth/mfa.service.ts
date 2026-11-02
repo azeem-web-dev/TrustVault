@@ -235,7 +235,20 @@ export class MfaService {
   /** Replace the password-level session with a new MFA-level one. */
   private async upgrade(actor: Actor, tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0]): Promise<NewSession> {
     const ctx = currentContext();
-    await this.sessions.revoke(actor.sessionId, tx);
+    // Re-check everything under the user row lock that admin resets and
+    // deactivation also take: if the password-only session was ended, or the
+    // account changed, while the code was being checked, no full session is
+    // issued (THREATS.md R9).
+    const [u] = await tx.$queryRaw<{ status: string; access_expires_at: Date | null; password_changed_at: Date; totp: boolean; passkeys: number }[]>`
+      SELECT status, access_expires_at, password_changed_at, totp_enabled_at IS NOT NULL AS totp,
+             (SELECT count(*)::int FROM passkeys p WHERE p.user_id = users.id) AS passkeys
+        FROM users WHERE id = ${actor.userId}::uuid FOR UPDATE`;
+    const [s] = await tx.$queryRaw<{ created_at: Date }[]>`SELECT created_at FROM sessions WHERE id = ${actor.sessionId}::uuid`;
+    const ended = (await this.sessions.revoke(actor.sessionId, tx, 'replaced_after_second_factor')) !== 1;
+    if (ended || !u || !s || u.status !== 'ACTIVE' || (u.access_expires_at && u.access_expires_at.getTime() <= Date.now())
+        || s.created_at.getTime() < u.password_changed_at.getTime() || (!u.totp && u.passkeys === 0)) {
+      throw new UnauthorizedException('Your session ended. Sign in again.');
+    }
     return this.sessions.create(actor.userId, { ip: ctx?.ip ?? null, userAgent: ctx?.userAgent ?? null, authLevel: 'mfa' }, tx);
   }
 }

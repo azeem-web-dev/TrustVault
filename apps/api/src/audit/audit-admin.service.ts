@@ -161,7 +161,7 @@ export class AuditAdminService {
       events: rows,
       checkpoints: checkpoints.map((c) => ({ seq: c.seq.toString(), headHash: Buffer.from(c.headHash).toString('hex'), signature: Buffer.from(c.signature).toString('base64'), keyId: c.keyId, createdAt: c.createdAt })),
       signingKey: { keyId, publicKey: publicKey.toString('base64'), algorithm: 'Ed25519' },
-      verifyWith: 'node tools/verify-audit.mjs <bundle.json>',
+      verifyWith: 'node tools/verify-audit.mjs <bundle.json> --key <production public key> --rekor --witness <witness branch>/checkpoints.jsonl',
     };
   }
 
@@ -171,7 +171,7 @@ export class AuditAdminService {
    */
   async alerts(hours = 24) {
     const since = new Date(Date.now() - hours * 3_600_000);
-    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures, malware, rescanFailures] = await Promise.all([
+    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures, malware, rescanFailures, deadSessions, impersonation] = await Promise.all([
       this.prisma.$queryRaw<{ actor_email: string | null; n: bigint; documents: bigint }[]>`
         SELECT actor_email, count(*) AS n, count(DISTINCT target_id) AS documents FROM audit_events
          WHERE occurred_at >= ${since} AND outcome = 'DENIED' AND action LIKE 'document.%'
@@ -212,6 +212,23 @@ export class AuditAdminService {
       this.prisma.$queryRaw<{ occurred_at: Date }[]>`
         SELECT occurred_at FROM audit_events
          WHERE occurred_at >= ${since} AND action = 'malware.rescan' AND outcome = 'FAILED' ORDER BY seq DESC LIMIT 5`,
+      // Someone used a session that had been ended on purpose (THREATS.md L10).
+      this.prisma.$queryRaw<{ occurred_at: Date; actor_email: string | null; reason: string | null; ip: string | null }[]>`
+        SELECT occurred_at, actor_email, reason, ip FROM audit_events
+         WHERE occurred_at >= ${since} AND action = 'auth.session_rejected'
+           AND reason NOT IN ('session_expired', 'session_idle')
+         ORDER BY seq DESC LIMIT 20`,
+      // An admin reset someone's password or second factor and that account
+      // then signed in: either the person asked, or an admin is impersonating
+      // them to read their documents (THREATS.md S15).
+      this.prisma.$queryRaw<{ occurred_at: Date; admin_email: string | null; user_email: string | null; reset: string }[]>`
+        SELECT l.occurred_at, r.actor_email AS admin_email, l.actor_email AS user_email, r.action AS reset
+          FROM audit_events r
+          JOIN audit_events l ON l.action = 'auth.login' AND l.outcome = 'ALLOWED' AND l.actor_id::text = r.target_id::text
+                             AND l.seq > r.seq AND l.occurred_at <= r.occurred_at + interval '24 hours'
+         WHERE r.occurred_at >= ${since}::timestamptz - interval '24 hours' AND l.occurred_at >= ${since}::timestamptz
+           AND r.action IN ('user.password_reset', 'user.mfa_reset') AND r.outcome = 'ALLOWED'
+         ORDER BY l.seq DESC LIMIT 20`,
     ]);
     const titles = await this.titles([...afterRevoke, ...externalGrants, ...breakGlass, ...integrity, ...malware].map((r) => r.document_id).filter((x): x is string => Boolean(x)));
     const num = (v: bigint) => Number(v);
@@ -223,6 +240,8 @@ export class AuditAdminService {
         ...integrity.map((r) => ({ severity: 'critical', kind: 'file_integrity', at: r.occurred_at, message: `A stored file failed its integrity check (${r.reason})`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...malware.map((r) => ({ severity: 'critical', kind: 'malware_found', at: r.occurred_at, message: `Malware (${r.signature ?? '?'}) found in a stored file, version ${r.version_no ?? '?'}; that version is quarantined`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...rescanFailures.map((r) => ({ severity: 'high', kind: 'rescan_failed', at: r.occurred_at, message: 'The nightly malware re-scan could not finish: the scanner was not available' })),
+        ...impersonation.map((r) => ({ severity: 'high', kind: 'reset_then_sign_in', at: r.occurred_at, message: `${r.user_email ?? 'unknown'} signed in after ${r.admin_email ?? 'an admin'} reset their ${r.reset === 'user.mfa_reset' ? 'second factor' : 'password'}. Check that they asked for it.` })),
+        ...deadSessions.map((r) => ({ severity: 'high', kind: 'ended_session_used', at: r.occurred_at, message: `${r.actor_email ?? 'unknown'} tried to use a session that had been ended (${(r.reason ?? '').replace(/_/g, ' ')}) from ${r.ip ?? '?'}` })),
         ...afterRevoke.map((r) => ({ severity: 'high', kind: 'access_after_revoke', at: r.last_attempt, message: `${r.actor_email ?? 'unknown'} tried ${num(r.attempts)}× to reach a document after their access was revoked`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...deniedByUser.map((r) => ({ severity: 'high', kind: 'repeated_denials', message: `${r.actor_email ?? 'unknown'} was refused ${num(r.n)} times across ${num(r.documents)} documents` })),
         ...bulkDownloads.map((r) => ({ severity: 'medium', kind: 'bulk_download', message: `${r.actor_email ?? 'unknown'} downloaded ${num(r.n)} files (${num(r.documents)} documents) within one hour` })),

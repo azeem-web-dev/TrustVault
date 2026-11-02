@@ -24,6 +24,20 @@ export interface RequestContext {
   ip: string | null;
   userAgent: string | null;
   actor: Actor | null;
+  /**
+   * Set once a refusal for this request has been written to the audit log
+   * (by the security guard), so the global error filter does not record the
+   * same refusal a second time.
+   */
+  refusalAudited?: boolean;
+  /** The raw document id a route rejected as malformed (see docId()). */
+  rejectedDocumentId?: string;
+}
+
+/** Marks the current request's refusal as already audited. */
+export function markRefusalAudited(): void {
+  const ctx = storage.getStore();
+  if (ctx) ctx.refusalAudited = true;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

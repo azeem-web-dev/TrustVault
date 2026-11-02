@@ -116,15 +116,25 @@ export class AuthService {
     // Success: new session (a fresh token, never a reused one), counters
     // reset, and the old session from this browser — if any — ended.
     const result = await this.prisma.$transaction(async (tx) => {
+      // The password was checked outside this transaction (Argon2 is slow). If
+      // an admin reset the password, deactivated the account or it expired in
+      // that window, the old password must not yield a session (THREATS.md R9).
+      // The row lock orders this against those changes.
+      const [now] = await tx.$queryRaw<{ password_hash: string; status: string; access_expires_at: Date | null }[]>`
+        SELECT password_hash, status, access_expires_at FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
+      if (!now || now.password_hash !== user.passwordHash || now.status !== 'ACTIVE' || (now.access_expires_at && now.access_expires_at.getTime() <= Date.now())) {
+        return null;
+      }
       await tx.user.update({ where: { id: user.id }, data: { failedLoginCount: 0, lockedUntil: null } });
       if (previousToken) {
         const old = await this.sessions.resolve(previousToken);
-        if (old) await this.sessions.revoke(old.sessionId, tx);
+        if (old) await this.sessions.revoke(old.sessionId, tx, 'replaced_at_login');
       }
       const session = await this.sessions.create(user.id, { ip: ctx?.ip ?? null, userAgent: ctx?.userAgent ?? null }, tx);
       await this.audit.record({ action: 'auth.login', outcome: 'ALLOWED', actorId: user.id, actorEmail: user.email, targetType: 'user', targetId: user.id }, tx);
       return session;
     });
+    if (!result) return deny('credentials_changed_during_login');
     await this.redis.reset(`rl:login:acct:${emailKey(email)}`).catch(() => undefined);
 
     const methods: ('totp' | 'passkey')[] = [];
@@ -140,7 +150,7 @@ export class AuthService {
 
   async logout(actor: Actor): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      await this.sessions.revoke(actor.sessionId, tx);
+      await this.sessions.revoke(actor.sessionId, tx, 'logged_out');
       await this.audit.record({ action: 'auth.logout', outcome: 'ALLOWED', targetType: 'session', targetId: actor.sessionId }, tx);
     });
   }
@@ -162,7 +172,7 @@ export class AuthService {
       // passwordChangedAt makes every older session invalid on its next request;
       // the delete below just cleans them up immediately.
       await tx.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: new Date() } });
-      const ended = await this.sessions.revokeAllForUser(user.id, tx);
+      const ended = await this.sessions.revokeAllForUser(user.id, tx, undefined, 'password_changed');
       await this.audit.record({ action: 'auth.password_change', outcome: 'ALLOWED', targetType: 'user', targetId: user.id, details: { sessionsEnded: ended } }, tx);
     });
   }

@@ -10,8 +10,11 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ENV, type Env } from '../config/env.js';
 import type { Role } from '../generated/prisma/enums.js';
-import { AuditService } from '../audit/audit.service.js';
-import { currentContext } from '../common/request-context.js';
+import { AuditService, type AuditInput } from '../audit/audit.service.js';
+import { logger } from '../common/logger.js';
+import { currentContext, markRefusalAudited } from '../common/request-context.js';
+import { ErrorsFilter } from '../common/errors.filter.js';
+import { PrismaService } from '../db/prisma.service.js';
 import { PARTIAL_AUTH_KEY, PUBLIC_KEY, ROLES_KEY } from './decorators.js';
 import { SESSION_COOKIE, SessionService } from './session.service.js';
 
@@ -33,7 +36,27 @@ export class SecurityGuard implements CanActivate {
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(ENV) private readonly env: Env,
-  ) {}
+    @Inject(PrismaService) prisma: PrismaService,
+  ) {
+    // The global error filter is created with `new` in bootstrap.ts, outside
+    // the DI container; hand it the audit service so it can record refusals
+    // that happen before a route's own authorisation check.
+    ErrorsFilter.useAudit(audit, prisma);
+  }
+
+  /**
+   * Records a refusal, then throws it. A failure to record is logged and
+   * never turns the refusal into a success: the original error is thrown.
+   */
+  private async refuse(input: AuditInput, refusal: Error): Promise<never> {
+    try {
+      await this.audit.record(input);
+      markRefusalAudited();
+    } catch (err) {
+      logger.error({ err, action: input.action, requestId: currentContext()?.requestId }, 'failed to audit a refusal');
+    }
+    throw refusal;
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
@@ -47,7 +70,12 @@ export class SecurityGuard implements CanActivate {
     if (mutating) {
       const origin = req.get('origin');
       if (origin !== undefined && origin !== this.env.PUBLIC_ORIGIN) {
-        throw new ForbiddenException('Cross-origin request refused');
+        // No session is resolved yet (resolving would touch lastSeenAt on
+        // behalf of a cross-site request), so the actor is unknown here.
+        await this.refuse(
+          { action: 'security.origin_refused', outcome: 'DENIED', reason: 'cross_origin', details: { method: req.method, path: req.path, origin: origin.slice(0, 256) } },
+          new ForbiddenException('Cross-origin request refused'),
+        );
       }
     }
 
@@ -62,8 +90,10 @@ export class SecurityGuard implements CanActivate {
 
     // 3. CSRF.
     if (mutating && !SessionService.csrfMatches(actor.csrfToken, req.get('x-csrf-token'))) {
-      await this.audit.record({ action: 'security.csrf', outcome: 'DENIED', reason: 'csrf_token_mismatch', details: { method: req.method, path: req.path } });
-      throw new ForbiddenException('Missing or invalid CSRF token');
+      await this.refuse(
+        { action: 'security.csrf', outcome: 'DENIED', reason: 'csrf_token_mismatch', details: { method: req.method, path: req.path } },
+        new ForbiddenException('Missing or invalid CSRF token'),
+      );
     }
 
     // 4. Second factor. A session that owes one can only reach the routes
@@ -71,14 +101,20 @@ export class SecurityGuard implements CanActivate {
     //    anyone who has enrolled a TOTP app or passkey.
     const partialOk = this.reflector.getAllAndOverride<boolean>(PARTIAL_AUTH_KEY, targets) === true;
     if (actor.mfaRequired && actor.authLevel !== 'mfa' && !partialOk) {
-      throw new ForbiddenException({ message: 'Second factor required', code: actor.mfaEnrolled ? 'mfa_required' : 'mfa_enrolment_required' });
+      const code = actor.mfaEnrolled ? 'mfa_required' : 'mfa_enrolment_required';
+      await this.refuse(
+        { action: 'security.mfa_required', outcome: 'DENIED', reason: code, actorId: actor.userId, actorEmail: actor.email, details: { method: req.method, path: req.path } },
+        new ForbiddenException({ message: 'Second factor required', code }),
+      );
     }
 
     // 5. Role.
     const roles = this.reflector.getAllAndOverride<Role[] | undefined>(ROLES_KEY, targets);
     if (roles && !roles.includes(actor.role)) {
-      await this.audit.record({ action: 'security.role', outcome: 'DENIED', reason: 'role_not_allowed', details: { method: req.method, path: req.path, required: roles } });
-      throw new ForbiddenException('Not allowed');
+      await this.refuse(
+        { action: 'security.role', outcome: 'DENIED', reason: 'role_not_allowed', details: { method: req.method, path: req.path, required: roles } },
+        new ForbiddenException('Not allowed'),
+      );
     }
     return true;
   }

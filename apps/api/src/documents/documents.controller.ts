@@ -5,7 +5,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
-import type { Actor } from '../common/request-context.js';
+import { type Actor, currentContext } from '../common/request-context.js';
 import { CurrentActor, Roles } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
@@ -60,7 +60,12 @@ const TransferSchema = z.strictObject({ newOwnerId: Uuid });
 
 /** Invalid ids get the same 404 as documents you cannot see. */
 function docId(id: string): string {
-  if (!Uuid.safeParse(id).success) throw new NotFoundException('Document not found');
+  if (!Uuid.safeParse(id).success) {
+    // Lets the error filter record this refusal: AccessService never saw it.
+    const ctx = currentContext();
+    if (ctx) ctx.rejectedDocumentId = id;
+    throw new NotFoundException('Document not found');
+  }
   return id;
 }
 
@@ -155,9 +160,9 @@ export class DocumentsController {
 
   /** Owner only. */
   @Post(':id/transfer')
-  @HttpCode(204)
-  async transfer(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(TransferSchema)) body: z.infer<typeof TransferSchema>) {
-    await this.docs.transfer(actor, docId(id), body.newOwnerId);
+  @HttpCode(200)
+  transfer(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(TransferSchema)) body: z.infer<typeof TransferSchema>) {
+    return this.docs.transfer(actor, docId(id), body.newOwnerId);
   }
 
   /** MANAGE or better. */
@@ -180,10 +185,9 @@ export class DocumentsController {
 
   /** MANAGE or better (removing MANAGE: owner only). */
   @Delete(':id/access/:grantId')
-  @HttpCode(204)
   async revoke(@CurrentActor() actor: Actor, @Param('id') id: string, @Param('grantId') grantId: string) {
     if (!Uuid.safeParse(grantId).success) throw new NotFoundException('Grant not found');
-    await this.sharing.revoke(actor, docId(id), grantId);
+    return this.sharing.revoke(actor, docId(id), grantId);
   }
 
   /** MANAGE or better: suggestions only, never grants anything. */
