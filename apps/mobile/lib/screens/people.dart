@@ -98,6 +98,22 @@ class _UsersState extends State<_Users> {
     }
   }
 
+  // A fresh invitation link; the earlier one stops working.
+  Future<void> _resendInvite(String id, String email) async {
+    setState(() => _error = null);
+    try {
+      final r = await Api.I.post('/admin/users/$id/invite');
+      if (!mounted) return;
+      if (r is Map && r['sent'] == false) {
+        toast(context, 'Email is turned off on this server, so no invitation was sent', tone: Tone.blue);
+      } else {
+        toast(context, 'Invitation sent again to $email. The earlier link no longer works.');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Request failed'));
+    }
+  }
+
   Future<void> _run(Future<dynamic> Function() fn, String msg) async {
     setState(() => _error = null);
     try {
@@ -125,8 +141,8 @@ class _UsersState extends State<_Users> {
         PageTitle(
           title: 'Users',
           icon: PhosphorIconsDuotone.usersThree,
-          subtitle: 'Role changes, deactivation and password resets sign the user out everywhere immediately.',
-          actions: [Btn('Add user', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.userPlus, onPressed: _create)],
+          subtitle: 'New people are invited by email and choose their own password. Role changes, deactivation and password resets sign the user out everywhere immediately.',
+          actions: [Btn('Invite user', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.userPlus, onPressed: _create)],
         ),
         StatGrid(
           children: [
@@ -167,9 +183,10 @@ class _UsersState extends State<_Users> {
     final self = u['id'] == me?.id;
     final protected = u['isProtected'] == true;
     final active = u['status'] == 'ACTIVE';
+    final invited = u['status'] == 'INVITED';
     final email = u['email'] as String;
     return Opacity(
-      opacity: active ? 1 : .6,
+      opacity: active || invited ? 1 : .6,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
         child: Column(
@@ -211,7 +228,10 @@ class _UsersState extends State<_Users> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                TvBadge(active ? 'Active' : 'Deactivated', tone: active ? Tone.green : Tone.neutral, dot: true),
+                if (invited)
+                  const TvBadge('Invited', tone: Tone.amber, icon: PhosphorIconsDuotone.clockCounterClockwise)
+                else
+                  TvBadge(active ? 'Active' : 'Deactivated', tone: active ? Tone.green : Tone.neutral, dot: true),
                 if (locked) const TvBadge('Locked', tone: Tone.amber, icon: PhosphorIconsDuotone.lockKey),
                 if (protected) const TvBadge('Demo', tone: Tone.violet, icon: PhosphorIconsDuotone.sparkle),
                 if (u['totpEnabledAt'] != null) const TvBadge('2FA', tone: Tone.blue, icon: PhosphorIconsDuotone.shieldCheck),
@@ -254,24 +274,41 @@ class _UsersState extends State<_Users> {
                         case 'mfa':
                           _run(() => Api.I.post('/admin/users/${u['id']}/mfa/reset'), 'Second factor reset for $email; they must set it up again');
                         case 'deactivate':
-                          _run(() => Api.I.post('/admin/users/${u['id']}/deactivate'), '$email deactivated and signed out');
+                          _run(() => Api.I.post('/admin/users/${u['id']}/deactivate'), invited ? 'Invitation for $email cancelled' : '$email deactivated and signed out');
                         case 'reactivate':
-                          _run(() => Api.I.post('/admin/users/${u['id']}/reactivate'), '$email reactivated');
+                          _run(
+                            () => Api.I.post('/admin/users/${u['id']}/reactivate'),
+                            u['activatedAt'] != null ? '$email reactivated' : '$email is invited again. Use Resend invite to email a new link.',
+                          );
                         case 'reset':
                           _sendReset('${u['id']}', email);
+                        case 'invite':
+                          _resendInvite('${u['id']}', email);
                       }
                     },
                     itemBuilder: (_) => [
-                      PopupMenuItem(
-                        value: 'reset',
-                        child: Row(
-                          children: [
-                            Ic(PhosphorIconsDuotone.lockKey, size: 18, color: p.muted),
-                            gap8,
-                            const Text('Send reset link'),
-                          ],
+                      if (invited)
+                        PopupMenuItem(
+                          value: 'invite',
+                          child: Row(
+                            children: [
+                              Ic(PhosphorIconsDuotone.envelope, size: 18, color: p.muted),
+                              gap8,
+                              const Text('Resend invite'),
+                            ],
+                          ),
                         ),
-                      ),
+                      if (active)
+                        PopupMenuItem(
+                          value: 'reset',
+                          child: Row(
+                            children: [
+                              Ic(PhosphorIconsDuotone.lockKey, size: 18, color: p.muted),
+                              gap8,
+                              const Text('Send reset link'),
+                            ],
+                          ),
+                        ),
                       if (u['totpEnabledAt'] != null)
                         PopupMenuItem(
                           value: 'mfa',
@@ -283,14 +320,14 @@ class _UsersState extends State<_Users> {
                             ],
                           ),
                         ),
-                      if (active)
-                        const PopupMenuItem(
+                      if (active || invited)
+                        PopupMenuItem(
                           value: 'deactivate',
                           child: Row(
                             children: [
-                              Ic(PhosphorIconsDuotone.prohibit, size: 18, color: C.red500),
-                              SizedBox(width: 8),
-                              Text('Deactivate', style: TextStyle(color: C.red500)),
+                              const Ic(PhosphorIconsDuotone.prohibit, size: 18, color: C.red500),
+                              const SizedBox(width: 8),
+                              Text(invited ? 'Cancel invite' : 'Deactivate', style: const TextStyle(color: C.red500)),
                             ],
                           ),
                         )
@@ -332,15 +369,20 @@ class _UsersState extends State<_Users> {
   }
 
   Future<void> _create() async {
-    final email = await showSheet<String>(
+    final result = await showSheet<(String, bool)>(
       context,
-      title: 'Add a user',
+      title: 'Invite a user',
       icon: PhosphorIconsDuotone.userPlus,
-      description: 'They can sign in straight away. Administrators must set up a second factor on first sign-in.',
+      description: 'They get an email with a link to choose their own name and password. You never see it. Administrators also set up a second factor on first sign-in.',
       builder: (_) => const _CreateUser(),
     );
-    if (email != null && mounted) {
-      toast(context, 'Created $email');
+    if (result != null && mounted) {
+      final (email, invited) = result;
+      if (invited) {
+        toast(context, 'Invitation sent to $email. They choose their own name and password.');
+      } else {
+        toast(context, '$email was added, but email is turned off on this server, so no invitation was sent', tone: Tone.blue);
+      }
       _load();
     }
   }
@@ -354,8 +396,6 @@ class _CreateUser extends StatefulWidget {
 
 class _CreateUserState extends State<_CreateUser> {
   final _email = TextEditingController();
-  final _name = TextEditingController();
-  final _password = TextEditingController();
   String _role = 'VIEWER';
   String _expires = '';
   String? _error;
@@ -367,16 +407,14 @@ class _CreateUserState extends State<_CreateUser> {
       _error = null;
     });
     try {
-      await Api.I.post('/admin/users', {
+      final r = await Api.I.post('/admin/users', {
         'email': _email.text.trim(),
-        'displayName': _name.text.trim(),
         'role': _role,
-        'password': _password.text,
         if (_expires.isNotEmpty) 'accessExpiresAt': DateTime.parse(_expires).toUtc().toIso8601String(),
       });
-      if (mounted) Navigator.pop(context, _email.text.trim());
+      if (mounted) Navigator.pop(context, (_email.text.trim(), r is Map && r['invited'] == true));
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e, 'Could not create user'));
+      if (mounted) setState(() => _error = errorText(e, 'Could not send the invitation'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -396,15 +434,6 @@ class _CreateUserState extends State<_CreateUser> {
             decoration: fieldDeco(hint: 'name@company.com', icon: PhosphorIconsDuotone.envelope),
           ),
         ),
-        gap12,
-        FieldLabel(
-          'Display name',
-          child: TextField(
-            controller: _name,
-            textCapitalization: TextCapitalization.words,
-            decoration: fieldDeco(hint: 'Full name', icon: PhosphorIconsDuotone.identificationCard),
-          ),
-        ),
         gap16,
         Text(
           'Role',
@@ -418,34 +447,27 @@ class _CreateUserState extends State<_CreateUser> {
           ),
         gap8,
         FieldLabel(
-          'Initial password',
-          hint: '12+ characters. Share it with them privately.',
-          child: TextField(
-            controller: _password,
-            obscureText: true,
-            decoration: fieldDeco(icon: PhosphorIconsDuotone.lockSimple),
-          ),
-        ),
-        if (_role == 'EXTERNAL') ...[
-          gap12,
-          FieldLabel(
-            'External access ends on (required)',
-            child: Press(
-              onTap: () async {
-                final now = DateTime.now();
-                final d = await showDatePicker(context: context, firstDate: now, lastDate: DateTime(now.year + 5), initialDate: now.add(const Duration(days: 30)));
-                if (d != null) setState(() => _expires = isoDay(d));
-              },
-              child: InputDecorator(
-                decoration: fieldDeco(icon: PhosphorIconsDuotone.calendarBlank),
-                child: Text(_expires.isEmpty ? 'Pick a date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? C.slate400 : null)),
+          _role == 'EXTERNAL' ? 'Access ends on (required)' : 'Access ends on (optional)',
+          hint: _role == 'EXTERNAL' ? 'External accounts always have an end date.' : 'Leave empty for no end date.',
+          child: Press(
+            onTap: () async {
+              final now = DateTime.now();
+              final d = await showDatePicker(context: context, firstDate: now, lastDate: DateTime(now.year + 5), initialDate: now.add(const Duration(days: 30)));
+              if (d != null) setState(() => _expires = isoDay(d));
+            },
+            child: InputDecorator(
+              decoration: fieldDeco(icon: PhosphorIconsDuotone.calendarBlank).copyWith(
+                suffixIcon: _expires.isEmpty || _role == 'EXTERNAL'
+                    ? null
+                    : IconButton(tooltip: 'No end date', icon: Ic(PhosphorIconsBold.x, size: 14, color: p.muted), onPressed: () => setState(() => _expires = '')),
               ),
+              child: Text(_expires.isEmpty ? 'Pick a date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? C.slate400 : null)),
             ),
           ),
-        ],
+        ),
         if (_error != null) ...[gap16, TvAlert(_error!)],
         gap24,
-        Btn('Create user', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.userPlus, loading: _busy, onPressed: _submit),
+        Btn('Send invitation', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _submit),
       ],
     );
   }

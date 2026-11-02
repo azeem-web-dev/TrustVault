@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
-  ArrowCounterClockwise, Briefcase, CalendarBlank, Crown, Envelope, EnvelopeSimple, Eye, Fingerprint, Globe, IdentificationCard, LockKey, LockSimple, MagnifyingGlass,
-  Prohibit, ShieldCheck, Sparkle, UserPlus, UsersThree, Lock,
+  ArrowCounterClockwise, Briefcase, CalendarBlank, Crown, Envelope, EnvelopeSimple, Eye, Fingerprint, Globe, HourglassMedium, LockKey, MagnifyingGlass,
+  PaperPlaneTilt, Prohibit, ShieldCheck, Sparkle, UserPlus, UsersThree, Lock,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useSession } from '@/components/session';
@@ -17,10 +17,11 @@ interface AdminUser {
   email: string;
   displayName: string;
   role: Role;
-  status: 'ACTIVE' | 'DEACTIVATED';
+  status: 'ACTIVE' | 'DEACTIVATED' | 'INVITED';
   accessExpiresAt: string | null;
   lockedUntil: string | null;
   createdAt: string;
+  activatedAt: string | null;
   isProtected: boolean;
   totpEnabledAt: string | null;
 }
@@ -44,6 +45,7 @@ export default function AdminUsersPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [creating, setCreating] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
+  const [inviting, setInviting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +86,21 @@ export default function AdminUsersPage() {
     }
   }
 
+  // Sends a fresh invitation link; the earlier one stops working.
+  async function resendInvite(u: AdminUser) {
+    setError(null);
+    setInviting(u.id);
+    try {
+      const r = await api.post<{ ok: boolean; sent: boolean }>(`/admin/users/${u.id}/invite`);
+      if (r.sent) toast(`Invitation sent again to ${u.email}. The earlier link no longer works.`);
+      else toast('Email is turned off on this server, so no invitation was sent', 'info');
+    } catch (err) {
+      setError(errorText(err, 'Request failed'));
+    } finally {
+      setInviting(null);
+    }
+  }
+
   const shown = useMemo(() => {
     const term = q.trim().toLowerCase();
     return (users ?? []).filter((u) => (filter === 'all' || u.role === filter) && (!term || u.displayName.toLowerCase().includes(term) || u.email.toLowerCase().includes(term)));
@@ -95,8 +112,8 @@ export default function AdminUsersPage() {
       <PageTitle
         title="Users"
         icon={<UsersThree size={26} />}
-        subtitle="Role changes, deactivation and password resets sign the user out everywhere immediately."
-        actions={<Button variant="primary" icon={<UserPlus size={18} />} onClick={() => setCreating(true)}>Add user</Button>}
+        subtitle="New people are invited by email and choose their own password. Role changes, deactivation and password resets sign the user out everywhere immediately."
+        actions={<Button variant="primary" icon={<UserPlus size={18} />} onClick={() => setCreating(true)}>Invite user</Button>}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
@@ -136,7 +153,7 @@ export default function AdminUsersPage() {
                   const locked = u.lockedUntil && new Date(u.lockedUntil) > new Date();
                   const self = u.id === me?.id;
                   return (
-                    <tr key={u.id} className={cx('transition hover:bg-slate-50/70 dark:hover:bg-white/[0.02]', u.status !== 'ACTIVE' && 'opacity-60')}>
+                    <tr key={u.id} className={cx('transition hover:bg-slate-50/70 dark:hover:bg-white/[0.02]', u.status === 'DEACTIVATED' && 'opacity-60')}>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">
                           <Avatar name={u.displayName} />
@@ -159,7 +176,9 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">
-                          <Badge dot tone={u.status === 'ACTIVE' ? 'green' : 'neutral'}>{u.status === 'ACTIVE' ? 'Active' : 'Deactivated'}</Badge>
+                          {u.status === 'INVITED'
+                            ? <span title="Has not accepted the invitation yet"><Badge tone="amber" icon={<HourglassMedium size={11} />}>Invited</Badge></span>
+                            : <Badge dot tone={u.status === 'ACTIVE' ? 'green' : 'neutral'}>{u.status === 'ACTIVE' ? 'Active' : 'Deactivated'}</Badge>}
                           {locked && <Badge tone="amber" icon={<LockKey size={11} />}>Locked</Badge>}
                           {u.isProtected && <span title="Published demo account: cannot be changed"><Badge tone="violet" icon={<Sparkle size={11} />}>Demo</Badge></span>}
                           {u.totpEnabledAt && <Badge tone="blue" icon={<ShieldCheck size={11} />}>2FA</Badge>}
@@ -173,13 +192,18 @@ export default function AdminUsersPage() {
                           {!self && !u.isProtected && u.totpEnabledAt && (
                             <Button size="sm" variant="ghost" icon={<Fingerprint size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/mfa/reset`), `Second factor reset for ${u.email}; they must set it up again`)}>Reset 2FA</Button>
                           )}
-                          {!self && !u.isProtected && (
+                          {!self && !u.isProtected && u.status === 'INVITED' && (
+                            <Button size="sm" variant="ghost" icon={<PaperPlaneTilt size={14} />} loading={inviting === u.id} onClick={() => void resendInvite(u)}>Resend invite</Button>
+                          )}
+                          {!self && !u.isProtected && u.status === 'ACTIVE' && (
                             <Button size="sm" variant="ghost" icon={<EnvelopeSimple size={14} />} loading={sending === u.id} onClick={() => void sendResetLink(u)}>Send reset link</Button>
                           )}
-                          {!self && !u.isProtected && (u.status === 'ACTIVE' ? (
+                          {!self && !u.isProtected && (u.status === 'INVITED' ? (
+                            <Button size="sm" variant="danger" icon={<Prohibit size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/deactivate`), `Invitation for ${u.email} cancelled`)}>Cancel invite</Button>
+                          ) : u.status === 'ACTIVE' ? (
                             <Button size="sm" variant="danger" icon={<Prohibit size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/deactivate`), `${u.email} deactivated and signed out`)}>Deactivate</Button>
                           ) : (
-                            <Button size="sm" icon={<ArrowCounterClockwise size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/reactivate`), `${u.email} reactivated`)}>Reactivate</Button>
+                            <Button size="sm" icon={<ArrowCounterClockwise size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/reactivate`), u.activatedAt ? `${u.email} reactivated` : `${u.email} is invited again. Use Resend invite to email a new link.`)}>Reactivate</Button>
                           ))}
                           {(self || u.isProtected) && <span className="inline-flex items-center gap-1 text-xs text-slate-400"><Lock size={13} />{self ? 'Your account' : 'Protected'}</span>}
                         </div>
@@ -193,18 +217,26 @@ export default function AdminUsersPage() {
         )}
       </div>
 
-      <CreateUser open={creating} onClose={() => setCreating(false)} onCreated={(email) => { setCreating(false); void run(async () => undefined, `Created ${email}`); }} />
+      <CreateUser
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={(email, invited) => {
+          setCreating(false);
+          if (invited) void run(async () => undefined, `Invitation sent to ${email}. They choose their own name and password.`);
+          else { toast(`${email} was added, but email is turned off on this server, so no invitation was sent`, 'info'); void load(); }
+        }}
+      />
     </Shell>
   );
 }
 
-function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (email: string) => void }) {
-  const [form, setForm] = useState({ email: '', displayName: '', role: 'VIEWER' as Role, password: '', accessExpiresAt: '' });
+function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (email: string, invited: boolean) => void }) {
+  const [form, setForm] = useState({ email: '', role: 'VIEWER' as Role, accessExpiresAt: '' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) { setForm({ email: '', displayName: '', role: 'VIEWER', password: '', accessExpiresAt: '' }); setError(null); }
+    if (open) { setForm({ email: '', role: 'VIEWER', accessExpiresAt: '' }); setError(null); }
   }, [open]);
 
   async function submit(e: FormEvent) {
@@ -212,16 +244,14 @@ function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () =
     setBusy(true);
     setError(null);
     try {
-      await api.post('/admin/users', {
+      const r = await api.post<{ invited: boolean }>('/admin/users', {
         email: form.email,
-        displayName: form.displayName,
         role: form.role,
-        password: form.password,
         ...(form.accessExpiresAt ? { accessExpiresAt: new Date(form.accessExpiresAt).toISOString() } : {}),
       });
-      onCreated(form.email);
+      onCreated(form.email, r.invited);
     } catch (err) {
-      setError(errorText(err, 'Could not create user'));
+      setError(errorText(err, 'Could not send the invitation'));
     } finally {
       setBusy(false);
     }
@@ -233,15 +263,12 @@ function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () =
       onClose={onClose}
       wide
       icon={<UserPlus size={22} />}
-      title="Add a user"
-      description="They can sign in straight away. Administrators must set up a second factor on first sign-in."
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" form="create-user" variant="primary" icon={<UserPlus size={16} />} loading={busy}>Create user</Button></>}
+      title="Invite a user"
+      description="They get an email with a link to choose their own name and password. You never see it. Administrators also set up a second factor on first sign-in."
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" form="create-user" variant="primary" icon={<PaperPlaneTilt size={16} />} loading={busy}>Send invitation</Button></>}
     >
       <form id="create-user" onSubmit={submit} className="space-y-5">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Label label="Email"><Input icon={<Envelope size={18} />} type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.com" /></Label>
-          <Label label="Display name"><Input icon={<IdentificationCard size={18} />} required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="Full name" /></Label>
-        </div>
+        <Label label="Email"><Input icon={<Envelope size={18} />} type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.com" /></Label>
         <div>
           <p className="mb-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">Role</p>
           <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Role">
@@ -260,16 +287,12 @@ function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () =
             ))}
           </div>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Label label="Initial password" hint="12+ characters. Share it with them privately.">
-            <Input icon={<LockSimple size={18} />} type="password" autoComplete="new-password" required minLength={12} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          </Label>
-          {form.role === 'EXTERNAL' && (
-            <Label label="External access ends on (required)">
-              <Input icon={<CalendarBlank size={18} />} type="date" required min={new Date().toISOString().slice(0, 10)} value={form.accessExpiresAt} onChange={(e) => setForm({ ...form, accessExpiresAt: e.target.value })} />
-            </Label>
-          )}
-        </div>
+        <Label
+          label={form.role === 'EXTERNAL' ? 'Access ends on (required)' : 'Access ends on (optional)'}
+          hint={form.role === 'EXTERNAL' ? 'External accounts always have an end date.' : 'Leave empty for no end date.'}
+        >
+          <Input icon={<CalendarBlank size={18} />} type="date" required={form.role === 'EXTERNAL'} min={new Date().toISOString().slice(0, 10)} value={form.accessExpiresAt} onChange={(e) => setForm({ ...form, accessExpiresAt: e.target.value })} />
+        </Label>
         {error && <Alert>{error}</Alert>}
       </form>
     </Modal>
