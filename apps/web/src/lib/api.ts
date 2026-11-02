@@ -25,6 +25,7 @@ export class ApiError extends Error {
 
 let csrfToken: string | null = null;
 let onMfaRequired: (() => void) | null = null;
+let onStepUp: (() => Promise<boolean>) | null = null;
 
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
@@ -35,7 +36,16 @@ export function setMfaHandler(fn: (() => void) | null): void {
   onMfaRequired = fn;
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * Called when the API wants a fresh second factor before a risky action
+ * (403 step_up_required). Resolves true once the user has confirmed, and the
+ * original request is then sent again, once.
+ */
+export function setStepUpHandler(fn: (() => Promise<boolean>) | null): void {
+  onStepUp = fn;
+}
+
+async function call<T>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
   const headers: Record<string, string> = {};
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
@@ -52,6 +62,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (res.status === 204) return undefined as T;
   const data = (await res.json().catch(() => null)) as (T & { message?: string; code?: string; csrfToken?: string }) | null;
   if (!res.ok) {
+    if (res.status === 403 && data?.code === 'step_up_required' && !retried && onStepUp && (await onStepUp())) {
+      return call<T>(method, path, body, true);
+    }
     if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
     const issues = (data as { issues?: { message: string }[] } | null)?.issues;
     const message = issues?.length ? issues.map((i) => i.message).join('; ') : (data?.message ?? `Request failed (${res.status})`);

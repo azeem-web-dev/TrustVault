@@ -1,21 +1,32 @@
 'use client';
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { startRegistration } from '@simplewebauthn/browser';
-import QRCode from 'qrcode';
-import { CheckCircle, Circle, DeviceMobile, Fingerprint, Key, LockSimple, Password, Plus, ShieldCheck, Trash, UserCircleGear } from '@phosphor-icons/react';
+import { CheckCircle, Circle, Desktop, DeviceMobile, Devices, Fingerprint, Key, LockSimple, Password, Plus, ShieldCheck, SignOut, Trash, UserCircleGear } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useSession } from '@/components/session';
 import { useToast } from '@/components/toast';
 import { Alert, Avatar, Badge, Button, Card, IconButton, IconTile, Input, Label, PageTitle, SkeletonRows, relativeTime } from '@/components/ui';
+import { TotpSetupGuide } from '@/components/totp-setup';
 import { api, errorText, formatDate } from '@/lib/api';
 
 interface MfaStatus {
   required: boolean;
+  requiredByRole: boolean;
   satisfied: boolean;
   totp: boolean;
   passkeys: { id: string; name: string; createdAt: string; lastUsedAt: string | null }[];
+}
+
+interface Device {
+  id: string;
+  device: string;
+  ip: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  authLevel: string;
+  current: boolean;
 }
 
 const ROLE_LABEL = { ADMIN: 'Administrator', OWNER: 'Document owner', VIEWER: 'Viewer', EXTERNAL: 'External partner' } as const;
@@ -27,12 +38,16 @@ export default function AccountPage() {
   const [mfa, setMfa] = useState<MfaStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: '', next: '' });
-  const [totp, setTotp] = useState<{ secret: string; qr: string } | null>(null);
+  const [totp, setTotp] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [devices, setDevices] = useState<Device[] | null>(null);
   const [code, setCode] = useState('');
   const [passkeyName, setPasskeyName] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
-  const load = useCallback(() => api.get<MfaStatus>('/auth/mfa').then(setMfa).catch((e) => setError(errorText(e))), []);
+  const load = useCallback(() => Promise.all([
+    api.get<MfaStatus>('/auth/mfa').then(setMfa),
+    api.get<{ sessions: Device[] }>('/auth/sessions').then((r) => setDevices(r.sessions)),
+  ]).catch((e) => setError(errorText(e))), []);
   useEffect(() => {
     void load();
   }, [load]);
@@ -134,34 +149,53 @@ export default function AccountPage() {
 
           <Card title="Authenticator app" icon={<DeviceMobile size={20} />} description="A 6-digit code that changes every 30 seconds." actions={mfa && <Badge tone={mfa.totp ? 'green' : 'neutral'} dot>{mfa.totp ? 'On' : 'Off'}</Badge>}>
             {!mfa ? <SkeletonRows rows={1} /> : mfa.totp ? (
-              <div className="flex items-center gap-3 rounded-xl bg-emerald-50/60 p-4 text-sm dark:bg-emerald-500/10">
+              <div className="flex flex-wrap items-center gap-3 rounded-xl bg-emerald-50/60 p-4 text-sm dark:bg-emerald-500/10">
                 <ShieldCheck size={22} className="text-emerald-600 dark:text-emerald-300" />
-                <span>Set up. You will be asked for a code when you sign in.</span>
+                <span className="min-w-0 flex-1">Set up. You will be asked for a code when you sign in.</span>
+                {!(mfa.requiredByRole && !hasPasskey) && (
+                  <Button variant="danger" size="sm" icon={<Trash size={14} />} loading={busy === 'totp-rm'} onClick={() => void run('totp-rm', () => api.delete('/auth/mfa/totp'), 'Authenticator app removed')}>Remove</Button>
+                )}
               </div>
             ) : totp ? (
-              <form onSubmit={(e) => { e.preventDefault(); void run('totp', async () => { await api.post('/auth/mfa/totp/enable', { code }); setTotp(null); setCode(''); await refresh(); }, 'Authenticator app turned on'); }} className="grid animate-pop gap-5 sm:grid-cols-[auto_1fr]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={totp.qr} alt="QR code for your authenticator app" width={168} height={168} className="mx-auto rounded-2xl bg-white p-2 ring-1 ring-slate-200" />
-                <div className="space-y-3">
-                  <Step n={1}>Open Google Authenticator, 1Password or Authy and scan the code.</Step>
-                  <Step n={2}>Or enter this key: <code className="mt-1 block break-all rounded-lg bg-slate-100 px-2 py-1.5 font-mono text-xs dark:bg-white/10">{totp.secret}</code></Step>
-                  <Step n={3}>Type the 6 digits the app shows.</Step>
+              <form onSubmit={(e) => { e.preventDefault(); void run('totp', async () => { await api.post('/auth/mfa/totp/enable', { code }); setTotp(null); setCode(''); await refresh(); }, 'Authenticator app turned on'); }} className="animate-pop">
+                <TotpSetupGuide secret={totp.secret} otpauthUri={totp.otpauthUri}>
                   <div className="flex gap-2">
-                    <Input className="w-36 text-center font-mono tracking-[0.3em]" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" aria-label="Code from the app" />
+                    <Input className="w-36 text-center font-mono tracking-[0.3em]" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" aria-label="Code from the app" />
                     <Button type="submit" variant="primary" disabled={code.length !== 6} loading={busy === 'totp'}>Turn on</Button>
                   </div>
-                </div>
+                </TotpSetupGuide>
               </form>
             ) : (
               <Button icon={<DeviceMobile size={18} />} loading={busy === 'totp-setup'} onClick={() => void run('totp-setup', async () => {
-                const r = await api.post<{ secret: string; otpauthUri: string }>('/auth/mfa/totp/setup');
-                setTotp({ secret: r.secret, qr: await QRCode.toDataURL(r.otpauthUri, { margin: 1, width: 180 }) });
-              }, 'Scan the code, then enter the 6 digits')}>Set up an authenticator app</Button>
+                setTotp(await api.post<{ secret: string; otpauthUri: string }>('/auth/mfa/totp/setup'));
+              }, 'Follow the three steps to finish')}>Set up Google Authenticator</Button>
             )}
           </Card>
         </div>
 
-        <div className="lg:col-span-2">
+        <div className="space-y-6 lg:col-span-2">
+          <Card title="Signed-in devices" icon={<Devices size={20} />} description="Where your account is signed in now. Sign out anything you don’t recognise." padded={false}
+            actions={devices && devices.length > 1 && (
+              <Button size="sm" variant="danger" icon={<SignOut size={14} />} loading={busy === 'others'} onClick={() => void run('others', () => api.post('/auth/sessions/revoke-others'), 'Signed out everywhere else')}>Sign out all others</Button>
+            )}>
+            {!devices ? <SkeletonRows rows={2} /> : (
+              <ul className="divide-y divide-slate-100 dark:divide-white/[0.05]">
+                {devices.map((d) => (
+                  <li key={d.id} className="flex items-center gap-3 px-5 py-3.5">
+                    <IconTile tone={d.current ? 'green' : 'brand'}>{/app|Android|iPhone/.test(d.device) ? <DeviceMobile size={18} /> : <Desktop size={18} />}</IconTile>
+                    <span className="min-w-0 flex-1 text-sm font-semibold">
+                      {d.device}{d.current && <Badge tone="green" className="ml-2">This device</Badge>}
+                      <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                        {d.ip ?? 'Unknown IP'} · signed in {formatDate(d.createdAt)} · active {relativeTime(d.lastSeenAt)}{d.authLevel !== 'mfa' && ' · password only'}
+                      </span>
+                    </span>
+                    {!d.current && <Button variant="secondary" size="sm" loading={busy === `so-${d.id}`} onClick={() => void run(`so-${d.id}`, () => api.delete(`/auth/sessions/${d.id}`), 'Device signed out')}>Sign out</Button>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
           <Card title="Password" icon={<Password size={20} />} description="Changing it signs you out on every device.">
             <form onSubmit={changePassword} className="space-y-4">
               <Label label="Current password"><Input icon={<LockSimple size={18} />} type="password" autoComplete="current-password" required value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></Label>
@@ -182,15 +216,6 @@ export default function AccountPage() {
         </div>
       </div>
     </Shell>
-  );
-}
-
-function Step({ n, children }: { n: number; children: ReactNode }) {
-  return (
-    <div className="flex gap-3 text-sm">
-      <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-xs font-semibold text-white">{n}</span>
-      <div className="min-w-0 pt-0.5 text-slate-600 dark:text-slate-300">{children}</div>
-    </div>
   );
 }
 

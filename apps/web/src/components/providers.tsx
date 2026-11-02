@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { IconContext } from '@phosphor-icons/react';
 import { SessionProvider } from './session';
+import { StepUpProvider } from './step-up';
 import { ThemeProvider } from './theme';
 import { ToastProvider } from './toast';
 
@@ -13,7 +14,9 @@ export function Providers({ children }: { children: ReactNode }) {
     <IconContext.Provider value={ICONS}>
       <ThemeProvider>
         <ToastProvider>
-          <SessionProvider>{children}</SessionProvider>
+          <SessionProvider>
+            <StepUpProvider>{children}</StepUpProvider>
+          </SessionProvider>
         </ToastProvider>
       </ThemeProvider>
     </IconContext.Provider>

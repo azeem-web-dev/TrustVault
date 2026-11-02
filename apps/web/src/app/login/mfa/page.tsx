@@ -3,11 +3,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
-import QRCode from 'qrcode';
 import { ArrowLeft, CaretRight, DeviceMobile, Fingerprint, Key, ShieldCheckered, SignOut } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
 import { AuthLayout } from '@/components/auth-layout';
 import { Alert, Button, Divider, IconTile, Skeleton } from '@/components/ui';
+import { TotpSetupGuide } from '@/components/totp-setup';
 import { api, errorText } from '@/lib/api';
 
 interface Status {
@@ -26,7 +26,7 @@ export default function MfaPage() {
   const router = useRouter();
   const [status, setStatus] = useState<Status | null>(null);
   const [code, setCode] = useState('');
-  const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -70,8 +70,7 @@ export default function MfaPage() {
   });
 
   const startTotpSetup = () => run(async () => {
-    const r = await api.post<{ secret: string; otpauthUri: string }>('/auth/mfa/totp/setup');
-    setSetup({ secret: r.secret, qr: await QRCode.toDataURL(r.otpauthUri, { margin: 1, width: 220 }) });
+    setSetup(await api.post<{ secret: string; otpauthUri: string }>('/auth/mfa/totp/setup'));
   });
 
   const registerPasskey = () => run(async () => {
@@ -103,7 +102,7 @@ export default function MfaPage() {
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
           {enrolled
             ? <>Signed in as <span className="font-medium text-slate-700 dark:text-slate-200">{user?.email ?? ''}</span>. Your account needs a second factor.</>
-            : 'Administrator accounts must use an authenticator app or a passkey. Choose one to continue.'}
+            : 'Your account must use an authenticator app or a passkey. Choose one to continue.'}
         </p>
       </div>
 
@@ -120,18 +119,9 @@ export default function MfaPage() {
           <form onSubmit={verifyTotp} className="space-y-4">
             {setup && (
               <div className="animate-pop rounded-2xl border border-slate-200 bg-white p-5 shadow-soft dark:border-white/10 dark:bg-white/[0.03]">
-                <ol className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
-                  <li><span className="font-semibold text-brand-600 dark:text-brand-300">1.</span> Open Google Authenticator, 1Password or Authy</li>
-                  <li><span className="font-semibold text-brand-600 dark:text-brand-300">2.</span> Scan this code, then type the 6 digits below</li>
-                </ol>
-                <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={setup.qr} alt="QR code for your authenticator app" width={150} height={150} className="rounded-xl bg-white p-2 ring-1 ring-slate-200" />
-                  <div className="min-w-0 text-center sm:text-left">
-                    <p className="text-xs text-slate-500">Can&apos;t scan? Enter this key:</p>
-                    <code className="mt-1 block break-all rounded-lg bg-slate-100 px-2.5 py-2 font-mono text-xs dark:bg-white/10">{setup.secret}</code>
-                  </div>
-                </div>
+                <TotpSetupGuide secret={setup.secret} otpauthUri={setup.otpauthUri}>
+                  <p className="text-xs text-slate-500">Enter it below.</p>
+                </TotpSetupGuide>
               </div>
             )}
             <label className="block">
@@ -166,7 +156,7 @@ export default function MfaPage() {
 
         {!enrolled && !setup && (
           <div className="grid gap-3">
-            <MethodButton onClick={() => void startTotpSetup()} disabled={busy} icon={<DeviceMobile size={22} />} title="Use an authenticator app" text="Google Authenticator, 1Password, Authy: a new code every 30 seconds." />
+            <MethodButton onClick={() => void startTotpSetup()} disabled={busy} icon={<DeviceMobile size={22} />} title="Use Google Authenticator" text="Or any authenticator app: a new 6-digit code every 30 seconds. Takes a minute." />
             <MethodButton onClick={() => void registerPasskey()} disabled={busy} icon={<Key size={22} />} title="Use a passkey (this device)" text="Face, fingerprint, PIN or a security key. Can't be phished." recommended />
           </div>
         )}
