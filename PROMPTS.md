@@ -214,6 +214,27 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 ---
 
+## 2026-11-02 — An Android app with the same interface (authentication)
+
+**Asked (Claude):** "build flutter apk too same ui clean and all stuff as it is".
+
+**Decisions I made, and why:**
+- **Same API, no new API.** The app calls the live API, so every check (application and RLS), every audit entry and every revocation rule is the server's, not the app's. Before writing it I read `security.guard.ts` to see whether a native client could pass. The Origin check refuses only a *different* origin, and a request with no Origin still needs the CSRF token. So no server change was needed, and none was made to make the app work.
+- **The session on the phone** is the same cookie value, kept in Android's encrypted storage and excluded from backup. The CSRF token is in memory only, as on the web. THREATS.md S13 records what this does *not* protect against (root on an unlocked phone).
+- **Passkeys stay on the website.** They are bound to the web origin; making them work in an app needs a Digital Asset Links file and a second accepted origin on the server. That widens what the server accepts, for a demo, so I left it out and said so in the app.
+- **Testing sign-in against the local API, not production.** Signing in sends a password, so the emulator run used a debug build pointed at a local API with dev-only seed accounts. HTTP to localhost is allowed only in debug and profile builds; release refuses plain HTTP.
+
+**What the AI got wrong:**
+- **It wrote the whole UI against an icon package that does not compile.** `phosphor_flutter` 2.1.0 extends `IconData`, which became a `final` class in this Flutter version. `flutter analyze` passed (it does not analyse dependencies), and only the release build failed. No fixed release exists. Instead, the app's icons are generated from the web app's own `@phosphor-icons/react` package into one Dart file (`tool/gen-assets.tsx`), so web and app draw the same icons from one source.
+- **It guessed an old file-picker API.** It wrote `FilePicker.platform.pickFiles` and `file.size`/`file.path`, from older versions. Version 13 has a static `pickFile`, no size field, and `path` can be null for files that come from content providers. I checked the package source, switched uploads to read bytes, and size comes from `length()`.
+- **It reported an emulator crash that was not one.** The debug build was too slow on a software-rendered emulator, Android showed "not responding", and the keystrokes the test sent closed the dialog. The log showed an ANR, not an exception. The fix was a compiled (profile) build, not a code change.
+- **It tried to stop every Java process** to free memory for the emulator. The command was refused because it could have hit unrelated programs on the machine. The emulator was simply restarted; nothing else was stopped.
+- **It overstated testing in the write-up**, saying the app was "checked on an emulator and a phone" when only the sign-in screen had been seen. Corrected to say exactly what was checked.
+
+**Commit:** [b1fce4a](https://github.com/azeem-web-dev/TrustVault/commit/b1fce4a)
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:
