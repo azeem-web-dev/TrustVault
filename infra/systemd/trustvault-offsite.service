@@ -1,0 +1,25 @@
+[Unit]
+Description=TrustVault off-site backup copy to Object Lock storage (optional; see docs/BACKUP_DR.md)
+# Not installed by default. Does nothing unless /etc/trustvault-backup/offsite.env sets OFFSITE_ENABLED=1.
+After=network-online.target trustvault-backup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/trustvault-offsite-push
+Nice=10
+IOSchedulingClass=idle
+# Reads the encrypted backups; writes only its own state. Needs outbound HTTPS.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/backups/trustvault /etc/trustvault-backup
+StateDirectory=trustvault-offsite
+Environment=HOME=/var/lib/trustvault-offsite
+UMask=0077
