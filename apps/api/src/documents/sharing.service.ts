@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../db/prisma.service.js';
+import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { GrantLevel } from '../generated/prisma/enums.js';
@@ -15,6 +15,15 @@ export interface GrantInput {
 }
 
 const MAX_GRANT_DAYS = 366;
+
+const LEVEL_NAME = ['NONE', 'READ', 'EDIT', 'MANAGE', 'OWNER'] as const;
+
+/** What a person can still do on a document, from the database lock (live). */
+export async function remainingLevel(tx: Tx, documentId: string, userId: string): Promise<string | null> {
+  const rows = await tx.$queryRaw<{ l: number }[]>`SELECT tv_doc_level(${documentId}::uuid, ${userId}::uuid) AS l`;
+  const l = rows[0]?.l ?? 0;
+  return l > 0 ? LEVEL_NAME[l]! : null;
+}
 
 /**
  * Granting and revoking. The rules are checked here (clear error messages,
@@ -42,6 +51,7 @@ export class SharingService {
           id: true, level: true, expiresAt: true, createdAt: true,
           user: { select: { id: true, displayName: true, email: true, role: true, status: true } },
           group: { select: { id: true, name: true, _count: { select: { members: true } } } },
+          _count: { select: { coveredMembers: true } },
           grantedBy: { select: { displayName: true } },
         },
       });
@@ -52,7 +62,7 @@ export class SharingService {
           expired: g.expiresAt !== null && g.expiresAt <= new Date(),
           subject: g.user
             ? { type: 'user' as const, id: g.user.id, name: g.user.displayName, email: g.user.email, role: g.user.role, active: g.user.status === 'ACTIVE' }
-            : { type: 'group' as const, id: g.group!.id, name: g.group!.name, members: g.group!._count.members },
+            : { type: 'group' as const, id: g.group!.id, name: g.group!.name, members: g.group!._count.members, covered: g._count.coveredMembers, pending: Math.max(0, g.group!._count.members - g._count.coveredMembers) },
         })),
       };
     });
@@ -79,6 +89,7 @@ export class SharingService {
         if (input.userId === doc.ownerId) throw new BadRequestException('The owner already has full access');
         const target = await tx.user.findUnique({ where: { id: input.userId }, select: { id: true, email: true, role: true, status: true, accessExpiresAt: true } });
         if (!target || target.status !== 'ACTIVE') throw new BadRequestException('That person does not have an active account');
+        if (target.role === 'ADMIN') throw new BadRequestException('Administrators cannot be given access to documents');
         if (target.role === 'EXTERNAL') {
           if (input.level !== 'READ') throw new BadRequestException('External people can only be given READ access');
           // An external grant never outlives the external account.
@@ -90,6 +101,11 @@ export class SharingService {
       } else {
         const group = await tx.group.findUnique({ where: { id: input.groupId! }, select: { id: true, name: true } });
         if (!group) throw new BadRequestException('Group not found');
+        // A manager sharing with their own group would keep access through it
+        // after the owner revokes them (THREATS.md R7). Only the owner may.
+        if (decision.level < Level.OWNER && await tx.groupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: actor.userId } }, select: { userId: true } })) {
+          throw new ForbiddenException('Only the owner can share with a group you belong to');
+        }
         subject = { type: 'group', id: group.id, name: group.name };
       }
 
@@ -106,12 +122,18 @@ export class SharingService {
             data: { documentId, userId: input.userId ?? null, groupId: input.groupId ?? null, level: input.level, expiresAt, grantedById: actor.userId },
           });
 
+      // A group share covers the members there now; anyone added later waits
+      // for the owner or a manager to confirm (THREATS.md A19).
+      const covered = input.groupId
+        ? (await tx.$queryRaw<{ n: number }[]>`SELECT tv_confirm_group_members(${saved.id}::uuid, ${actor.userId}::uuid) AS n`)[0]!.n
+        : null;
       await this.audit.record({
         action: existing ? 'access.change' : 'access.grant', outcome: 'ALLOWED', targetType: 'grant', targetId: saved.id, documentId,
         details: {
           subject: subject as never, level: input.level, expiresAt: expiresAt?.toISOString() ?? null,
           previous: existing ? { level: existing.level, expiresAt: existing.expiresAt?.toISOString() ?? null } : null,
           source: input.fromSuggestion ? 'suggestion_confirmed_by_owner' : 'manual',
+          ...(covered !== null ? { membersCovered: covered } : {}),
         },
       }, tx);
       return { id: saved.id };
@@ -130,10 +152,14 @@ export class SharingService {
         throw new ForbiddenException('Only the owner can remove MANAGE access');
       }
       await tx.grant.delete({ where: { id: grant.id } });
+      // Revoking a person's own grant does not touch group grants that also
+      // cover them. Say so instead of claiming their access is gone (R7).
+      const stillHas = grant.userId ? await remainingLevel(tx, documentId, grant.userId) : null;
       await this.audit.record({
         action: 'access.revoke', outcome: 'ALLOWED', targetType: 'grant', targetId: grant.id, documentId,
-        details: { level: grant.level, subject: grant.userId ? { type: 'user', id: grant.userId, email: grant.user?.email ?? null } : { type: 'group', id: grant.groupId, name: grant.group?.name ?? null } },
+        details: { level: grant.level, stillHas, subject: grant.userId ? { type: 'user', id: grant.userId, email: grant.user?.email ?? null } : { type: 'group', id: grant.groupId, name: grant.group?.name ?? null } },
       }, tx);
+      return { stillHas };
     });
   }
 

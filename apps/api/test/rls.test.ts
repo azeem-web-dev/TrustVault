@@ -109,16 +109,16 @@ describe('row-level security: writes', () => {
 
   it('nobody can write a grant in someone else’s name', async () => {
     await asUser(ids.vic, async () => {
-      await expect(grantAs(ids.alice, ids.vic, 'MANAGE')).rejects.toThrow(/row-level security/);
+      await expect(grantAs(ids.alice, ids.vic, 'MANAGE')).rejects.toThrow(/row-level security|only an active document owner/);
     });
   });
 
   it('a VIEWER cannot create documents, and nobody can create one owned by someone else', async () => {
     await asUser(ids.vic, async () => {
-      await expect(app.query(`INSERT INTO documents (id, owner_id, title, category, updated_at) VALUES ($1, $2, 't', 'c', now())`, [id(), ids.vic])).rejects.toThrow(/row-level security/);
+      await expect(app.query(`INSERT INTO documents (id, owner_id, title, category, updated_at) VALUES ($1, $2, 't', 'c', now())`, [id(), ids.vic])).rejects.toThrow(/row-level security|only an active document owner/);
     });
     await asUser(ids.bob, async () => {
-      await expect(app.query(`INSERT INTO documents (id, owner_id, title, category, updated_at) VALUES ($1, $2, 't', 'c', now())`, [id(), ids.alice])).rejects.toThrow(/row-level security/);
+      await expect(app.query(`INSERT INTO documents (id, owner_id, title, category, updated_at) VALUES ($1, $2, 't', 'c', now())`, [id(), ids.alice])).rejects.toThrow(/row-level security|only an active document owner/);
     });
   });
 });
@@ -206,7 +206,11 @@ describe('tv_doc_level: the SQL access decision', () => {
     const g = id();
     await owner.query(`INSERT INTO groups (id, name) VALUES ($1, 'Team')`, [g]);
     await owner.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, ids.vic]);
-    await owner.query(`INSERT INTO grants (id, document_id, group_id, level, granted_by_id, updated_at) VALUES ($1, $2, $3, 'EDIT', $4, now())`, [id(), doc, g, ids.alice]);
+    const gr = id();
+    await owner.query(`INSERT INTO grants (id, document_id, group_id, level, granted_by_id, updated_at) VALUES ($1, $2, $3, 'EDIT', $4, now())`, [gr, doc, g, ids.alice]);
+    // A group grant covers only members the sharer confirmed (THREATS.md A19).
+    expect(await level(ids.vic)).toBe(0);
+    await owner.query(`INSERT INTO grant_group_members (grant_id, user_id) VALUES ($1, $2)`, [gr, ids.vic]);
     expect(await level(ids.vic)).toBe(2);
     await owner.query(`DELETE FROM group_members WHERE user_id = $1`, [ids.vic]);
     expect(await level(ids.vic)).toBe(0);

@@ -65,6 +65,7 @@ model User {
   grants           Grant[]           @relation("GrantUser")
   grantsGiven      Grant[]           @relation("GrantGrantedBy")
   groupMemberships GroupMember[]
+  groupGrantCoverage GrantGroupMember[]
   versionsUploaded DocumentVersion[]
   breakGlass       BreakGlass[]
   passkeys         Passkey[]
@@ -87,6 +88,13 @@ model Session {
   expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
   ip         String?
   userAgent  String?  @map("user_agent")
+  /// Set when the session is ended (logout, password or role change,
+  /// deactivation...). A revoked session never works again; the row is kept
+  /// until expiry so a later attempt with it is recorded (THREATS.md L10).
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason String?   @map("revoked_reason")
+  /// When the first request with this ended session was refused and recorded.
+  rejectedAt    DateTime? @map("rejected_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -247,12 +255,29 @@ model Grant {
   user      User?    @relation("GrantUser", fields: [userId], references: [id])
   group     Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   grantedBy User     @relation("GrantGrantedBy", fields: [grantedById], references: [id])
+  /// For a group grant: the members the sharer confirmed (THREATS.md A19).
+  coveredMembers GrantGroupMember[]
 
   @@unique([documentId, userId])
   @@unique([documentId, groupId])
   @@index([userId])
   @@index([groupId])
   @@map("grants")
+}
+
+/// Who a group grant covers: the group members at the moment the owner (or a
+/// manager) shared or confirmed. Written only by tv_confirm_group_members().
+model GrantGroupMember {
+  grantId     String   @map("grant_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  confirmedAt DateTime @default(now()) @map("confirmed_at") @db.Timestamptz(6)
+
+  grant Grant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([grantId, userId])
+  @@index([userId])
+  @@map("grant_group_members")
 }
 
 model Group {

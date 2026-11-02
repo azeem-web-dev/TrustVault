@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
@@ -77,6 +80,11 @@ class Session extends ChangeNotifier {
 
   Future<void> _reset() async {
     await Api.I.clearSession();
+    // Downloaded copies are decrypted files: they leave with the session.
+    try {
+      final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/downloads');
+      if (await dir.exists()) await dir.delete(recursive: true);
+    } catch (_) {}
     user = null;
     mfaPending = false;
     notifyListeners();

@@ -85,10 +85,31 @@ export class UsersService {
       // A role change alters what the person may do, so their existing
       // sessions end now rather than carrying the old role.
       const roleChanged = role !== before.role;
-      const ended = roleChanged ? await this.sessions.revokeAllForUser(id, tx) : 0;
+      // A changed access end date also ends sessions: an external whose access
+      // had lapsed must not find an old cookie working again once it is
+      // extended (THREATS.md R9).
+      const expiryChanged = (accessExpiresAt?.getTime() ?? null) !== (before.accessExpiresAt?.getTime() ?? null);
+      const ended = roleChanged || expiryChanged
+        ? await this.sessions.revokeAllForUser(id, tx, undefined, roleChanged ? 'role_changed' : 'access_expiry_changed')
+        : 0;
+      // Admins never read documents, and only owners own them (THREATS.md A17,
+      // A20): leaving OWNER is refused while the person owns documents;
+      // becoming ADMIN or EXTERNAL drops their grants and groups; leaving
+      // ADMIN ends any break-glass window. Done in the database, same lock.
+      const promotion = roleChanged
+        ? await tx.$queryRaw<{ r: { grantsRemoved: number; groupsLeft: number; breakGlassEnded: number } }[]>`SELECT tv_after_role_change(${id}::uuid, ${before.role}::"Role") AS r`.then(
+            (rows) => rows[0]!.r,
+            (err: unknown) => {
+              if (String((err as Error).message).includes('before changing their role')) {
+                throw new BadRequestException('This person owns documents. Transfer or delete them before changing their role.');
+              }
+              throw err;
+            },
+          )
+        : null;
       await this.audit.record({
         action: 'user.update', outcome: 'ALLOWED', targetType: 'user', targetId: id,
-        details: { from: { role: before.role, displayName: before.displayName, accessExpiresAt: before.accessExpiresAt?.toISOString() ?? null }, to: { role, displayName: user.displayName, accessExpiresAt: accessExpiresAt?.toISOString() ?? null }, sessionsEnded: ended },
+        details: { from: { role: before.role, displayName: before.displayName, accessExpiresAt: before.accessExpiresAt?.toISOString() ?? null }, to: { role, displayName: user.displayName, accessExpiresAt: accessExpiresAt?.toISOString() ?? null }, sessionsEnded: ended, ...(promotion ? { promotion } : {}) },
       }, tx);
       return user;
     });
@@ -102,7 +123,9 @@ export class UsersService {
       if (before.status === 'DEACTIVATED') return before;
       if (before.role === 'ADMIN') await this.ensureAnotherAdmin(tx, id);
       const user = await tx.user.update({ where: { id }, data: { status: 'DEACTIVATED', deactivatedAt: new Date() }, select: VIEW });
-      const ended = await this.sessions.revokeAllForUser(id, tx);
+      const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'deactivated');
+      // An admin's open break-glass window must not outlive the account (A21).
+      await tx.$queryRaw`SELECT tv_end_break_glass(${id}::uuid)`;
       await this.audit.record({ action: 'user.deactivate', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);
       return user;
     });
@@ -124,7 +147,7 @@ export class UsersService {
     await this.prisma.$transaction(async (tx) => {
       assertNotProtected(await this.lockUser(tx, id));
       await tx.user.update({ where: { id }, data: { passwordHash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null } });
-      const ended = await this.sessions.revokeAllForUser(id, tx);
+      const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'password_reset_by_admin');
       await this.audit.record({ action: 'user.password_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);
     });
   }
@@ -136,7 +159,7 @@ export class UsersService {
       assertNotProtected(await this.lockUser(tx, id));
       await tx.user.update({ where: { id }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
       const removed = await tx.passkey.deleteMany({ where: { userId: id } });
-      const ended = await this.sessions.revokeAllForUser(id, tx);
+      const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'second_factor_reset_by_admin');
       await this.audit.record({ action: 'user.mfa_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { passkeysRemoved: removed.count, sessionsEnded: ended } }, tx);
     });
   }

@@ -65,6 +65,13 @@ export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): {
   if (user.status !== 'ACTIVE') return { level: Level.NONE, reason: 'user_inactive' };
   if (user.accessExpiresAt && new Date(user.accessExpiresAt) <= now) return { level: Level.NONE, reason: 'user_access_expired' };
 
+  // Administrators manage people, not documents: no ownership, no grants,
+  // no groups. Only an unexpired break-glass gives READ (THREATS.md A9, A17).
+  if (user.role === 'ADMIN') {
+    if (doc.status === 'ACTIVE' && facts.breakGlassUntil && new Date(facts.breakGlassUntil) > now) return { level: Level.READ, reason: 'break_glass' };
+    return { level: Level.NONE, reason: 'admin_no_document_access' };
+  }
+
   if (doc.ownerId === userId) return { level: Level.OWNER, reason: 'owner' };
   if (doc.status !== 'ACTIVE') return { level: Level.NONE, reason: 'document_deleted' };
 
@@ -74,12 +81,7 @@ export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): {
     if (g.viaGroup && user.role === 'EXTERNAL') continue;               // externals never get access through groups
     level = Math.max(level, GRANT_LEVEL[g.level]);
   }
-  let reason = level > Level.NONE ? 'grant' : 'no_grant';
-
-  if (level === Level.NONE && user.role === 'ADMIN' && facts.breakGlassUntil && new Date(facts.breakGlassUntil) > now) {
-    level = Level.READ;
-    reason = 'break_glass';
-  }
+  const reason = level > Level.NONE ? 'grant' : 'no_grant';
   if (user.role === 'EXTERNAL') level = Math.min(level, Level.READ);    // externals: read at most
   return { level, reason };
 }
@@ -111,6 +113,13 @@ export class AccessService {
    * does not exist, so the caller learns nothing about what is there.
    */
   async require(tx: Tx, actor: Actor, documentId: string, action: DocAction): Promise<Decision> {
+    // Anything that changes a document or its access takes a per-document lock
+    // first, held until commit. A revoke and an upload by the person being
+    // revoked are then ordered: the upload either finished before the revoke,
+    // or is decided after it and refused (THREATS.md R10). Reads stay parallel.
+    if (action !== 'view' && action !== 'download') {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentId}::text, 0))`;
+    }
     const decision = evaluate(await this.facts(tx, documentId, actor.userId), actor.userId, action);
     if (!decision.allowed) {
       await this.audit.record({

@@ -89,6 +89,7 @@ export class GroupsController {
       const user = await tx.user.findUnique({ where: { id: body.userId }, select: { role: true, status: true, email: true } });
       if (!user || user.status !== 'ACTIVE') throw new BadRequestException('User not found or inactive');
       if (user.role === 'EXTERNAL') throw new BadRequestException('External people cannot be added to groups');
+      if (user.role === 'ADMIN') throw new BadRequestException('Administrators cannot join groups: they never get document access');
       const group = await tx.group.findUnique({ where: { id: id(groupId) }, select: { name: true } });
       if (!group) throw new NotFoundException('Group not found');
       await tx.groupMember.upsert({ where: { groupId_userId: { groupId, userId: body.userId } }, create: { groupId, userId: body.userId }, update: {} });

@@ -47,6 +47,7 @@ interface Doc {
 }
 
 type Tab = 'overview' | 'versions' | 'access' | 'history';
+const LEVEL_WORD: Record<string, string> = { READ: 'read', EDIT: 'edit', MANAGE: 'manage', OWNER: 'own' };
 const RANK: Record<Access, number> = { NONE: 0, READ: 1, EDIT: 2, MANAGE: 3, OWNER: 4 };
 
 export default function DocumentPage() {
@@ -186,7 +187,10 @@ export default function DocumentPage() {
               onTrash={() => act(() => api.post(`/documents/${doc.id}/trash`), 'Moved to the trash. Nobody else can reach it now.')}
               onRestore={() => act(() => api.post(`/documents/${doc.id}/restore`), 'Restored')}
               onPurge={() => act(() => api.delete(`/documents/${doc.id}`), 'Deleted permanently', () => router.replace('/'))}
-              onTransfer={(newOwnerId) => act(() => api.post(`/documents/${doc.id}/transfer`, { newOwnerId }), 'Ownership transferred', () => router.replace('/'))}
+              onTransfer={(newOwnerId) => act(async () => {
+                const r = await api.post<{ stillHas: string | null }>(`/documents/${doc.id}/transfer`, { newOwnerId });
+                if (r?.stillHas) toast(`You no longer own it, but you can still ${LEVEL_WORD[r.stillHas] ?? 'open'} it through a group.`, 'info');
+              }, 'Ownership transferred', () => router.replace('/'))}
               onMove={(folderId) => act(() => api.patch(`/documents/${doc.id}`, { folderId }), 'Moved')}
             />
           )}
@@ -357,7 +361,7 @@ interface GrantRow {
   expiresAt: string | null;
   expired: boolean;
   grantedBy: string;
-  subject: { type: 'user'; id: string; name: string; email: string; role: string; active: boolean } | { type: 'group'; id: string; name: string; members: number };
+  subject: { type: 'user'; id: string; name: string; email: string; role: string; active: boolean } | { type: 'group'; id: string; name: string; members: number; covered?: number; pending?: number };
 }
 
 interface Suggestion { type: 'user' | 'group'; id: string; name: string; detail: string; level: Level; why: string }
@@ -422,8 +426,10 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
   const revoke = async (g: GrantRow) => {
     onError(null);
     try {
-      await api.delete(`/documents/${doc.id}/access/${g.id}`);
-      toast(`Access removed for ${g.subject.name}. It stops working on their next request.`);
+      const r = await api.delete<{ stillHas: string | null }>(`/documents/${doc.id}/access/${g.id}`);
+      // Their own grant is gone, but a group grant may still cover them. Say so.
+      if (r?.stillHas) toast(`Removed ${g.subject.name}'s own access, but they can still ${LEVEL_WORD[r.stillHas] ?? 'open'} it through a group. Remove that group's grant to cut them off.`, 'info');
+      else toast(`Access removed for ${g.subject.name}. It stops working on their next request.`);
       await load();
     } catch (err) {
       onError(errorText(err));
@@ -528,6 +534,12 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
                     {g.subject.type === 'user' && <>{g.subject.email} · </>}granted by {g.grantedBy}
                     {g.expiresAt && <> · {g.expired ? <span className="font-medium text-red-600">expired</span> : 'expires'} {formatDate(g.expiresAt)}</>}
                   </p>
+                  {g.subject.type === 'group' && (g.subject.pending ?? 0) > 0 && (
+                    <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
+                      {g.subject.pending} added to the group since you shared. They cannot open it until you confirm.
+                      <Button size="sm" variant="soft" icon={<UserPlus size={14} />} onClick={() => void share({ groupId: g.subject.id }, g.level, g.expiresAt, false, `group ${g.subject.name}`)}>Confirm</Button>
+                    </p>
+                  )}
                 </div>
                 <Badge dot tone={ACCESS_TONE[g.level]}>{ACCESS_LABEL[g.level]}</Badge>
                 {(doc.isOwner || g.level !== 'MANAGE') && (

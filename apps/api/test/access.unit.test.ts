@@ -131,6 +131,23 @@ describe('decide(): admin and break-glass', () => {
     expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: PAST }))).toEqual([]);
   });
 
+  it('an admin gets nothing from a direct grant, a group grant, or MANAGE (THREATS.md A17)', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', grants: [{ level: 'READ', expiresAt: null, viaGroup: false }] }))).toEqual([]);
+    expect(allowedSet(facts({ role: 'ADMIN', grants: [{ level: 'MANAGE', expiresAt: null, viaGroup: true }] }))).toEqual([]);
+  });
+
+  it('an admin who somehow owns a document still gets nothing from ownership', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', document: { ownerId: ME, status: 'ACTIVE' } }))).toEqual([]);
+  });
+
+  it('break-glass gives READ only, even if the admin also holds a grant', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE, grants: [{ level: 'MANAGE', expiresAt: null, viaGroup: false }] }))).toEqual([...READ_ACTIONS].sort());
+  });
+
+  it('break-glass does not open a document in the trash', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE, document: { ownerId: OTHER, status: 'DELETED' } }))).toEqual([]);
+  });
+
   it('break-glass only works for admins', () => {
     expect(allowedSet(facts({ role: 'OWNER', breakGlassUntil: FUTURE }))).toEqual([]);
   });

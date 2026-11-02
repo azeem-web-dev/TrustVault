@@ -56,6 +56,8 @@ beforeEach(async () => {
     await grant(d.trashed, { user: u.vic });
     // Erin should never be in a group (trigger), but if she were, the filter must still ignore it.
     await db.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2), ($1, $3)`, [group, u.vic, u.erin]);
+    // The sharer confirmed the group's members (THREATS.md A19).
+    await db.query(`INSERT INTO grant_group_members (grant_id, user_id) SELECT g.id, gm.user_id FROM grants g JOIN group_members gm ON gm.group_id = g.group_id`);
     await db.query(`ALTER TABLE grants ENABLE TRIGGER grants_guard; ALTER TABLE group_members ENABLE TRIGGER group_members_guard`);
   });
 });
@@ -69,6 +71,16 @@ describe('buildSearchWhere: the application-side access filter', () => {
 
   it('a grantee finds direct and group grants, not expired grants or trashed documents', async () => {
     expect(await titles(u.vic, 'VIEWER')).toEqual(['group-doc', 'shared-with-vic']);
+  });
+
+  it('a group member the sharer never confirmed finds nothing through the group (A19)', async () => {
+    await withDb(ownerDb(), (db) => db.query(`DELETE FROM grant_group_members WHERE user_id = $1`, [u.vic]));
+    expect(await titles(u.vic, 'VIEWER')).toEqual(['shared-with-vic']);
+  });
+
+  it('an admin finds nothing, even a document they own or a grant they hold (A17, A20)', async () => {
+    expect(await titles(u.vic, 'ADMIN' as 'VIEWER')).toEqual([]);
+    expect(await titles(u.alice, 'ADMIN' as 'OWNER')).toEqual([]);
   });
 
   it('an external user finds only direct grants, never group ones', async () => {

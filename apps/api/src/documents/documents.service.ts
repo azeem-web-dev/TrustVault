@@ -7,6 +7,7 @@ import { blobAad, openFile, sealFile, sha256 } from '../crypto/file-crypto.js';
 import type { Actor } from '../common/request-context.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
+import { remainingLevel } from './sharing.service.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
 
@@ -49,11 +50,14 @@ type ListRow = Prisma.DocumentGetPayload<{ select: typeof LIST_SELECT }>;
  */
 export function accessFilter(actor: Pick<Actor, 'userId' | 'role'>, now: Date = new Date()): Prisma.DocumentWhereInput {
   const me = actor.userId;
+  // Admins never see documents through search (THREATS.md A17, A20).
+  if (actor.role === 'ADMIN') return { id: { in: [] } };
   const liveGrant: Prisma.GrantWhereInput = { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] };
   const mine: Prisma.GrantWhereInput =
     actor.role === 'EXTERNAL'
       ? { userId: me }
-      : { OR: [{ userId: me }, { group: { members: { some: { userId: me } } } }] };
+      // A group grant counts only for members the sharer confirmed (A19).
+      : { OR: [{ userId: me }, { AND: [{ group: { members: { some: { userId: me } } } }, { coveredMembers: { some: { userId: me } } }] }] };
   return { OR: [{ ownerId: me }, { grants: { some: { AND: [liveGrant, mine] } } }] };
 }
 
@@ -312,7 +316,10 @@ export class DocumentsService {
       if (!target || target.role !== 'OWNER' || target.status !== 'ACTIVE') throw new BadRequestException('The new owner must be an active document owner');
       await tx.grant.deleteMany({ where: { documentId: id, userId: newOwnerId } });
       await tx.document.update({ where: { id }, data: { ownerId: newOwnerId, folderId: null } });
-      await this.audit.record({ action: 'document.transfer', outcome: 'ALLOWED', targetType: 'document', targetId: id, documentId: id, details: { from: actor.userId, to: newOwnerId, toEmail: target.email } }, tx);
+      // The former owner can still be covered by a group grant (THREATS.md A15). Say so.
+      const stillHas = await remainingLevel(tx, id, actor.userId);
+      await this.audit.record({ action: 'document.transfer', outcome: 'ALLOWED', targetType: 'document', targetId: id, documentId: id, details: { from: actor.userId, to: newOwnerId, toEmail: target.email, formerOwnerStillHas: stillHas } }, tx);
+      return { stillHas };
     });
   }
 

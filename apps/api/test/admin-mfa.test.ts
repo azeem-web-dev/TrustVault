@@ -106,7 +106,7 @@ describe('admin audit view', () => {
     const doc = (await as(t, so).upload('/api/documents', PDF, 'a.pdf', { title: 'Audit me', category: 'Audit' })).body.id as string;
     const g = await as(t, so).put(`/api/documents/${doc}/access`, { userId: v.id, level: 'READ' });
     await as(t, sv).get(`/api/documents/${doc}/download`).expect(200);
-    await as(t, so).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(204);
+    await as(t, so).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(200);
     await as(t, sv).get(`/api/documents/${doc}/download`).expect(404);
     return { sa, doc, v };
   }

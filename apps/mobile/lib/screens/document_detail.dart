@@ -276,7 +276,15 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
             onTrash: () => _act(() => Api.I.post('/documents/${doc['id']}/trash'), 'Moved to the trash. Nobody else can reach it now.'),
             onRestore: () => _act(() => Api.I.post('/documents/${doc['id']}/restore'), 'Restored'),
             onPurge: () => _act(() => Api.I.delete('/documents/${doc['id']}'), 'Deleted permanently', after: () => Navigator.pop(context)),
-            onTransfer: (id) => _act(() => Api.I.post('/documents/${doc['id']}/transfer', {'newOwnerId': id}), 'Ownership transferred', after: () => Navigator.pop(context)),
+            onTransfer: (id) => _act(
+              () async {
+                final r = await Api.I.post('/documents/${doc['id']}/transfer', {'newOwnerId': id});
+                final still = r is Map ? r['stillHas'] as String? : null;
+                if (still != null && context.mounted) toast(context, 'You no longer own it, but you can still ${_levelWord(still)} it through a group.', tone: Tone.amber);
+              },
+              'Ownership transferred',
+              after: () => Navigator.pop(context),
+            ),
             onMove: (folderId) => _act(() => Api.I.patch('/documents/${doc['id']}', {'folderId': folderId}), 'Moved'),
           ),
         ],
@@ -813,8 +821,15 @@ class _AccessPanelState extends State<_AccessPanel> {
   Future<void> _revoke(Map g) async {
     widget.onError(null);
     try {
-      await Api.I.delete('/documents/$_docId/access/${g['id']}');
-      if (mounted) toast(context, 'Access removed for ${(g['subject'] as Map)['name']}. It stops working on their next request.');
+      final r = await Api.I.delete('/documents/$_docId/access/${g['id']}');
+      final name = (g['subject'] as Map)['name'];
+      final still = r is Map ? r['stillHas'] as String? : null;
+      // Their own grant is gone, but a group grant may still cover them. Say so.
+      if (mounted) {
+        still != null
+            ? toast(context, "Removed $name's own access, but they can still ${_levelWord(still)} it through a group. Remove that group's grant to cut them off.", tone: Tone.amber)
+            : toast(context, 'Access removed for $name. It stops working on their next request.');
+      }
       await _load();
     } catch (e) {
       widget.onError(errorText(e));
@@ -1101,6 +1116,12 @@ class _AccessPanelState extends State<_AccessPanel> {
       (isOwner || level != 'MANAGE') ? IconBtn(PhosphorIconsDuotone.trash, tooltip: 'Remove access for ${s['name']}', danger: true, onPressed: () => _revoke(g)) : null,
       extra: [
         if (!isGroup && s['role'] == 'EXTERNAL') const TvBadge('External', tone: Tone.amber),
+        // People added to the group after it was shared wait for the owner (THREATS.md A19).
+        if (isGroup && ((s['pending'] as int?) ?? 0) > 0)
+          Press(
+            onTap: () => _share({'groupId': s['id'] as String}, level, g['expiresAt'] as String?, label: 'group ${s['name']}'),
+            child: TvBadge('${s['pending']} waiting · tap to confirm', tone: Tone.amber, icon: PhosphorIconsDuotone.userPlus),
+          ),
         if (!isGroup && s['active'] == false) const TvBadge('Inactive', tone: Tone.red),
       ],
     );
@@ -1413,3 +1434,5 @@ class _OwnerActionsState extends State<_OwnerActions> {
     );
   }
 }
+
+String _levelWord(String level) => const {'READ': 'read', 'EDIT': 'edit', 'MANAGE': 'manage', 'OWNER': 'own'}[level] ?? 'open';

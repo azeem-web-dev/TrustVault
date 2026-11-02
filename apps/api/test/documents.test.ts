@@ -34,8 +34,8 @@ async function upload(s: Session, title = 'Salary letter', body: Buffer = PDF, n
 
 const grant = (s: Session, docId: string, body: object) => as(t, s).put(`/api/documents/${docId}/access`, body);
 
-/** Every route that names a document, with how to call it. */
-function routes(docId: string) {
+/** Every route that names a document, with how to call it. `grantId` should be a real grant on the document. */
+function routes(docId: string, grantId = '3f0e7a52-5b1a-4c1e-9d2a-1b2c3d4e5f60') {
   return [
     ['view', (s: Session) => as(t, s).get(`/api/documents/${docId}`)],
     ['download', (s: Session) => as(t, s).get(`/api/documents/${docId}/download`)],
@@ -44,6 +44,7 @@ function routes(docId: string) {
     ['new version', (s: Session) => as(t, s).upload(`/api/documents/${docId}/versions`, PDF, 'x.pdf')],
     ['access list', (s: Session) => as(t, s).get(`/api/documents/${docId}/access`)],
     ['grant', (s: Session) => grant(s, docId, { userId: s.userId === V.userId ? B.userId : V.userId, level: 'READ' })],
+    ['revoke', (s: Session) => as(t, s).delete(`/api/documents/${docId}/access/${grantId}`)],
     ['history', (s: Session) => as(t, s).get(`/api/documents/${docId}/history`)],
     ['suggestions', (s: Session) => as(t, s).get(`/api/documents/${docId}/suggestions`)],
     ['trash', (s: Session) => as(t, s).post(`/api/documents/${docId}/trash`)],
@@ -56,17 +57,24 @@ function routes(docId: string) {
 describe('one user cannot reach another user’s documents', () => {
   it('every document route returns 404 to a user with no grant, and each refusal is audited', async () => {
     const doc = await upload(A);
+    // A real grant to someone outside the test, so "revoke" names a grant that exists.
+    const carol = await createUser({ email: 'carol@t.io', role: 'VIEWER' });
+    const g = await grant(A, doc, { userId: carol.id, level: 'READ' }).expect(200);
     for (const s of [B, V, E, ADM]) {
-      for (const [name, call] of routes(doc)) {
+      for (const [name, call] of routes(doc, g.body.id)) {
         const res = await call(s);
         expect(res.status, `${name} as ${s.userId}`).toBe(404);
       }
     }
     const denials = await auditRows(`document_id = $1 AND outcome = 'DENIED'`, [doc]);
-    // 4 users x 13 routes; "purge" by a non-owner etc. all go through decide().
-    expect(denials.length).toBeGreaterThanOrEqual(4 * 13);
-    expect(denials.every((d) => d.reason === 'no_grant')).toBe(true);
-  });
+    // 4 users x 14 routes; "purge" by a non-owner etc. all go through decide().
+    expect(denials.length).toBeGreaterThanOrEqual(4 * 14);
+    // Admins are refused for being admins (THREATS.md A17), everyone else for having no grant.
+    expect(denials.every((d) => d.reason === (d.actor_id === ADM.userId ? 'admin_no_document_access' : 'no_grant'))).toBe(true);
+    // Nobody's refused revoke removed the grant.
+    const access = await as(t, A).get(`/api/documents/${doc}/access`).expect(200);
+    expect(access.body.grants.map((x: { id: string }) => x.id)).toEqual([g.body.id]);
+  }, 120_000); // 56 refused requests, each audited; slow over a remote test database
 
   it('a document id that does not exist looks exactly like one you cannot see', async () => {
     const doc = await upload(A);
@@ -107,10 +115,61 @@ describe('one user cannot reach another user’s documents', () => {
   });
 });
 
+describe('search finds the right documents by name, owner, category and date', () => {
+  // The API coerces from/to with Date: the web sends YYYY-MM-DD for `from` and
+  // YYYY-MM-DDT23:59:59 for `to`. Dates here are UTC days, and `to` carries a Z
+  // so the test does not depend on the server's time zone.
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  const titles = async (query: string) => {
+    const res = await as(t, V).get(`/api/documents?${query}`);
+    expect(res.status, `${query}: ${JSON.stringify(res.body)}`).toBe(200);
+    return (res.body.documents as { title: string }[]).map((d) => d.title).sort();
+  };
+
+  beforeEach(async () => {
+    const minutes = await upload(A, 'Board minutes Q3', PDF, 'minutes.pdf', 'Board');
+    const salary = await upload(A, 'Salary letter', PDF, 'letter.pdf', 'HR');
+    const plan = await upload(B, 'Bob plan', PDF, 'plan.pdf', 'Board');
+    await grant(A, minutes, { userId: V.userId, level: 'READ' }).expect(200);
+    await grant(A, salary, { userId: V.userId, level: 'READ' }).expect(200);
+    await grant(B, plan, { userId: V.userId, level: 'READ' }).expect(200);
+  });
+
+  it('q matches the title, ignoring case', async () => {
+    expect(await titles('q=board')).toEqual(['Board minutes Q3']);
+    expect(await titles('q=SALARY')).toEqual(['Salary letter']);
+  });
+
+  it('owner matches the owner by name or email', async () => {
+    expect(await titles('owner=alice')).toEqual(['Board minutes Q3', 'Salary letter']);
+    expect(await titles(`owner=${encodeURIComponent('bob@t.io')}`)).toEqual(['Bob plan']);
+  });
+
+  it('category matches exactly, ignoring case', async () => {
+    expect(await titles('category=Board')).toEqual(['Board minutes Q3', 'Bob plan']);
+    expect(await titles('category=hr')).toEqual(['Salary letter']);
+    expect(await titles('category=Boa')).toEqual([]);
+  });
+
+  it('from/to bound the upload date', async () => {
+    const all = ['Board minutes Q3', 'Bob plan', 'Salary letter'];
+    expect(await titles(`from=${day(0)}`)).toEqual(all);
+    expect(await titles(`from=${day(0)}&to=${day(0)}T23:59:59Z`)).toEqual(all);
+    expect(await titles(`to=${day(-1)}T23:59:59Z`)).toEqual([]);
+    expect(await titles(`from=${day(1)}`)).toEqual([]);
+  });
+
+  it('filters combine', async () => {
+    expect(await titles('q=plan&category=Board')).toEqual(['Bob plan']);
+    expect(await titles('q=minutes&category=HR')).toEqual([]);
+    expect(await titles(`q=board&category=Board&owner=alice&from=${day(0)}`)).toEqual(['Board minutes Q3']);
+  });
+});
+
 describe('grants give exactly what they say', () => {
   it('READ: can view and download; cannot edit, version, share, see access, history, trash', async () => {
     const doc = await upload(A);
-    await grant(A, doc, { userId: V.userId, level: 'READ' }).expect(200);
+    const own = await grant(A, doc, { userId: V.userId, level: 'READ' }).expect(200);
     await as(t, V).get(`/api/documents/${doc}`).expect(200);
     const dl = await as(t, V).get(`/api/documents/${doc}/download`).buffer(true).parse((res, cb) => {
       const chunks: Buffer[] = [];
@@ -119,7 +178,7 @@ describe('grants give exactly what they say', () => {
     });
     expect(dl.status).toBe(200);
     expect((dl.body as Buffer).equals(PDF)).toBe(true);
-    for (const [name, call] of routes(doc).filter(([n]) => !['view', 'download', 'download v1'].includes(n))) {
+    for (const [name, call] of routes(doc, own.body.id).filter(([n]) => !['view', 'download', 'download v1'].includes(n))) {
       expect((await call(V)).status, name).toBe(404);
     }
   });
@@ -190,7 +249,7 @@ describe('taking access away works immediately', () => {
     const doc = await upload(A);
     const g = await grant(A, doc, { userId: V.userId, level: 'READ' }).expect(200);
     await as(t, V).get(`/api/documents/${doc}/download`).expect(200);
-    await as(t, A).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(204);
+    await as(t, A).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(200);
     const res = await as(t, V).get(`/api/documents/${doc}/download`);
     expect(res.status).toBe(404);
     const last = (await auditRows(`document_id = $1 AND actor_id = $2`, [doc, V.userId])).at(-1)!;
@@ -248,7 +307,7 @@ describe('trash, purge and transfer', () => {
   it('transfer: the new owner gets everything, the old owner keeps nothing', async () => {
     const doc = await upload(A);
     await as(t, A).post(`/api/documents/${doc}/transfer`, { newOwnerId: V.userId }).expect(400); // viewer cannot own
-    await as(t, A).post(`/api/documents/${doc}/transfer`, { newOwnerId: B.userId }).expect(204);
+    await as(t, A).post(`/api/documents/${doc}/transfer`, { newOwnerId: B.userId }).expect(200);
     await as(t, A).get(`/api/documents/${doc}`).expect(404);
     const res = await as(t, B).get(`/api/documents/${doc}`).expect(200);
     expect(res.body.isOwner).toBe(true);
@@ -385,16 +444,18 @@ describe('downloads cannot run as a page, and files are encrypted at rest', () =
 describe('the audit trail proves who reached a document', () => {
   it('records upload, view, download, edit, grant, revoke, trash with the actor', async () => {
     const doc = await upload(A);
-    const g = await grant(A, doc, { userId: V.userId, level: 'EDIT' });
+    await grant(A, doc, { userId: V.userId, level: 'READ' }).expect(200);
+    const g = await grant(A, doc, { userId: V.userId, level: 'EDIT' }).expect(200); // change, not a new grant
     await as(t, V).get(`/api/documents/${doc}/download`).expect(200);
     await as(t, V).patch(`/api/documents/${doc}`, { title: 'Edited' }).expect(200);
-    await as(t, A).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(204);
+    await as(t, V).upload(`/api/documents/${doc}/versions`, PDF, 'v2.pdf').expect(201);
+    await as(t, A).delete(`/api/documents/${doc}/access/${g.body.id}`).expect(200);
     await as(t, A).post(`/api/documents/${doc}/trash`).expect(204);
     const trail = await auditRows(`document_id = $1 AND outcome = 'ALLOWED'`, [doc]);
     const seen = trail.map((r) => `${r.action}:${r.actor_email}`);
     expect(seen).toEqual(expect.arrayContaining([
-      'document.upload:alice@t.io', 'access.grant:alice@t.io', 'document.download:victor@t.io',
-      'document.edit:victor@t.io', 'access.revoke:alice@t.io', 'document.trash:alice@t.io',
+      'document.upload:alice@t.io', 'access.grant:alice@t.io', 'access.change:alice@t.io', 'document.download:victor@t.io',
+      'document.edit:victor@t.io', 'document.upload_version:victor@t.io', 'access.revoke:alice@t.io', 'document.trash:alice@t.io',
     ]));
   });
 
