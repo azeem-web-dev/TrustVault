@@ -14,4 +14,8 @@ useDefault = true
 description = "Published demo credentials (intentional, see THREATS.md I7)"
 paths = [
   '''^README\.md$''',
+  # The sign-in pages' "try a demo account" buttons fill in the same
+  # published demo logins (web and Android app).
+  '''^apps/web/src/app/login/page\.tsx$''',
+  '''^apps/mobile/lib/screens/auth\.dart$''',
 ]
