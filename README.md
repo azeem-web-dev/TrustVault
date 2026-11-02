@@ -24,10 +24,20 @@ Demo accounts cannot reset their password and never receive email: their address
 
 | Role | Can | Cannot |
 |---|---|---|
-| Admin | Manage users and groups. See the audit log and alerts, verify integrity, export evidence. Break-glass: a written reason of at least 20 characters gives one hour of READ on one document; it is alerted and shown in that document's history. | Open, download or upload documents (except READ through break-glass). Be given access to a document. Join a group. Change the protected demo accounts. |
-| Owner | Upload documents. On their own documents: share (READ, EDIT or MANAGE), revoke, edit, upload new versions, move to folders, trash, restore, delete permanently, transfer ownership. | Be moved to another role while they own documents. |
-| Viewer | Use what they are granted. READ: view and download. EDIT: also rename, describe and upload new versions. MANAGE: also share READ or EDIT, revoke, and see who has access and the history. | Upload new documents. Give MANAGE. |
-| External | READ only, and only on grants with an expiry, until their account's end date. | Get access through a group. Anything above READ. |
+| Admin | Manage users and groups. See the audit log and alerts, verify integrity, export evidence. Break-glass: a written reason of at least 20 characters gives one hour of View only on one document (watermarked pages, no download); it is alerted and shown in that document's history. | Open, download or upload documents (except viewing pages through break-glass). Be given access to a document. Join a group. Change the protected demo accounts. |
+| Owner | Upload documents. On their own documents: share (View only, Download, Edit or Manage), revoke, edit, upload new versions, move to folders, trash, restore, delete permanently, transfer ownership. | Be moved to another role while they own documents. |
+| Viewer | Use what they are granted (levels below). | Upload new documents. Give MANAGE. |
+| External | View only or Download, and only on grants with an expiry, until their account's end date. The share screens offer View only first. | Get access through a group. Anything above Download (READ). |
+
+| Level (on one document) | Can | Cannot |
+|---|---|---|
+| **View only** (`VIEW`) | Find it in search, see its details and versions, read its pages inside TrustVault. Every page is drawn by the server with the viewer's email, the time and a trace code; on Android screenshots and recording are blocked while it is open | Download the file, by any route: the app and the database both refuse. Word, Excel and PowerPoint files have no preview, so View only shows a note to ask the owner |
+| **Download** (`READ`) | Also download. PDFs and images are stamped with who downloaded, when and a trace code; the Android app keeps the file only encrypted, with a key it must fetch from the server on every open | Change anything |
+| **Edit** (`EDIT`) | Also rename, describe and upload new versions | Share |
+| **Manage** (`MANAGE`) | Also share View only, Download or Edit, revoke, see who has access and the history | Give Manage, trash, transfer |
+| **Owner** | Everything, including Manage grants, trash, restore, delete and transfer | |
+
+Anyone who can see a page can photograph it. View only keeps originals off devices, Android blocks screenshots, and watermarks make leaks traceable ([THREATS.md](THREATS.md) V1 to V10).
 
 Grants are per document, to named people or to groups. A group share covers the people in the group when it is shared. Anyone added later waits until the owner (or a manager outside the group) confirms; `GET /documents/:id/access` shows them as pending.
 
@@ -86,7 +96,7 @@ GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (
 cd apps/api && npx vitest run            # over 230 tests against a real Postgres and Redis
 cd apps/api && npm run test:e2e          # passkeys in real Chrome through the real pages (needs Chrome)
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (50 of them), one at a time; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (59 of them), one at a time; every removal must fail a test
 node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
 cd keyd && cargo test                    # key service
 node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE= --witness checkpoints.jsonl --rekor   # verify an audit export: pinned key, witness, Sigstore
@@ -97,6 +107,7 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `access.unit.test.ts` | `decide()` alone: every rule, deny by default |
 | `rls.test.ts` | the database alone (no API code): RLS policies and guard triggers |
 | `search-filter.test.ts` | the search access filter alone (run where RLS does not apply) |
+| `view-only.test.ts` | View only: pages yes, original no (both locks), watermark and trace code in the audit row, stamped downloads, revoke stops pages and the Android key, externals, break-glass, bulk-viewing alert and rate limit |
 | `documents.test.ts` | end to end: 13 document routes refused for 4 kinds of outsider, search leaks nothing, revocation is immediate, uploads validated and malware-scanned (fails closed), files encrypted, blob swaps detected, break-glass, suggestions |
 | `auth.test.ts` | sessions, lockout, rate limits, CSRF, Origin, session death on deactivate / role / password change |
 | `admin-mfa.test.ts` | second factor, replay, protected demo accounts, admin audit view, alerts, export verified by the offline tool |

@@ -14,10 +14,10 @@ Base URL: `https://vault.rayyanazeem.cloud/api`. JSON in and out, except uploads
 | **Ended sessions** | A cookie for a session that was ended (logout, password change, role change, deactivation, admin reset) is refused, and the first use is recorded once as `auth.session_rejected` with why it ended. |
 | **Unknown fields** | Request bodies are strict: an unexpected field (`ownerId`, `role`, ...) is `400`. |
 | **Errors** | `{"message": "...", "requestId": "..."}`. Unexpected errors are `500` with no details. |
-| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes and passkey attempts: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. Witness: 60/min per IP. `429` with `retryAfterSeconds`. |
+| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes and passkey attempts: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. View-only pages: `PAGE_VIEW_RATE_LIMIT` (default 600)/10 min per user. Witness: 60/min per IP. `429` with `retryAfterSeconds`. |
 | **Uploads** | Every file is scanned by ClamAV before it is stored. Infected: `422`. Scanner unavailable: `503` and nothing is stored. Both are audited. |
 
-Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, **OWNER** (may upload), **VIEWER**, **EXTERNAL** (read-only, must have an expiry, no groups, no directory).
+Levels: **VIEW** < **READ** < **EDIT** < **MANAGE** < **owner**. VIEW sees metadata, versions and watermarked page images, never the original file; READ adds downloading. Account roles: **ADMIN**, **OWNER** (may upload), **VIEWER**, **EXTERNAL** (VIEW or READ only, must have an expiry, no groups, no directory).
 
 ## Authentication
 
@@ -48,11 +48,14 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | GET | `/documents` | signed in | Search: `q`, `owner`, `category`, `from`, `to`, `scope=all\|mine\|shared\|trash`, `folderId`, `page`. Only documents you own or hold a live grant on; counts come from the same filtered set. |
 | GET | `/documents/categories` | signed in | Categories of documents you can see. |
 | POST | `/documents` | role **OWNER** | Multipart: `file`, `title`, `category`, `description?`, `folderId?`. Max 25 MB. Type decided from content (PDF without JavaScript, PNG, JPEG, docx/xlsx/pptx without macros, UTF-8 text/CSV/Markdown). Malware-scanned (`422` / `503`). |
-| GET | `/documents/:id` | **READ+** | Metadata, versions, your level. |
+| GET | `/documents/:id` | **VIEW+** | Metadata, versions, your level (`myAccess`: `VIEW`, `READ`, `EDIT`, `MANAGE` or `OWNER`). |
 | PATCH | `/documents/:id` | **EDIT+** for `title`, `category`, `description`; **owner** for `folderId` | |
 | POST | `/documents/:id/versions` | **EDIT+** | Multipart `file`. Scanned only after the permission check. |
-| GET | `/documents/:id/download` | **READ+** | Current version. Audited **before** the first byte is sent. `Content-Disposition: attachment`, `CSP: sandbox`, `nosniff`, `no-store`, `X-Document-SHA256`. |
+| GET | `/documents/:id/download` | **READ+** (VIEW: `404`, audited `needs_read`) | Current version. Audited **before** the first byte is sent, with a trace code. PDFs and PNG/JPEG images are **stamped** on every page with who, when and the trace code; other types are sent unchanged. `Content-Disposition: attachment`, `CSP: sandbox`, `nosniff`, `no-store`, `X-Document-SHA256` (the stored version's hash; a stamped copy differs by design), `X-Stamped: yes\|no`, `X-Trace-Code`. |
 | GET | `/documents/:id/versions/:n/download` | **READ+** | A specific version. Either download answers `403` (audited) for a version the nightly malware re-scan quarantined; `GET /documents/:id` shows `quarantine: {signature, foundAt}` on such a version. |
+| GET | `/documents/:id/pages` | **VIEW+** | `{versionNo, pages, preview, message}` for the current version. PDF, PNG, JPEG and text files are drawn (at most 500 pages); Word, Excel and PowerPoint answer `preview: false` with "Preview is not available for this file type. Ask the owner for download access." |
+| GET | `/documents/:id/pages/:n` | **VIEW+** | Page `n` (from 1) as a PNG drawn by the server, with the viewer's email, the UTC time and a trace code tiled across it. Never the original bytes. Each page is a `document.page_view` audit row `{page, pages, versionNo, trace, at}`, committed before the image is sent. `no-store`, `nosniff`, `CSP: sandbox`, `Cross-Origin-Resource-Policy: same-origin`, `X-Trace-Code`. `404` past the last page, `422` for a type with no preview or a file that cannot be drawn. Rate limited per user. |
+| POST | `/documents/:id/offline-key` | **READ+** | `{documentId, key, algorithm: "AES-256-GCM"}`: the 32-byte key (base64) for the Android app's encrypted copy of this document. Same key on every call while access lasts; asked for on every open; refused (`404`) after a revoke, and the key is destroyed when access drops below READ, so a later re-share gets a new one. Audited as `document.offline_key`. |
 | GET | `/documents/:id/history` | **MANAGE+** | Audit events for this document, including refusals and break-glass use. |
 | POST | `/documents/:id/trash` | **owner** | Hidden from everyone else at once. |
 | POST | `/documents/:id/restore` | **owner** | |
@@ -64,7 +67,7 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | Method | Path | Who may call | Notes |
 |---|---|---|---|
 | GET | `/documents/:id/access` | **MANAGE+** | Owner and every grant. A group row has `members` (in the group now), `covered` (members the share reaches) and `pending` (added since the share; they cannot open the document until it is confirmed). |
-| PUT | `/documents/:id/access` | **MANAGE+**; granting or changing **MANAGE** needs **owner** | `{userId \| groupId, level, expiresAt?, fromSuggestion?}`. Creates or changes a grant. Externals: READ only, expiry required, capped at their account expiry. Admins cannot be given access (`400`). You cannot change your own access. A group share covers the group's members at that moment (never admins or externals); sending the same group share again confirms members added since. Only the owner may share with a group the sharer belongs to (`403`). |
+| PUT | `/documents/:id/access` | **MANAGE+**; granting or changing **MANAGE** needs **owner** | `{userId \| groupId, level, expiresAt?, fromSuggestion?}`. Creates or changes a grant. `level`: `VIEW`, `READ`, `EDIT` or `MANAGE`. Externals: VIEW or READ only, expiry required, capped at their account expiry. Admins cannot be given access (`400`). You cannot change your own access. A group share covers the group's members at that moment (never admins or externals); sending the same group share again confirms members added since. Only the owner may share with a group the sharer belongs to (`403`). |
 | DELETE | `/documents/:id/access/:grantId` | **MANAGE+**; removing a **MANAGE** grant needs **owner** (or yourself) | Takes effect on the next request. `200 {stillHas}`: for a person's grant, the level a group grant still gives them, or `null`; always `null` for a group grant. |
 | GET | `/documents/:id/suggestions` | **MANAGE+** | People and groups you shared similar documents with. Grants nothing; the suggestion is audited. |
 | GET | `/directory?q=` | roles **ADMIN, OWNER, VIEWER** | People picker: at most 10 active users and 5 groups matching 2+ characters. Not available to EXTERNAL. |
@@ -96,8 +99,25 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | POST | `/admin/audit/verify` | Recomputes every hash and checks every signed checkpoint. |
 | POST | `/admin/audit/checkpoint` | Signs the current chain head now (also every minute when there are new events; each checkpoint is then published to Sigstore's public log). |
 | GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `tools/verify-audit.mjs`. The bundle's `verifyWith` field gives the command: `node tools/verify-audit.mjs <bundle.json> --key <production public key> --rekor --witness <witness branch>/checkpoints.jsonl`. With none of `--key`, `--rekor` or `--witness` the tool exits 2: the bundle is only shown to be internally consistent. |
-| GET | `/admin/alerts` | `hours` (1 to 720, default 24). Kinds: `audit_verification_failed`, `file_integrity`, `malware_found` (critical); `rescan_failed`, `reset_then_sign_in` (an account signed in after an admin reset its password or second factor), `ended_session_used`, `access_after_revoke`, `repeated_denials` (high); `bulk_download`, `break_glass` (medium); `external_share`, `login_blocked` (info). |
-| POST | `/admin/break-glass` | `{documentId, reason}` (20+ chars): one hour of READ on one document. Audited, alerted, visible in the document's history. |
+| GET | `/admin/alerts` | `hours` (1 to 720, default 24). Kinds: `audit_verification_failed`, `file_integrity`, `malware_found` (critical); `rescan_failed`, `reset_then_sign_in` (an account signed in after an admin reset its password or second factor), `ended_session_used`, `access_after_revoke`, `repeated_denials`, `bulk_page_views` (one person viewed more than `PAGE_VIEW_ALERT_PAGES` pages, default 150, or more than `PAGE_VIEW_ALERT_DOCUMENTS` documents, default 15, within 10 minutes) (high); `bulk_download`, `break_glass` (medium); `external_share`, `login_blocked` (info). |
+| POST | `/admin/break-glass` | `{documentId, reason}` (20+ chars): one hour of **VIEW** on one document: its watermarked pages, no download. Audited, alerted, visible in the document's history. |
+
+## View-only pages and leak tracing
+
+Server requirements: none beyond Node. Pages are drawn by pdf.js (`pdfjs-dist`, Apache-2.0) on Skia (`@napi-rs/canvas`, MIT, prebuilt for linux-x64 glibc and musl, no system libraries) and downloads are stamped with `pdf-lib` (MIT). The watermark font is the Liberation Sans that ships inside pdf.js, so no system fonts are needed. Settings (all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PAGE_VIEW_RATE_LIMIT` | 600 | Pages one person may open per 10 minutes (`429` after) |
+| `PAGE_VIEW_ALERT_PAGES` | 150 | `bulk_page_views` alert when one person views more pages than this within 10 minutes |
+| `PAGE_VIEW_ALERT_DOCUMENTS` | 15 | ... or more documents than this |
+
+| Action | When |
+|---|---|
+| `document.page_view` | `ALLOWED` per page sent, details `{page, pages, versionNo, trace, at}`; `FAILED` `render_failed` when a file cannot be drawn. To trace a leaked picture, search the audit log for its code |
+| `document.download` | Now also `{trace, stamp: "pdf" \| "image" \| "none"}` |
+| `document.download_stamp` | `FAILED` `stamp_failed`: the copy went out unstamped (e.g. an encrypted PDF), with its trace code |
+| `document.offline_key` | The Android app asked for a copy's key: `ALLOWED` `{created}`, or `DENIED` (`needs_read`, `no_grant`, ...) |
 
 ## Emails
 
