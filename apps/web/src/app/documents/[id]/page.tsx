@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowsLeftRight, Biohazard, CalendarBlank, Check, ClockCounterClockwise, CloudArrowUp, Copy, DownloadSimple, Eye, FolderSimple,
   Fingerprint, Info, LockKey, MagnifyingGlass, PencilSimple, Prohibit, ShareNetwork, ShieldCheck, Sparkle, Stack, Tag, Trash, UserPlus,
-  UsersFour, Warning, ArrowCounterClockwise, Fire, Crown, Bug, Hash,
+  UsersFour, Warning, ArrowCounterClockwise, Fire, Crown, Bug, Hash, CaretLeft, CaretRight, EyeSlash,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useToast } from '@/components/toast';
@@ -46,9 +46,9 @@ interface Doc {
   versions: Version[];
 }
 
-type Tab = 'overview' | 'versions' | 'access' | 'history';
-const LEVEL_WORD: Record<string, string> = { READ: 'read', EDIT: 'edit', MANAGE: 'manage', OWNER: 'own' };
-const RANK: Record<Access, number> = { NONE: 0, READ: 1, EDIT: 2, MANAGE: 3, OWNER: 4 };
+type Tab = 'pages' | 'overview' | 'versions' | 'access' | 'history';
+const LEVEL_WORD: Record<string, string> = { VIEW: 'view', READ: 'read', EDIT: 'edit', MANAGE: 'manage', OWNER: 'own' };
+const RANK: Record<Access, number> = { NONE: 0, VIEW: 1, READ: 2, EDIT: 3, MANAGE: 4, OWNER: 5 };
 
 export default function DocumentPage() {
   const { id } = useParams<{ id: string }>();
@@ -58,10 +58,17 @@ export default function DocumentPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
+  const first = useRef(true);
 
   const load = useCallback(async () => {
     try {
-      setDoc(await api.get<Doc>(`/documents/${id}`));
+      const d = await api.get<Doc>(`/documents/${id}`);
+      setDoc(d);
+      // View-only people land on the pages: it is all they can open.
+      if (first.current) {
+        first.current = false;
+        if (d.myAccess === 'VIEW') setTab('pages');
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setNotFound(true);
       else setError(errorText(err));
@@ -117,7 +124,9 @@ export default function DocumentPage() {
   const trashed = doc.status === 'DELETED';
   const current = doc.versions[0];
   const canManage = level >= RANK.MANAGE;
+  const canDownload = level >= RANK.READ;
   const tabs = [
+    ...(current ? [{ id: 'pages' as const, label: 'View', icon: <Eye size={16} /> }] : []),
     { id: 'overview' as const, label: 'Overview', icon: <Info size={16} /> },
     { id: 'versions' as const, label: 'Versions', icon: <Stack size={16} />, count: doc.versions.length },
     ...(canManage && !trashed ? [{ id: 'access' as const, label: 'Access', icon: <ShareNetwork size={16} /> }] : []),
@@ -153,6 +162,8 @@ export default function DocumentPage() {
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               {current.quarantine ? (
                 <Button disabled icon={<Prohibit size={18} />}>Download blocked</Button>
+              ) : !canDownload ? (
+                <Button variant="soft" size="lg" icon={<Eye size={18} />} onClick={() => setTab('pages')}>View only</Button>
               ) : (
                 <ButtonLink href={`/api/documents/${doc.id}/download`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
                   Download <span className="hidden max-w-[12rem] truncate font-normal opacity-80 md:inline">{current.fileName}</span>
@@ -169,13 +180,14 @@ export default function DocumentPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
+          {tab === 'pages' && current && <PageViewer doc={doc} canDownload={canDownload} />}
           {tab === 'overview' && (
             <>
               <Details doc={doc} canEdit={level >= RANK.EDIT && !trashed} onSave={(patch) => act(() => api.patch(`/documents/${doc.id}`, patch), 'Details saved')} />
               <ProtectionCard doc={doc} />
             </>
           )}
-          {tab === 'versions' && <Versions doc={doc} canUpload={level >= RANK.EDIT && !trashed} onUploaded={() => act(async () => undefined, 'New version uploaded')} onError={setError} />}
+          {tab === 'versions' && <Versions doc={doc} canDownload={canDownload} canUpload={level >= RANK.EDIT && !trashed} onUploaded={() => act(async () => undefined, 'New version uploaded')} onError={setError} />}
           {tab === 'access' && canManage && !trashed && <AccessPanel doc={doc} onError={setError} />}
           {tab === 'history' && canManage && <History docId={doc.id} />}
         </div>
@@ -197,6 +209,94 @@ export default function DocumentPage() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * Server-drawn page images with the viewer's name, the time and a trace
+ * code across them (THREATS.md V2-V4). The browser never gets the original
+ * file. Blurring when the window loses focus, blocking print, the context
+ * menu and dragging are speed bumps only: anyone who can see a page can
+ * photograph it (THREATS.md V3).
+ */
+function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
+  const [info, setInfo] = useState<{ pages: number; preview: boolean; message: string | null; versionNo: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [veiled, setVeiled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    api.get<{ pages: number; preview: boolean; message: string | null; versionNo: number }>(`/documents/${doc.id}/pages`)
+      .then((r) => { setInfo(r); setPage(1); })
+      .catch((err) => setError(errorText(err)));
+  }, [doc.id, doc.versions.length]);
+
+  useEffect(() => {
+    const hide = () => setVeiled(true);
+    const show = () => setVeiled(document.hidden || !document.hasFocus());
+    const onVisibility = () => (document.hidden ? hide() : show());
+    const stopPrint = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 's')) e.preventDefault();
+    };
+    window.addEventListener('blur', hide);
+    window.addEventListener('focus', show);
+    window.addEventListener('beforeprint', hide);
+    window.addEventListener('afterprint', show);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('keydown', stopPrint);
+    return () => {
+      window.removeEventListener('blur', hide);
+      window.removeEventListener('focus', show);
+      window.removeEventListener('beforeprint', hide);
+      window.removeEventListener('afterprint', show);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('keydown', stopPrint);
+    };
+  }, []);
+
+  useEffect(() => setLoaded(false), [page]);
+
+  const total = info?.pages ?? 0;
+  return (
+    <Card
+      title={canDownload ? 'View' : 'View only'}
+      icon={<Eye size={20} />}
+      description={canDownload ? 'Pages drawn by TrustVault, marked with your name. Download gives you a copy stamped the same way.' : 'You can read this document here. It cannot be downloaded, and every page carries your name, the time and a trace code.'}
+      actions={total > 1 && (
+        <div className="flex items-center gap-1">
+          <IconButton label="Previous page" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}><CaretLeft size={16} /></IconButton>
+          <span className="min-w-16 text-center text-xs tabular-nums text-slate-500">{page} / {total}</span>
+          <IconButton label="Next page" onClick={() => setPage((p) => Math.min(total, p + 1))} disabled={page >= total}><CaretRight size={16} /></IconButton>
+        </div>
+      )}
+    >
+      {error ? <Alert>{error}</Alert> : !info ? <Skeleton className="aspect-[1/1.41] w-full rounded-xl" /> : !info.preview ? (
+        <Alert tone="amber" title="No preview for this file type">{info.message}</Alert>
+      ) : total === 0 ? (
+        <Alert tone="amber">This file has no pages to show.</Alert>
+      ) : (
+        <div className="tv-protected relative select-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.02]" onContextMenu={(e) => e.preventDefault()}>
+          {!loaded && <Skeleton className="absolute inset-0 rounded-none" />}
+          <img
+            key={page}
+            src={`/api/documents/${doc.id}/pages/${page}`}
+            alt={`Page ${page} of ${doc.title}`}
+            draggable={false}
+            onDragStart={(e) => e.preventDefault()}
+            onLoad={() => setLoaded(true)}
+            onError={() => setError('This page could not be shown. Your access may have changed; reload the page.')}
+            className={cx('pointer-events-none block h-auto w-full transition', veiled && 'blur-xl')}
+          />
+          {veiled && (
+            <div className="absolute inset-0 grid place-items-center bg-white/40 text-sm font-medium text-slate-700 dark:bg-black/40 dark:text-slate-200">
+              <span className="flex items-center gap-2"><EyeSlash size={18} />Hidden while this window is not in front</span>
+            </div>
+          )}
+        </div>
+      )}
+      <p className="tv-print-note hidden">Printing is turned off for this document.</p>
+    </Card>
   );
 }
 
@@ -296,7 +396,7 @@ function Details({ doc, canEdit, onSave }: { doc: Doc; canEdit: boolean; onSave:
   );
 }
 
-function Versions({ doc, canUpload, onUploaded, onError }: { doc: Doc; canUpload: boolean; onUploaded: () => void; onError: (m: string) => void }) {
+function Versions({ doc, canDownload, canUpload, onUploaded, onError }: { doc: Doc; canDownload: boolean; canUpload: boolean; onUploaded: () => void; onError: (m: string) => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const upload = async (e: FormEvent) => {
@@ -332,6 +432,8 @@ function Versions({ doc, canUpload, onUploaded, onError }: { doc: Doc; canUpload
                 </div>
                 {v.quarantine ? (
                   <Badge tone="red" icon={<Prohibit size={11} />}>Download blocked</Badge>
+                ) : !canDownload ? (
+                  <Badge icon={<EyeSlash size={11} />}>View only</Badge>
                 ) : (
                   <ButtonLink size="sm" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`} icon={<DownloadSimple size={14} />}>Download</ButtonLink>
                 )}
@@ -369,7 +471,8 @@ interface DirUser { id: string; displayName: string; email: string; role: string
 interface DirGroup { id: string; name: string; members: number }
 
 const LEVELS: { id: Level; title: string; text: string; icon: ReactNode }[] = [
-  { id: 'READ', title: 'Read', text: 'View and download', icon: <Eye size={18} /> },
+  { id: 'VIEW', title: 'View only', text: 'Pages in TrustVault, marked with their name. No download', icon: <EyeSlash size={18} /> },
+  { id: 'READ', title: 'Download', text: 'Also download a copy stamped with their name', icon: <DownloadSimple size={18} /> },
   { id: 'EDIT', title: 'Edit', text: 'Also rename, upload versions', icon: <PencilSimple size={18} /> },
   { id: 'MANAGE', title: 'Manage', text: 'Also share, see history', icon: <ShareNetwork size={18} /> },
 ];
@@ -412,7 +515,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
     onError(null);
     try {
       await api.put(`/documents/${doc.id}/access`, { ...subject, level: lvl, expiresAt, fromSuggestion });
-      toast(`${label || 'Access'} can now ${lvl === 'READ' ? 'read' : lvl === 'EDIT' ? 'edit' : 'manage'} this document.`);
+      toast(`${label || 'Access'} can now ${lvl === 'VIEW' ? 'view (not download)' : lvl === 'READ' ? 'view and download' : lvl === 'EDIT' ? 'edit' : 'manage'} this document.`);
       setTarget(null);
       setQuery('');
       setExpires('');
@@ -442,7 +545,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
     void share(target.type === 'user' ? { userId: target.id } : { groupId: target.id }, level, expires ? new Date(`${expires}T23:59:59`).toISOString() : null, false, target.label);
   };
 
-  const levels = LEVELS.filter((l) => l.id === 'READ' || (!target?.external && (l.id === 'EDIT' || doc.isOwner)));
+  const levels = LEVELS.filter((l) => l.id === 'VIEW' || l.id === 'READ' || (!target?.external && (l.id === 'EDIT' || doc.isOwner)));
   const hasResults = results.users.length > 0 || results.groups.length > 0;
 
   return (
@@ -470,7 +573,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
                   ))}
                   {results.users.filter((u) => u.id !== doc.owner.id).map((u) => (
                     <li key={u.id}>
-                      <button type="button" className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-white/5" onClick={() => { setTarget({ type: 'user', id: u.id, label: u.displayName, external: u.role === 'EXTERNAL' }); setLevel('READ'); setResults({ users: [], groups: [] }); }}>
+                      <button type="button" className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-white/5" onClick={() => { setTarget({ type: 'user', id: u.id, label: u.displayName, external: u.role === 'EXTERNAL' }); setLevel(u.role === 'EXTERNAL' ? 'VIEW' : 'READ'); setResults({ users: [], groups: [] }); }}>
                         <Avatar name={u.displayName} size="sm" />
                         <span className="min-w-0 flex-1"><span className="font-medium">{u.displayName}</span><span className="block truncate text-xs text-slate-500">{u.email}</span></span>
                         {u.role === 'EXTERNAL' && <Badge tone="amber">External</Badge>}
@@ -484,7 +587,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
 
           <div>
             <p className="mb-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">Access level</p>
-            <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Access">
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Access">
               {levels.map((l) => (
                 <button
                   key={l.id}
@@ -499,7 +602,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
                 </button>
               ))}
             </div>
-            {target?.external && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">External people can only be given Read access, and it must end on a date.</p>}
+            {target?.external && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">External people get View only or Download, and it must end on a date. View only is suggested: the file never leaves TrustVault.</p>}
           </div>
 
           <div className="flex flex-wrap items-end gap-3">

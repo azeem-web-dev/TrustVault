@@ -11,6 +11,9 @@ interface Meta { icon: ReactNode; label: string }
 const EXACT: Record<string, Meta> = {
   'document.download': { icon: <DownloadSimple size={16} />, label: 'Downloaded' },
   'document.view': { icon: <Eye size={16} />, label: 'Viewed' },
+  'document.page_view': { icon: <Eye size={16} />, label: 'Page viewed' },
+  'document.offline_key': { icon: <Key size={16} />, label: 'Opened offline copy' },
+  'document.download_stamp': { icon: <ShieldWarning size={16} />, label: 'Download not stamped' },
   'document.upload': { icon: <UploadSimple size={16} />, label: 'Uploaded' },
   'document.version': { icon: <UploadSimple size={16} />, label: 'New version' },
   'document.update': { icon: <PencilSimple size={16} />, label: 'Details changed' },

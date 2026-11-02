@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
-  BellRinging, Biohazard, Bug, DownloadSimple, FileText, Fire, Info, LockKey, Prohibit, ShareNetwork, ShieldCheck, ShieldWarning, Siren, Warning, WarningOctagon, ArrowSquareOut,
+  BellRinging, Biohazard, Bug, DownloadSimple, Eye, FileText, Fire, Info, LockKey, Prohibit, ShareNetwork, ShieldCheck, ShieldWarning, Siren, Warning, WarningOctagon, ArrowSquareOut,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useToast } from '@/components/toast';
@@ -32,6 +32,7 @@ function kindIcon(kind: string): ReactNode {
   if (kind.includes('rescan')) return <Bug size={20} />;
   if (kind.includes('break')) return <Siren size={20} />;
   if (kind.includes('integrity') || kind.includes('tamper')) return <ShieldWarning size={20} />;
+  if (kind.includes('page_view')) return <Eye size={20} />;
   if (kind.includes('download')) return <DownloadSimple size={20} />;
   if (kind.includes('external') || kind.includes('share')) return <ShareNetwork size={20} />;
   if (kind.includes('revok')) return <Prohibit size={20} />;
@@ -153,7 +154,7 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
           <div className="min-w-0 flex-1">
             <h2 className="text-[15px] font-semibold">Break-glass access</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of read access to a single document.
+              Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of view-only access to a single document: its pages, watermarked with your name, never the original file.
               The reason is recorded in the audit trail, raised as an alert, and shown in the document&apos;s own history to its owner.
             </p>
           </div>
