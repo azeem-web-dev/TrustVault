@@ -40,8 +40,8 @@ import { checkpointDigest, entriesForKey } from './rekor.mjs';
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const ZERO_HASH = '0'.repeat(64);
 
-/** The production audit signing key (keyd). Pass it with --key. */
-export const PRODUCTION_KEY = 'OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE=';
+/** The production audit signing key (keyd). Pass it with --key. A PUBLIC key, published on purpose. */
+export const PRODUCTION_KEY = 'OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE='; // gitleaks:allow (Ed25519 public key, not a secret)
 export const PRODUCTION_KEY_ID = 'keyd-ed25519-v1';
 /** The scheduler checkpoints every minute; a longer unsigned tail is suspicious. */
 export const TAIL_GRACE_MS = 5 * 60_000;

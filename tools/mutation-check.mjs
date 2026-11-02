@@ -103,7 +103,7 @@ const MUTATIONS = [
   code('witness: a checkpoint unpublished for an hour raises the alarm', '../../tools/witness.mjs',
     'if (!byDigest.has(checkpointDigest(c)) && now - new Date(c.createdAt) > ANCHOR_DEADLINE_MS) {', 'if (false) {', ['test/anchor.test.ts']),
   code('verify-audit: a full bundle must match every earlier public entry', '../../tools/verify-audit.mjs',
-    'if (asEvent) problems.push(`public log entry ${e.logIndex}', 'if (false) problems.push(`public log entry ${e.logIndex}', ['test/anchor.test.ts']),
+    '    if (fromGenesis && !partial) {\n      if (asEvent) problems.push(', '    if (false) {\n      if (asEvent) problems.push(', ['test/anchor.test.ts']),
   code('downloads: a quarantined version is never sent', 'src/documents/documents.service.ts',
     'if (version.quarantine) {', 'if (false) {', ['test/rescan.test.ts']),
   code('rescan: a file found infected is quarantined', 'src/scanning/rescan.service.ts',

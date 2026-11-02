@@ -124,6 +124,15 @@ describe('row-level security: writes', () => {
 });
 
 describe('guard triggers', () => {
+  it('the database refuses external and admin group members, whatever the API does (A11, A17)', async () => {
+    const g = id();
+    await owner.query(`INSERT INTO groups (id, name) VALUES ($1, 'Guarded')`, [g]);
+    for (const who of [ids.erin, ids.adm]) {
+      await expect(app.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, who])).rejects.toThrow(/cannot be group members/);
+    }
+    await owner.query(`DELETE FROM groups WHERE id = $1`, [g]);
+  });
+
   it('a READ grantee cannot update anything', async () => {
     await asUser(ids.alice, () => grantAs(ids.alice, ids.vic, 'READ'));
     await owner.query(`INSERT INTO grants (id, document_id, user_id, level, granted_by_id, updated_at) VALUES ($1, $2, $3, 'READ', $4, now())`, [id(), doc, ids.vic, ids.alice]);
