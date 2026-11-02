@@ -3,7 +3,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
-import { CurrentActor, Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles, StepUp } from '../auth/decorators.js';
 import { AuditAdminService } from './audit-admin.service.js';
 
 const ListSchema = z.strictObject({
@@ -72,6 +72,7 @@ export class AuditAdminController {
 
   /** Emergency one-hour READ access to one document, with a written reason. Alerted. */
   @Post('break-glass')
+  @StepUp()
   breakGlass(@CurrentActor() actor: Actor, @Body(new ZodPipe(BreakGlassSchema)) body: z.infer<typeof BreakGlassSchema>) {
     return this.svc.breakGlass(actor, body.documentId, body.reason);
   }

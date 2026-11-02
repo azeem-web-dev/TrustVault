@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { NotifyService } from '../mail/notify.service.js';
-import { CurrentActor, PartialAuth } from './decorators.js';
+import { CurrentActor, PartialAuth, StepUp } from './decorators.js';
 import { MfaService } from './mfa.service.js';
 import { setSessionCookie } from './auth.controller.js';
 import type { NewSession } from './session.service.js';
@@ -15,6 +15,7 @@ const CodeSchema = z.strictObject({ code: z.string().trim().regex(/^\d{6}$/, 'En
 const WebAuthnResponse = z.looseObject({ id: z.string().max(1024), rawId: z.string().max(1024), type: z.literal('public-key'), response: z.looseObject({}) });
 const RegisterSchema = z.strictObject({ response: WebAuthnResponse, name: z.string().trim().min(1).max(60) });
 const VerifySchema = z.strictObject({ response: WebAuthnResponse });
+const StepUpSchema = z.union([CodeSchema, VerifySchema]);
 
 /**
  * Who may call: any signed-in user, including one who has only passed the
@@ -80,8 +81,29 @@ export class MfaController {
     return this.issue(res, await this.mfa.passkeyVerify(actor, body.response as never), actor);
   }
 
+  /**
+   * Step-up: a fresh code or passkey assertion (from POST passkeys/options)
+   * before a risky action. Full sessions only; the token is kept (THREATS.md S19).
+   */
+  @Post('step-up')
+  @HttpCode(200)
+  async stepUp(@CurrentActor() actor: Actor, @Body(new ZodPipe(StepUpSchema)) body: z.infer<typeof StepUpSchema>) {
+    await this.mfa.stepUp(actor, 'code' in body ? { code: body.code } : { response: body.response as never });
+    return { ok: true };
+  }
+
+  /** Turns the authenticator app off. Needs a fresh second factor. */
+  @Delete('totp')
+  @HttpCode(204)
+  @StepUp()
+  async removeTotp(@CurrentActor() actor: Actor): Promise<void> {
+    await this.mfa.removeTotp(actor);
+    this.notify.secondFactorChanged(actor.userId, 'The authenticator app was removed from your account.');
+  }
+
   @Delete('passkeys/:id')
   @HttpCode(204)
+  @StepUp()
   async remove(@CurrentActor() actor: Actor, @Param('id') id: string): Promise<void> {
     if (!z.uuid().safeParse(id).success) throw new NotFoundException('Passkey not found');
     await this.mfa.removePasskey(actor, id);

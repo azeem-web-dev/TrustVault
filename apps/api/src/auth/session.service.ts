@@ -4,6 +4,8 @@ import { ENV, type Env } from '../config/env.js';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import type { Actor } from '../common/request-context.js';
 import { AuditService } from '../audit/audit.service.js';
+import { MfaPolicyService } from './mfa-policy.service.js';
+import { deviceName } from './device-name.js';
 
 export const SESSION_COOKIE = '__Host-tv_session';
 
@@ -31,6 +33,7 @@ export class SessionService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(ENV) private readonly env: Env,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(MfaPolicyService) private readonly policy: MfaPolicyService,
   ) {}
 
   async create(
@@ -41,12 +44,15 @@ export class SessionService {
     const token = randomBytes(32).toString('base64url');
     const csrfToken = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.env.SESSION_ABSOLUTE_MINUTES * 60_000);
+    const authLevel = meta.authLevel ?? 'password';
     await (tx ?? this.prisma).session.create({
       data: {
         userId,
         tokenHash: sha256(token),
         csrfToken,
-        authLevel: meta.authLevel ?? 'password',
+        authLevel,
+        // An MFA-level session is only ever created right after a factor was checked.
+        mfaVerifiedAt: authLevel === 'mfa' ? new Date() : null,
         expiresAt,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -61,10 +67,14 @@ export class SessionService {
    */
   async resolve(token: string | undefined): Promise<Actor | null> {
     if (!token || token.length > 128) return null;
-    const session = await this.prisma.session.findUnique({
-      where: { tokenHash: sha256(token) },
-      include: { user: { include: { _count: { select: { passkeys: true } } } } },
-    });
+    // The MFA policy is read on every request, so a change binds live sessions at once (S20).
+    const [session, requiredRoles] = await Promise.all([
+      this.prisma.session.findUnique({
+        where: { tokenHash: sha256(token) },
+        include: { user: { include: { _count: { select: { passkeys: true } } } } },
+      }),
+      this.policy.requiredRoles(),
+    ]);
     if (!session) return null;
 
     const now = Date.now();
@@ -110,8 +120,42 @@ export class SessionService {
       authLevel: session.authLevel,
       csrfToken: session.csrfToken,
       mfaEnrolled,
-      mfaRequired: user.role === 'ADMIN' || mfaEnrolled,
+      mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),
+      mfaVerifiedAt: session.mfaVerifiedAt,
     };
+  }
+
+  /**
+   * Records a fresh second factor in this session (step-up). The token is
+   * not rotated: the session is already MFA level, so its privilege class
+   * does not change, and rotating would break the caller's other tabs
+   * mid-retry. Only a live MFA-level session can be stepped up.
+   */
+  async markStepUp(sessionId: string, tx?: Tx): Promise<boolean> {
+    const r = await (tx ?? this.prisma).session.updateMany({
+      where: { id: sessionId, revokedAt: null, authLevel: 'mfa' },
+      data: { mfaVerifiedAt: new Date() },
+    });
+    return r.count === 1;
+  }
+
+  /** The caller's own live sessions ("signed-in devices"). Never anyone else's. */
+  async listForUser(actor: Actor) {
+    const now = Date.now();
+    const rows = await this.prisma.session.findMany({
+      where: { userId: actor.userId, revokedAt: null, expiresAt: { gt: new Date(now) }, lastSeenAt: { gt: new Date(now - this.env.SESSION_IDLE_MINUTES * 60_000) } },
+      select: { id: true, ip: true, userAgent: true, createdAt: true, lastSeenAt: true, authLevel: true },
+      orderBy: { lastSeenAt: 'desc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      device: deviceName(r.userAgent),
+      ip: r.ip,
+      createdAt: r.createdAt,
+      lastSeenAt: r.lastSeenAt,
+      authLevel: r.authLevel,
+      current: r.id === actor.sessionId,
+    }));
   }
 
   /** Ends one session. Returns 1 if it was live, 0 if it had already ended. */

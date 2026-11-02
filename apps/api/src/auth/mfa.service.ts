@@ -4,7 +4,7 @@ import {
   type AuthenticationResponseJSON, type AuthenticatorTransportFuture, type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { ENV, type Env } from '../config/env.js';
-import { PrismaService } from '../db/prisma.service.js';
+import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
@@ -12,6 +12,8 @@ import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { base32Encode, matchTotp, newTotpSecret, otpauthUri } from './totp.js';
 import { SessionService, type NewSession } from './session.service.js';
+import { MfaPolicyService } from './mfa-policy.service.js';
+import { expectedPasskeyOrigins } from './passkey-origins.js';
 
 const totpAad = (userId: string) => `tv-totp-v1|${userId}`;
 
@@ -45,7 +47,13 @@ export class MfaService {
     @Inject(RateLimitService) private readonly limits: RateLimitService,
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
+    @Inject(MfaPolicyService) private readonly policy: MfaPolicyService,
   ) {}
+
+  /** The web origin, plus the Android app's signing-key origin(s) (THREATS.md S21). */
+  private get origins(): string[] {
+    return expectedPasskeyOrigins(this.env);
+  }
 
   private get rpID(): string {
     return new URL(this.env.PUBLIC_ORIGIN).hostname;
@@ -56,9 +64,15 @@ export class MfaService {
       where: { id: actor.userId },
       select: { totpEnabledAt: true, passkeys: { select: { id: true, name: true, createdAt: true, lastUsedAt: true }, orderBy: { createdAt: 'asc' } } },
     });
+    const roles = await this.policy.requiredRoles();
     return {
-      required: actor.role === 'ADMIN' || u.totpEnabledAt !== null || u.passkeys.length > 0,
+      required: MfaPolicyService.isRequired(actor.role, u.totpEnabledAt !== null || u.passkeys.length > 0, roles),
+      /** Required because of the account's role (so the last factor cannot be removed). */
+      requiredByRole: MfaPolicyService.isRequired(actor.role, false, roles),
       satisfied: actor.authLevel === 'mfa',
+      /** Risky actions need a factor newer than this many minutes (step-up). */
+      stepUpMinutes: this.env.STEP_UP_MINUTES,
+      stepUpFresh: actor.mfaVerifiedAt !== null && Date.now() - actor.mfaVerifiedAt.getTime() <= this.env.STEP_UP_MINUTES * 60_000,
       totp: u.totpEnabledAt !== null,
       passkeys: u.passkeys,
     };
@@ -117,7 +131,8 @@ export class MfaService {
       : false;
     if (!accepted) {
       await this.audit.record({ action, outcome: 'DENIED', reason: step === null ? 'wrong_code' : 'code_replayed', targetType: 'user', targetId: actor.userId });
-      throw new UnauthorizedException('That code is not valid');
+      // Same text for wrong and reused codes; the audit row says which.
+      throw new UnauthorizedException({ message: 'That code didn’t match. Type the newest 6 digits your app shows. If it keeps failing, set your phone’s date and time to automatic: codes depend on the clock.', code: 'wrong_code' });
     }
   }
 
@@ -150,7 +165,7 @@ export class MfaService {
     if (!expectedChallenge) throw new BadRequestException('The passkey request expired. Try again.');
     let verification;
     try {
-      verification = await verifyRegistrationResponse({ response, expectedChallenge, expectedOrigin: this.env.PUBLIC_ORIGIN, expectedRPID: this.rpID, requireUserVerification: true });
+      verification = await verifyRegistrationResponse({ response, expectedChallenge, expectedOrigin: this.origins, expectedRPID: this.rpID, requireUserVerification: true });
     } catch {
       verification = null;
     }
@@ -183,6 +198,11 @@ export class MfaService {
   }
 
   async passkeyVerify(actor: Actor, response: AuthenticationResponseJSON): Promise<NewSession> {
+    return this.checkPasskey(actor, response, 'mfa.passkey_verify', (tx) => this.upgrade(actor, tx));
+  }
+
+  /** Checks an assertion against the challenge issued to this session, then runs `then` in the same transaction. */
+  private async checkPasskey<T>(actor: Actor, response: AuthenticationResponseJSON, action: string, then: (tx: Tx) => Promise<T>): Promise<T> {
     await this.limits.hit(`mfa:${actor.userId}`, 5, 300, 'Too many attempts. Wait five minutes.');
     const expectedChallenge = await this.redis.client.getdel(`webauthn:auth:${actor.sessionId}`);
     if (!expectedChallenge) throw new BadRequestException('The passkey request expired. Try again.');
@@ -191,7 +211,7 @@ export class MfaService {
     try {
       verification = passkey
         ? await verifyAuthenticationResponse({
-            response, expectedChallenge, expectedOrigin: this.env.PUBLIC_ORIGIN, expectedRPID: this.rpID, requireUserVerification: true,
+            response, expectedChallenge, expectedOrigin: this.origins, expectedRPID: this.rpID, requireUserVerification: true,
             credential: { id: passkey.credentialId, publicKey: new Uint8Array(passkey.publicKey), counter: Number(passkey.counter), transports: passkey.transports as AuthenticatorTransportFuture[] },
           })
         : null;
@@ -199,30 +219,84 @@ export class MfaService {
       verification = null;
     }
     if (!passkey || !verification?.verified) {
-      await this.audit.record({ action: 'mfa.passkey_verify', outcome: 'DENIED', reason: passkey ? 'verification_failed' : 'unknown_credential', targetType: 'user', targetId: actor.userId });
+      await this.audit.record({ action, outcome: 'DENIED', reason: passkey ? 'verification_failed' : 'unknown_credential', targetType: 'user', targetId: actor.userId });
       throw new UnauthorizedException('The passkey could not be verified');
     }
     return this.prisma.$transaction(async (tx) => {
       await tx.passkey.update({ where: { id: passkey.id }, data: { counter: BigInt(verification.authenticationInfo.newCounter), lastUsedAt: new Date() } });
-      await this.audit.record({ action: 'mfa.passkey_verify', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { passkey: passkey.name } }, tx);
-      return this.upgrade(actor, tx);
+      await this.audit.record({ action, outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { method: 'passkey', passkey: passkey.name } }, tx);
+      return then(tx);
     });
+  }
+
+  // --------------------------------------------------------------- step-up
+
+  /**
+   * Re-verification for risky actions (THREATS.md S19): a fresh TOTP code or
+   * passkey assertion moves this session's mfa_verified_at to now. Same rate
+   * limit, replay rule and audit as sign-in. Only for a session that has
+   * already passed its second factor; the token is not rotated (see
+   * SessionService.markStepUp).
+   */
+  async stepUp(actor: Actor, proof: { code: string } | { response: AuthenticationResponseJSON }): Promise<void> {
+    if (actor.authLevel !== 'mfa') throw new ForbiddenException({ message: 'Finish signing in first', code: 'mfa_required' });
+    const mark = async (tx: Tx) => {
+      if (!(await this.sessions.markStepUp(actor.sessionId, tx))) throw new UnauthorizedException('Your session ended. Sign in again.');
+    };
+    if ('code' in proof) {
+      const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true } });
+      if (!user.totpEnabledAt) throw new BadRequestException('No authenticator app is set up. Use your passkey.');
+      await this.checkCode(actor, proof.code, 'mfa.step_up');
+      await this.prisma.$transaction(async (tx) => {
+        await mark(tx);
+        await this.audit.record({ action: 'mfa.step_up', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { method: 'totp' } }, tx);
+      });
+      return;
+    }
+    await this.checkPasskey(actor, proof.response, 'mfa.step_up', mark);
   }
 
   async removePasskey(actor: Actor, id: string): Promise<void> {
     if (actor.authLevel !== 'mfa') throw new ForbiddenException('Confirm your second factor first');
     await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true, passkeys: { select: { id: true } } } });
+      const user = await this.lockFactors(tx, actor.userId);
       if (!user.passkeys.some((p) => p.id === id)) throw new NotFoundException('Passkey not found');
-      if (actor.role === 'ADMIN' && !user.totpEnabledAt && user.passkeys.length === 1) {
-        throw new BadRequestException('Admins must keep at least one second factor');
-      }
+      if (!user.totpEnabledAt && user.passkeys.length === 1) await this.refuseLastFactor(actor, tx);
       await tx.passkey.delete({ where: { id } });
       await this.audit.record({ action: 'mfa.passkey_remove', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { passkeyId: id } }, tx);
     });
   }
 
+  /** Turns the authenticator app off. Step-up is enforced by the route (@StepUp). */
+  async removeTotp(actor: Actor): Promise<void> {
+    if (actor.authLevel !== 'mfa') throw new ForbiddenException('Confirm your second factor first');
+    await this.prisma.$transaction(async (tx) => {
+      const user = await this.lockFactors(tx, actor.userId);
+      if (user.isProtected) throw new ForbiddenException('Demo accounts cannot change their second factor');
+      if (!user.totpEnabledAt) throw new NotFoundException('No authenticator app is set up');
+      if (user.passkeys.length === 0) await this.refuseLastFactor(actor, tx);
+      await tx.user.update({ where: { id: actor.userId }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
+      await this.audit.record({ action: 'mfa.totp_remove', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
+    });
+  }
+
   // ---------------------------------------------------------------- shared
+
+  /**
+   * The user row is locked so two removals at once cannot both pass the
+   * "keeps one factor" check and leave a required account with none.
+   */
+  private async lockFactors(tx: Tx, userId: string) {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+    return tx.user.findUniqueOrThrow({ where: { id: userId }, select: { isProtected: true, totpEnabledAt: true, passkeys: { select: { id: true } } } });
+  }
+
+  /** Admins, and roles in the MFA policy, must keep at least one factor. */
+  private async refuseLastFactor(actor: Actor, tx: Tx): Promise<void> {
+    if (MfaPolicyService.isRequired(actor.role, false, await this.policy.requiredRoles(tx))) {
+      throw new BadRequestException(actor.role === 'ADMIN' ? 'Admins must keep at least one second factor' : 'Your role must keep at least one second factor');
+    }
+  }
 
   /** Someone who already has a second factor must use it before adding another. */
   private async requireMfaIfEnrolled(actor: Actor): Promise<void> {
@@ -233,7 +307,7 @@ export class MfaService {
   }
 
   /** Replace the password-level session with a new MFA-level one. */
-  private async upgrade(actor: Actor, tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0]): Promise<NewSession> {
+  private async upgrade(actor: Actor, tx: Tx): Promise<NewSession> {
     const ctx = currentContext();
     // Re-check everything under the user row lock that admin resets and
     // deactivation also take: if the password-only session was ended, or the

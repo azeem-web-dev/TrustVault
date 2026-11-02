@@ -14,8 +14,10 @@ export interface Actor {
   csrfToken: string;
   /** Has a TOTP app or passkey registered. */
   mfaEnrolled: boolean;
-  /** Must present a second factor before using the app (every ADMIN, and anyone enrolled). */
+  /** Must present a second factor before using the app (every ADMIN, roles in the MFA policy, and anyone enrolled). */
   mfaRequired: boolean;
+  /** When a second factor was last presented in this session (step-up, THREATS.md S19). */
+  mfaVerifiedAt: Date | null;
 }
 
 /** Per-request facts the audit log needs, available anywhere in the call. */

@@ -16,6 +16,9 @@ import { AuthController } from './auth/auth.controller.js';
 import { MfaService } from './auth/mfa.service.js';
 import { MfaController } from './auth/mfa.controller.js';
 import { SecurityGuard } from './auth/security.guard.js';
+import { MfaPolicyService } from './auth/mfa-policy.service.js';
+import { SessionsController } from './auth/sessions.controller.js';
+import { SettingsController } from './auth/settings.controller.js';
 import { UsersService } from './users/users.service.js';
 import { UsersController } from './users/users.controller.js';
 import { GroupsController } from './users/groups.controller.js';
@@ -51,6 +54,7 @@ export class AppModule {
       controllers: [
         HealthController, AuthController, MfaController, UsersController, GroupsController, DirectoryController,
         DocumentsController, FoldersController, AuditAdminController, WitnessController,
+        SessionsController, SettingsController,
       ],
       providers: [
         { provide: ENV, useValue: env },
@@ -63,6 +67,7 @@ export class AppModule {
         AuditAdminService,
         PasswordService,
         SessionService,
+        MfaPolicyService,
         AuthService,
         MfaService,
         UsersService,

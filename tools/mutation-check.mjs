@@ -161,6 +161,25 @@ const MUTATIONS = [
   sql('database: group membership rules trigger (no externals, no admins)',
     'ALTER TABLE group_members DISABLE TRIGGER group_members_guard', 'ALTER TABLE group_members ENABLE TRIGGER group_members_guard',
     ['test/rls.test.ts']),
+  // --- step-up, MFA policy, signed-in devices (THREATS.md S19, S20, S22) -----
+  code('guard: risky actions need a recent second factor (step-up)', GUARD,
+    'if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {', 'if (false) {', ['test/step-up.test.ts']),
+  code('users: deactivating someone is a step-up route', 'src/users/users.controller.ts',
+    "@Post(':id/deactivate')\n  @HttpCode(200)\n  @StepUp()", "@Post(':id/deactivate')\n  @HttpCode(200)", ['test/step-up.test.ts']),
+  code('mfa: a step-up code works only once', 'src/auth/mfa.service.ts',
+    'AND (totp_last_step IS NULL OR totp_last_step < ${step})', '', ['test/step-up.test.ts']),
+  code('session: the MFA policy applies to live sessions', SESSION,
+    'mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),', "mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, ['ADMIN']),",
+    ['test/mfa-policy.test.ts']),
+  code('policy: ADMIN can never be taken out of the MFA policy', 'src/auth/mfa-policy.service.ts',
+    "if (!roles.includes('ADMIN')) throw new BadRequestException('Administrators always need a second factor');", '', ['test/mfa-policy.test.ts']),
+  code('mfa: a role the policy covers keeps its last factor', 'src/auth/mfa.service.ts',
+    'if (MfaPolicyService.isRequired(actor.role, false, await this.policy.requiredRoles(tx))) {', "if (actor.role === 'ADMIN') {", ['test/mfa-policy.test.ts']),
+  code('devices: you can only sign out your own sessions', 'src/auth/sessions.controller.ts',
+    'where: { id, userId: actor.userId, revokedAt: null }', 'where: { id, revokedAt: null }', ['test/devices.test.ts']),
+  sql('database: ADMIN always in the MFA policy (check constraint)',
+    'ALTER TABLE app_settings DROP CONSTRAINT app_settings_admin_needs_mfa',
+    "ALTER TABLE app_settings ADD CONSTRAINT app_settings_admin_needs_mfa CHECK ('ADMIN' = ANY (mfa_required_roles))", ['test/mfa-policy.test.ts']),
 ];
 
 function loadEnv() {

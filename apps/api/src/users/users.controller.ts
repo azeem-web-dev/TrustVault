@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Patch, P
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
-import { CurrentActor, Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles, StepUp } from '../auth/decorators.js';
 import { PasswordSchema } from '../auth/password.service.js';
 import { UsersService } from './users.service.js';
 import { PasswordResetService } from '../auth/password-reset.service.js';
@@ -52,13 +52,16 @@ export class UsersController {
     return { user: await this.users.create(body) };
   }
 
+  /** A role change needs a fresh second factor (THREATS.md S19); other edits do not. */
   @Patch(':id')
+  @StepUp((req) => typeof req.body === 'object' && req.body !== null && 'role' in req.body)
   async update(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(UpdateUserSchema)) body: z.infer<typeof UpdateUserSchema>) {
     return { user: await this.users.update(actor, id, body) };
   }
 
   @Post(':id/deactivate')
   @HttpCode(200)
+  @StepUp()
   async deactivate(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
     return { user: await this.users.deactivate(actor, id) };
   }
@@ -71,6 +74,7 @@ export class UsersController {
 
   @Post(':id/mfa/reset')
   @HttpCode(204)
+  @StepUp()
   async resetMfa(@CurrentActor() actor: Actor, @Param('id', uuid) id: string): Promise<void> {
     await this.users.resetMfa(actor, id);
     this.notify.secondFactorChanged(id, 'An administrator removed your second factor. You will be asked to set one up again when you next sign in.');
@@ -78,6 +82,7 @@ export class UsersController {
 
   @Post(':id/password')
   @HttpCode(204)
+  @StepUp()
   async resetPassword(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(ResetPasswordSchema)) body: z.infer<typeof ResetPasswordSchema>): Promise<void> {
     await this.users.resetPassword(actor, id, body.password);
     this.notify.passwordChanged(id, 'by an administrator');
@@ -86,6 +91,7 @@ export class UsersController {
   /** Emails the person a reset link. The admin never sees or sets the new password (THREATS.md S15). */
   @Post(':id/reset-link')
   @HttpCode(202)
+  @StepUp()
   async sendResetLink(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
     return { ok: true, ...(await this.resets.adminSend(actor, id)) };
   }

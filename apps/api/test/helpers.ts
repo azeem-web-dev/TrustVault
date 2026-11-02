@@ -15,6 +15,9 @@ import { startFakeClamd, type FakeClamd } from './fake-clamd.js';
 try { process.loadEnvFile('.env'); } catch { /* CI */ }
 
 export const ORIGIN = 'https://vault.test';
+// A second checkout can run the suite against the same Redis without
+// clearing the other's keys.
+const REDIS_TEST_PREFIX = process.env.TEST_REDIS_PREFIX ?? 'tvdev:test:';
 
 export function testEnv(overrides: Record<string, string> = {}): Env {
   return loadEnv({
@@ -22,7 +25,7 @@ export function testEnv(overrides: Record<string, string> = {}): Env {
     NODE_ENV: 'test',
     PUBLIC_ORIGIN: ORIGIN,
     DATABASE_URL: process.env.TEST_DATABASE_URL,
-    REDIS_PREFIX: 'tvdev:test:',
+    REDIS_PREFIX: REDIS_TEST_PREFIX,
     KEY_PROVIDER: 'local',
     JOBS_ENABLED: 'false',
     // Failed logins are padded to a fixed time in production; the suite
@@ -66,6 +69,11 @@ export async function startApp(overrides: Record<string, string> = {}): Promise<
   const clamd = await startFakeClamd();
   const app = await createApp(testEnv({ SCANNER: 'clamd', CLAMD_SOCKET: clamd.address, CLAMD_TIMEOUT_MS: '1500', ...overrides }));
   await app.init();
+  // The API refuses rather than queues while Redis is connecting (no offline
+  // queue); over a slow link the first test could otherwise race it.
+  const { RedisService } = await import('../src/redis/redis.service.js');
+  const redis = app.get(RedisService).client;
+  if (redis.status !== 'ready') await new Promise((ok) => redis.once('ready', ok));
   return {
     app, http: request(app.getHttpServer()), clamd,
     close: async () => { await app.close(); await clamd.close(); },
@@ -78,16 +86,20 @@ export async function startApp(overrides: Record<string, string> = {}): Promise<
  * design — so tests look up their own rows by request id or document id.
  */
 export async function resetState(app: INestApplication): Promise<void> {
-  await withDb(ownerDb(), (db) => db.query('TRUNCATE sessions, users, groups CASCADE'));
+  await withDb(ownerDb(), async (db) => {
+    await db.query('TRUNCATE sessions, users, groups CASCADE');
+    // Back to the default second-factor policy (ADMIN only).
+    await db.query(`UPDATE app_settings SET mfa_required_roles = '{ADMIN}', updated_by_id = NULL`);
+  });
   const { RedisService } = await import('../src/redis/redis.service.js');
   const redis = app.get(RedisService).client;
   // KEYS is blocked by the Redis ACL (it is in @dangerous), so iterate with
   // SCAN. Names come back with the prefix; del() adds it again, so strip it.
   let cursor = '0';
   do {
-    const [next, found] = await redis.scan(cursor, 'MATCH', 'tvdev:test:*', 'COUNT', 500);
+    const [next, found] = await redis.scan(cursor, 'MATCH', `${REDIS_TEST_PREFIX}*`, 'COUNT', 500);
     cursor = next;
-    if (found.length) await redis.del(...found.map((k) => k.slice('tvdev:test:'.length)));
+    if (found.length) await redis.del(...found.map((k) => k.slice(REDIS_TEST_PREFIX.length)));
   } while (cursor !== '0');
 }
 
