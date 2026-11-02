@@ -27,6 +27,8 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | POST | `/auth/logout` | signed in (*partial*) | Ends this session. |
 | GET | `/auth/me` | signed in (*partial*) | Own profile, CSRF token, MFA state. |
 | POST | `/auth/password` | signed in | `{currentPassword, newPassword}` (12+ chars). Ends **all** your sessions. Refused for demo accounts. |
+| POST | `/auth/password/forgot` | **public** | `{email}`. Always `202 {ok:true}`, whether or not the email has an account, so it reveals nothing. If the account is active, not expired and not a demo account, emails a reset link that works once and expires in 30 minutes; a new link cancels earlier ones. `429` after 10 requests per 15 minutes from one IP. Per address, after 3 an hour it quietly stops sending and still answers `202`. Audited as `auth.reset_requested`. |
+| POST | `/auth/password/reset` | **public**: anyone holding a valid, unused, unexpired link | `{token, newPassword}` (token from the link's `#token=` fragment). `204`: password set, every session ended, lockout cleared, the cookie cleared, a notice emailed. A second factor is not removed. `400` "This link is invalid or has expired" for a used, expired, cancelled, unknown or malformed link, or a demo or inactive account; `400` for a weak password. Audited as `auth.password_reset_link`, allowed or refused. |
 | GET | `/auth/mfa` | signed in (*partial*) | Second-factor status and your passkeys. |
 | POST | `/auth/mfa/totp/setup` | signed in (*partial*) | Starts TOTP enrolment, returns secret and `otpauth://` URI. If you already have a factor, you must have used it this session. |
 | POST | `/auth/mfa/totp/enable` | signed in (*partial*) | `{code}` confirms enrolment. Issues a new session token. |
@@ -83,7 +85,8 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | PATCH | `/admin/users/:id` | `{displayName?, role?, accessExpiresAt?}`. A role change or a changed `accessExpiresAt` ends that user's sessions. Leaving OWNER is refused while the person owns documents (`400`). Becoming ADMIN or EXTERNAL drops their grants and group memberships. Leaving ADMIN ends any open break-glass window. Not your own role; never the last active admin; never a demo account. |
 | POST | `/admin/users/:id/deactivate` | Ends their sessions and any open break-glass window in the same transaction. Not yourself; never the last active admin; never a demo account. |
 | POST | `/admin/users/:id/reactivate` | |
-| POST | `/admin/users/:id/password` | `{password}`. Ends their sessions. |
+| POST | `/admin/users/:id/password` | `{password}`. Ends their sessions and emails them a notice. Kept in the API, but the website and app no longer use it: the admin would know the password (THREATS.md S15). |
+| POST | `/admin/users/:id/reset-link` | Emails the person a reset link. `202 {ok:true, sent}`. The admin never gets the link or sees the new password. `sent` is `false` for a demo account or when mail is off. `404` unknown user; `400` if the account is not active. Audited as `user.reset_link_sent`. |
 | POST | `/admin/users/:id/mfa/reset` | Removes their TOTP and passkeys; ends their sessions. Not yourself. |
 | GET / POST | `/admin/groups` | List with members; create. |
 | PATCH / DELETE | `/admin/groups/:id` | Deleting a group removes its document grants in the same transaction. |
@@ -95,3 +98,23 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | GET | `/admin/audit/export` | `fromSeq`, `toSeq`: evidence bundle for `tools/verify-audit.mjs`. The bundle's `verifyWith` field gives the command: `node tools/verify-audit.mjs <bundle.json> --key <production public key> --rekor --witness <witness branch>/checkpoints.jsonl`. With none of `--key`, `--rekor` or `--witness` the tool exits 2: the bundle is only shown to be internally consistent. |
 | GET | `/admin/alerts` | `hours` (1 to 720, default 24). Kinds: `audit_verification_failed`, `file_integrity`, `malware_found` (critical); `rescan_failed`, `reset_then_sign_in` (an account signed in after an admin reset its password or second factor), `ended_session_used`, `access_after_revoke`, `repeated_denials` (high); `bulk_download`, `break_glass` (medium); `external_share`, `login_blocked` (info). |
 | POST | `/admin/break-glass` | `{documentId, reason}` (20+ chars): one hour of READ on one document. Audited, alerted, visible in the document's history. |
+
+## Emails
+
+Mail is sent after the change it reports is committed. It never delays or fails the request. **Demo accounts never get mail**: their addresses belong to someone else. Production sends through Hostinger SMTP from `updates@rayyanazeem.cloud`. With `MAIL_TRANSPORT=off` nothing is sent and no reset link is created (the forgot endpoint still answers `202`).
+
+| Event | Who gets it |
+|---|---|
+| Reset link asked for (`/auth/password/forgot`) or sent by an admin | The account holder: the link |
+| Password changed (own settings, reset link, or an admin) | The account holder |
+| Sign-in (after the second step, if there is one) | The account holder, with time, IP and device, and a link to reset |
+| Authenticator app added, passkey added or removed, second factor reset by an admin | The account holder |
+| A document newly shared with a person | That person only: document title, sharer, level, expiry. Never contents. Group shares send no email |
+
+## Audit actions for password reset
+
+| Action | Outcome and reason |
+|---|---|
+| `auth.reset_requested` | One per request that passes the IP limit. `ALLOWED` with reason `sent`; otherwise `DENIED` with `no_account`, `not_eligible` (inactive, expired or demo account), `rate_limited` (per-address limit) or `mail_off` |
+| `auth.password_reset_link` | A link used. `ALLOWED` with the number of sessions ended; or `DENIED` with `malformed_link`, `unknown_link`, `link_used`, `link_expired` or `not_eligible` |
+| `user.reset_link_sent` | An admin sent a link. `ALLOWED`; or `DENIED` with `demo_account` or `mail_off` |

@@ -14,6 +14,7 @@ A document platform for confidential files: salary letters, contracts, board min
 - **Admin view:** filterable activity, integrity verification, alerts (repeated refusals, attempts after revocation, ended sessions being used, sign-ins after an admin reset the password, bulk downloads, external sharing, break-glass, blocked sign-ins, integrity failures, malware found), users, groups, and audited break-glass access.
 - **Android app** (`apps/mobile`, Flutter): the same screens and look as the website, against the same live API, so every server-side rule and audit entry applies unchanged. Sessions are kept in Android's encrypted storage and never backed up (THREATS.md S13).
 - **Access suggestions:** for a document, suggests people you shared similar documents with. Suggestions never grant; you confirm each one, and both are audited.
+- **Email:** forgotten-password links (one use, 30 minutes, only a hash stored, the same answer whether or not the account exists), and notices for every sign-in, password change, second-factor change and new share. Admins send a reset link instead of choosing the password. Demo accounts never get mail. Sending never holds up the request, and a failed send is logged without the message.
 
 ## The permission model, in my own words
 
@@ -68,5 +69,5 @@ These were open gaps in the first version and are now built and tested: the outs
 - **Demo video:** the script is in [docs/DEMO.md](DEMO.md); the recording is mine to make.
 - **One server.** No database replication.
 - **Two sign-in races** (an admin resetting the password or deactivating the account while someone signs in, or while they finish the second-factor step) are closed by row locks and re-checks in the code. No timed test proves it.
-- **An admin can impersonate a user** by resetting their password and signing in as them. This is detected and raised as an alert, not prevented (THREATS.md S15).
+- **An admin can still impersonate a user through the API.** The admin screen now sends a reset link, so the admin never sees the new password. The old set-password endpoint is still in the API; using it is audited, emailed to the person and alerted when that account then signs in, but not prevented (THREATS.md S15).
 - **The Android app has no tests of its own** and no passkey support (passkeys are tied to the website address, so they are added and used on the website). So far it has only been checked by hand: the sign-in screen on an emulator, then installed on a phone. It is not in a store; the APK is built from `apps/mobile`.
