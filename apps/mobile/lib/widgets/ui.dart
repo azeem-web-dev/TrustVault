@@ -279,8 +279,8 @@ class TvBadge extends StatelessWidget {
   }
 }
 
-const accessTone = {'OWNER': Tone.violet, 'MANAGE': Tone.blue, 'EDIT': Tone.amber, 'READ': Tone.green, 'NONE': Tone.neutral};
-const accessLabel = {'OWNER': 'Owner', 'MANAGE': 'Manage', 'EDIT': 'Edit', 'READ': 'Read', 'NONE': 'None'};
+const accessTone = {'OWNER': Tone.violet, 'MANAGE': Tone.blue, 'EDIT': Tone.amber, 'READ': Tone.green, 'VIEW': Tone.neutral, 'NONE': Tone.neutral};
+const accessLabel = {'OWNER': 'Owner', 'MANAGE': 'Manage', 'EDIT': 'Edit', 'READ': 'Download', 'VIEW': 'View only', 'NONE': 'None'};
 const outcomeTone = {'ALLOWED': Tone.green, 'DENIED': Tone.red, 'FAILED': Tone.amber};
 
 /* ---------------------------------------------------------------- surfaces */

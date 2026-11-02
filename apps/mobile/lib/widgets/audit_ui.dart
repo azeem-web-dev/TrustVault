@@ -14,6 +14,9 @@ class ActionMeta {
 final _exact = <String, ActionMeta>{
   'document.download': ActionMeta(PhosphorIconsDuotone.downloadSimple, 'Downloaded'),
   'document.view': ActionMeta(PhosphorIconsDuotone.eye, 'Viewed'),
+  'document.page_view': ActionMeta(PhosphorIconsDuotone.eye, 'Page viewed'),
+  'document.offline_key': ActionMeta(PhosphorIconsDuotone.key, 'Opened offline copy'),
+  'document.download_stamp': ActionMeta(PhosphorIconsDuotone.shieldWarning, 'Download not stamped'),
   'document.upload': ActionMeta(PhosphorIconsDuotone.uploadSimple, 'Uploaded'),
   'document.version': ActionMeta(PhosphorIconsDuotone.uploadSimple, 'New version'),
   'document.update': ActionMeta(PhosphorIconsDuotone.pencilSimple, 'Details changed'),

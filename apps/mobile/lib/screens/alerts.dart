@@ -29,6 +29,7 @@ PI _kindIcon(String kind) {
   if (kind.contains('rescan')) return PhosphorIconsDuotone.bug;
   if (kind.contains('break')) return PhosphorIconsDuotone.siren;
   if (kind.contains('integrity') || kind.contains('tamper')) return PhosphorIconsDuotone.shieldWarning;
+  if (kind.contains('page_view')) return PhosphorIconsDuotone.eye;
   if (kind.contains('download')) return PhosphorIconsDuotone.downloadSimple;
   if (kind.contains('share') || kind.contains('external')) return PhosphorIconsDuotone.shareNetwork;
   if (kind.contains('login') || kind.contains('sign') || kind.contains('locked')) return PhosphorIconsDuotone.lockKey;
@@ -306,7 +307,7 @@ class _BreakGlassState extends State<_BreakGlass> {
                 ),
                 gap12,
                 Text(
-                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of read access to a single document. The reason is recorded in the audit trail, raised as an alert, and shown in the document's own history to its owner.",
+                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of view-only access to a single document: its pages, watermarked with your name, never the original file. The reason is recorded in the audit trail, raised as an alert, and shown in the document's own history to its owner.",
                   style: ts(context, size: 13, color: p.body, height: 1.55),
                 ),
                 gap16,

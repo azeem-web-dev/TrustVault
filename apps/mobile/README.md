@@ -11,7 +11,7 @@ check (roles, per-document access, RLS, audit) is the same server-side code.
 | Sign in, demo accounts | `/login` | Same four demo buttons |
 | Second factor | `/login/mfa` | Authenticator code and setup (QR) |
 | Documents | `/` | Stats, scopes, search, filters, list/grid, upload, folders |
-| Document | `/documents/[id]` | Download, versions, sharing, suggestions, history, owner actions |
+| Document | `/documents/[id]` | View pages (watermarked, in memory only), download, versions, sharing, suggestions, history, owner actions |
 | Account | `/account` | Security score, passkeys list, authenticator, password, theme |
 | Audit log | `/admin/audit` | Verify integrity, quick filters, event details, evidence export |
 | Alerts | `/admin/alerts` | Severity counts, alert list, break-glass |
@@ -30,6 +30,21 @@ refuses a *different* browser origin). No API changes were needed.
 
 App data is excluded from cloud backup and device transfer, and cleartext
 HTTP is disabled.
+
+## Documents on the phone
+
+- **Screens are protected.** While a document's detail or pages are open the
+  app sets `FLAG_SECURE` (a small MethodChannel in `MainActivity`): screenshots
+  and screen recordings come out black and Recents shows a blank card.
+- **View only shows pages, never the file.** Pages come from the server as
+  watermarked images (viewer's email, time, trace code) and stay in memory.
+- **Downloads stay encrypted.** A downloaded file is kept only as AES-256-GCM
+  ciphertext (`cryptography` 2.9.0). The key is fetched from the server on
+  every open (`POST /documents/:id/offline-key`, audited); after a revoke the
+  server refuses it and the app deletes the copy. Opening a file in another
+  app needs a plain temporary copy; it is deleted when you come back to
+  TrustVault, before the next open and at sign-out. Sign-out deletes every
+  copy. See THREATS.md V3 and V6.
 
 **Passkeys:** they are bound to the website address, so adding or using a
 passkey is done on the website. The app lists and removes them. An account

@@ -111,7 +111,7 @@ class _AuditScreenState extends State<AuditScreen> {
             Btn(
               'Export evidence',
               icon: PhosphorIconsDuotone.export,
-              onPressed: () => downloadAndOpen(context, '/admin/audit/export?fromSeq=1', fallbackName: 'trustvault-audit-bundle.json'),
+              onPressed: () => downloadExportAndOpen(context, '/admin/audit/export?fromSeq=1', fallbackName: 'trustvault-audit-bundle.json'),
             ),
           ],
         ),

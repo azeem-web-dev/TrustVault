@@ -7,13 +7,15 @@ import '../widgets/phosphor.dart';
 
 import '../core/api.dart';
 import '../core/format.dart';
+import '../core/secure_screen.dart';
 import '../core/theme.dart';
 import '../widgets/audit_ui.dart';
 import '../widgets/files.dart';
 import '../widgets/ui.dart';
+import 'document_pages.dart';
 import 'shell.dart';
 
-const _rank = {'NONE': 0, 'READ': 1, 'EDIT': 2, 'MANAGE': 3, 'OWNER': 4};
+const _rank = {'NONE': 0, 'VIEW': 1, 'READ': 2, 'EDIT': 3, 'MANAGE': 4, 'OWNER': 5};
 
 class DocumentDetailScreen extends StatefulWidget {
   const DocumentDetailScreen({super.key, required this.id});
@@ -31,7 +33,19 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // No screenshots or Recents preview while a document is open (THREATS.md V3).
+    SecureScreen.hold();
     _load();
+  }
+
+  @override
+  void dispose() {
+    SecureScreen.release();
+    super.dispose();
+  }
+
+  void _openPages(Map doc, bool viewOnly) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => DocumentPagesScreen(documentId: doc['id'] as String, title: doc['title'] as String, viewOnly: viewOnly)));
   }
 
   Future<void> _load() async {
@@ -151,6 +165,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     final versions = (doc['versions'] as List).cast<Map>();
     final current = versions.isEmpty ? null : versions.first;
     final canManage = level >= _rank['MANAGE']!;
+    final canDownload = level >= _rank['READ']!;
     final owner = doc['owner'] as Map;
     final folder = doc['folder'] as Map?;
     final isOwner = doc['isOwner'] == true;
@@ -229,16 +244,35 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                     ),
                     if (current != null) ...[
                       const SizedBox(height: 16),
-                      current['quarantine'] != null
-                          ? const Btn('Download blocked', icon: PhosphorIconsDuotone.prohibit, expand: true, onPressed: null)
-                          : Btn(
-                              'Download  ·  ${current['fileName']}',
-                              variant: BtnVariant.primary,
-                              size: BtnSize.lg,
-                              expand: true,
-                              icon: PhosphorIconsDuotone.downloadSimple,
-                              onPressed: () => downloadAndOpen(context, '/documents/${doc['id']}/download', fallbackName: current['fileName'] as String),
+                      if (current['quarantine'] != null)
+                        const Btn('Download blocked', icon: PhosphorIconsDuotone.prohibit, expand: true, onPressed: null)
+                      else ...[
+                        Btn(
+                          canDownload ? 'View pages' : 'View  ·  view only',
+                          variant: canDownload ? BtnVariant.secondary : BtnVariant.primary,
+                          size: BtnSize.lg,
+                          expand: true,
+                          icon: PhosphorIconsDuotone.eye,
+                          onPressed: () => _openPages(doc, !canDownload),
+                        ),
+                        if (canDownload) ...[
+                          gap8,
+                          Btn(
+                            'Download  ·  ${current['fileName']}',
+                            variant: BtnVariant.primary,
+                            size: BtnSize.lg,
+                            expand: true,
+                            icon: PhosphorIconsDuotone.downloadSimple,
+                            onPressed: () => downloadAndOpen(
+                              context,
+                              documentId: doc['id'] as String,
+                              versionNo: current['versionNo'] as int,
+                              apiPath: '/documents/${doc['id']}/download',
+                              fallbackName: current['fileName'] as String,
                             ),
+                          ),
+                        ],
+                      ],
                     ],
                   ],
                 ),
@@ -264,7 +298,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           gap16,
           _ProtectionCard(isOwner: isOwner),
         ],
-        if (_tab == 'versions') _Versions(doc: doc, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: () => _act(() async {}, 'New version uploaded'), onError: _setError),
+        if (_tab == 'versions') _Versions(doc: doc, canDownload: canDownload, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: () => _act(() async {}, 'New version uploaded'), onError: _setError),
         if (_tab == 'access') _AccessPanel(doc: doc, onError: _setError),
         if (_tab == 'history') _History(docId: doc['id'] as String),
         gap16,
@@ -573,8 +607,9 @@ class _DetailsState extends State<_Details> {
 /* --------------------------------------------------------------- versions */
 
 class _Versions extends StatefulWidget {
-  const _Versions({required this.doc, required this.canUpload, required this.onUploaded, required this.onError});
+  const _Versions({required this.doc, required this.canDownload, required this.canUpload, required this.onUploaded, required this.onError});
   final Map doc;
+  final bool canDownload;
   final bool canUpload;
   final VoidCallback onUploaded;
   final ValueChanged<String?> onError;
@@ -684,11 +719,19 @@ class _VersionsState extends State<_Versions> {
               const Spacer(),
               q != null
                   ? const TvBadge('Download blocked', tone: Tone.red, icon: PhosphorIconsDuotone.prohibit)
+                  : !widget.canDownload
+                  ? const TvBadge('View only', icon: PhosphorIconsDuotone.eyeSlash)
                   : Btn(
                       'Download',
                       size: BtnSize.sm,
                       icon: PhosphorIconsDuotone.downloadSimple,
-                      onPressed: () => downloadAndOpen(context, '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download', fallbackName: v['fileName'] as String),
+                      onPressed: () => downloadAndOpen(
+                        context,
+                        documentId: widget.doc['id'] as String,
+                        versionNo: v['versionNo'] as int,
+                        apiPath: '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download',
+                        fallbackName: v['fileName'] as String,
+                      ),
                     ),
             ],
           ),
@@ -720,7 +763,8 @@ class _VersionsState extends State<_Versions> {
 /* ----------------------------------------------------------------- access */
 
 const _levels = [
-  ('READ', 'Read', 'View and download', PhosphorIconsDuotone.eye),
+  ('VIEW', 'View only', 'Pages in TrustVault, marked with their name. No download', PhosphorIconsDuotone.eyeSlash),
+  ('READ', 'Download', 'Also download a copy stamped with their name', PhosphorIconsDuotone.downloadSimple),
   ('EDIT', 'Edit', 'Also rename, upload versions', PhosphorIconsDuotone.pencilSimple),
   ('MANAGE', 'Manage', 'Also share, see history', PhosphorIconsDuotone.shareNetwork),
 ];
@@ -797,8 +841,10 @@ class _AccessPanelState extends State<_AccessPanel> {
       if (!mounted) return;
       toast(
         context,
-        '${label.isEmpty ? 'Access' : label} can now ${lvl == 'READ'
-            ? 'read'
+        '${label.isEmpty ? 'Access' : label} can now ${lvl == 'VIEW'
+            ? 'view (not download)'
+            : lvl == 'READ'
+            ? 'view and download'
             : lvl == 'EDIT'
             ? 'edit'
             : 'manage'} this document.',
@@ -842,7 +888,7 @@ class _AccessPanelState extends State<_AccessPanel> {
     final isOwner = widget.doc['isOwner'] == true;
     final owner = widget.doc['owner'] as Map;
     final t = _target;
-    final levels = _levels.where((l) => l.$1 == 'READ' || (!(t?.external ?? false) && (l.$1 == 'EDIT' || isOwner))).toList();
+    final levels = _levels.where((l) => l.$1 == 'VIEW' || l.$1 == 'READ' || (!(t?.external ?? false) && (l.$1 == 'EDIT' || isOwner))).toList();
     final users = _users.where((u) => u['id'] != owner['id']).toList();
 
     return Column(
@@ -937,7 +983,8 @@ class _AccessPanelState extends State<_AccessPanel> {
                             trailing: u['role'] == 'EXTERNAL' ? const TvBadge('External', tone: Tone.amber) : null,
                             onTap: () => setState(() {
                               _target = (type: 'user', id: u['id'] as String, label: u['displayName'] as String, external: u['role'] == 'EXTERNAL');
-                              _level = 'READ';
+                              // Externals start at View only: the file never leaves TrustVault (THREATS.md V10).
+                              _level = u['role'] == 'EXTERNAL' ? 'VIEW' : 'READ';
                               _users = [];
                               _groups = [];
                             }),
@@ -957,7 +1004,7 @@ class _AccessPanelState extends State<_AccessPanel> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: ChoiceCard(icon: l.$4, title: l.$2, text: l.$3, selected: _level == l.$1, onTap: () => setState(() => _level = l.$1)),
                 ),
-              if (t?.external ?? false) Text('External people can only be given Read access, and it must end on a date.', style: ts(context, size: 12, color: p.dark ? C.amber300 : C.amber700)),
+              if (t?.external ?? false) Text('External people get View only or Download, and it must end on a date. View only is suggested: the file never leaves TrustVault.', style: ts(context, size: 12, color: p.dark ? C.amber300 : C.amber700)),
               gap12,
               FieldLabel(
                 (t?.external ?? false) ? 'Expires on (required for external)' : 'Expires on (optional)',
@@ -1435,4 +1482,4 @@ class _OwnerActionsState extends State<_OwnerActions> {
   }
 }
 
-String _levelWord(String level) => const {'READ': 'read', 'EDIT': 'edit', 'MANAGE': 'manage', 'OWNER': 'own'}[level] ?? 'open';
+String _levelWord(String level) => const {'VIEW': 'view', 'READ': 'read', 'EDIT': 'edit', 'MANAGE': 'manage', 'OWNER': 'own'}[level] ?? 'open';

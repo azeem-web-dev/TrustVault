@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import 'core/offline_copies.dart';
 import 'core/session.dart';
 import 'core/theme.dart';
 import 'screens/auth.dart';
@@ -22,6 +23,9 @@ Future<void> main() async {
   session.addListener(() {
     if (session.user == null || session.mfaPending) navigatorKey.currentState?.popUntil((r) => r.isFirst);
   });
+  // Plain copies handed to another app go when the user is back here (THREATS.md V6).
+  await OfflineCopies.wipeOpened();
+  AppLifecycleListener(onResume: () => OfflineCopies.wipeOpened());
   runApp(
     MultiProvider(
       providers: [
