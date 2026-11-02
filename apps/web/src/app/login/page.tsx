@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Envelope, Eye, EyeSlash, LockSimple, Sparkle } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
@@ -66,7 +67,8 @@ export default function LoginPage() {
             />
           </span>
         </label>
-        <div className="-mt-2 flex justify-end">
+        <div className="-mt-2 flex items-center justify-end gap-4">
+          <Link href="/forgot" className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-300">Forgot password?</Link>
           <button type="button" onClick={() => setReveal((r) => !r)} aria-pressed={reveal} className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
             {reveal ? <EyeSlash size={15} /> : <Eye size={15} />}{reveal ? 'Hide' : 'Show'} characters
           </button>

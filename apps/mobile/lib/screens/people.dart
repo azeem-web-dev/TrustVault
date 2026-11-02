@@ -83,6 +83,21 @@ class _UsersState extends State<_Users> {
     }
   }
 
+  Future<void> _sendReset(String id, String email) async {
+    setState(() => _error = null);
+    try {
+      final r = await Api.I.post('/admin/users/$id/reset-link');
+      if (!mounted) return;
+      if (r is Map && r['sent'] == false) {
+        toast(context, 'Demo accounts never receive email', tone: Tone.blue);
+      } else {
+        toast(context, 'Reset link sent to $email. You never see their new password.');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Request failed'));
+    }
+  }
+
   Future<void> _run(Future<dynamic> Function() fn, String msg) async {
     setState(() => _error = null);
     try {
@@ -242,9 +257,21 @@ class _UsersState extends State<_Users> {
                           _run(() => Api.I.post('/admin/users/${u['id']}/deactivate'), '$email deactivated and signed out');
                         case 'reactivate':
                           _run(() => Api.I.post('/admin/users/${u['id']}/reactivate'), '$email reactivated');
+                        case 'reset':
+                          _sendReset('${u['id']}', email);
                       }
                     },
                     itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'reset',
+                        child: Row(
+                          children: [
+                            Ic(PhosphorIconsDuotone.lockKey, size: 18, color: p.muted),
+                            gap8,
+                            const Text('Send reset link'),
+                          ],
+                        ),
+                      ),
                       if (u['totpEnabledAt'] != null)
                         PopupMenuItem(
                           value: 'mfa',

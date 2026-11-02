@@ -220,6 +220,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 validator: (v) => (v ?? '').isEmpty ? 'Enter your password' : null,
               ),
             ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => showSheet(
+                  context,
+                  title: 'Reset your password',
+                  icon: PhosphorIconsDuotone.lockKey,
+                  description: 'We will email you a link that works once and expires in 30 minutes.',
+                  builder: (_) => _ForgotForm(initialEmail: _email.text.trim()),
+                ),
+                child: Text('Forgot password?', style: ts(context, size: 13, w: FontWeight.w500, color: p.accent)),
+              ),
+            ),
             if (_error != null) ...[const SizedBox(height: 14), TvAlert(_error!)],
             const SizedBox(height: 18),
             Btn(
@@ -306,6 +319,89 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ForgotForm extends StatefulWidget {
+  const _ForgotForm({this.initialEmail = ''});
+  final String initialEmail;
+  @override
+  State<_ForgotForm> createState() => _ForgotFormState();
+}
+
+class _ForgotFormState extends State<_ForgotForm> {
+  late final _email = TextEditingController(text: widget.initialEmail);
+  bool _busy = false;
+  bool _done = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      setState(() => _error = 'Enter your email');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await Api.I.post('/auth/password/forgot', {'email': email});
+      if (mounted) setState(() => _done = true);
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Could not reach the server'));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Pal.of(context);
+    if (_done) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const TvAlert('If an account exists for that email, a link is on its way. Open it on this phone or a computer.', tone: Tone.green),
+          const SizedBox(height: 10),
+          Text('Demo accounts cannot be reset.', style: ts(context, size: 12, color: p.muted)),
+          const SizedBox(height: 14),
+          Btn('Done', expand: true, onPressed: () => Navigator.of(context).pop()),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FieldLabel(
+          'Email',
+          child: TextField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            autofillHints: const [AutofillHints.email],
+            onSubmitted: (_) => _busy ? null : _send(),
+            decoration: fieldDeco(hint: 'you@company.com', icon: PhosphorIconsDuotone.envelope),
+          ),
+        ),
+        if (_error != null) ...[const SizedBox(height: 14), TvAlert(_error!)],
+        const SizedBox(height: 16),
+        Btn(
+          _busy ? 'Sending…' : 'Email me a reset link',
+          variant: BtnVariant.primary,
+          size: BtnSize.lg,
+          expand: true,
+          loading: _busy,
+          onPressed: _busy ? null : _send,
+        ),
+      ],
     );
   }
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
-  ArrowCounterClockwise, Briefcase, CalendarBlank, Crown, Envelope, Eye, Fingerprint, Globe, IdentificationCard, LockKey, LockSimple, MagnifyingGlass,
+  ArrowCounterClockwise, Briefcase, CalendarBlank, Crown, Envelope, EnvelopeSimple, Eye, Fingerprint, Globe, IdentificationCard, LockKey, LockSimple, MagnifyingGlass,
   Prohibit, ShieldCheck, Sparkle, UserPlus, UsersThree, Lock,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
@@ -43,6 +43,7 @@ export default function AdminUsersPage() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [creating, setCreating] = useState(false);
+  const [sending, setSending] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -65,6 +66,21 @@ export default function AdminUsersPage() {
       await load();
     } catch (err) {
       setError(errorText(err, 'Request failed'));
+    }
+  }
+
+  // The admin only triggers the email; the new password is chosen by the user.
+  async function sendResetLink(u: AdminUser) {
+    setError(null);
+    setSending(u.id);
+    try {
+      const r = await api.post<{ ok: boolean; sent: boolean }>(`/admin/users/${u.id}/reset-link`);
+      if (r.sent) toast(`Reset link sent to ${u.email}. You never see their new password.`);
+      else toast('Demo accounts never receive email', 'info');
+    } catch (err) {
+      setError(errorText(err, 'Request failed'));
+    } finally {
+      setSending(null);
     }
   }
 
@@ -156,6 +172,9 @@ export default function AdminUsersPage() {
                         <div className="inline-flex gap-1.5">
                           {!self && !u.isProtected && u.totpEnabledAt && (
                             <Button size="sm" variant="ghost" icon={<Fingerprint size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/mfa/reset`), `Second factor reset for ${u.email}; they must set it up again`)}>Reset 2FA</Button>
+                          )}
+                          {!self && !u.isProtected && (
+                            <Button size="sm" variant="ghost" icon={<EnvelopeSimple size={14} />} loading={sending === u.id} onClick={() => void sendResetLink(u)}>Send reset link</Button>
                           )}
                           {!self && !u.isProtected && (u.status === 'ACTIVE' ? (
                             <Button size="sm" variant="danger" icon={<Prohibit size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/deactivate`), `${u.email} deactivated and signed out`)}>Deactivate</Button>
