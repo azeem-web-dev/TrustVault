@@ -264,7 +264,7 @@ describe('verify-audit --rekor', () => {
     // ...but the public log still holds the honest checkpoint at 4, published earlier.
     const r = rekorReport(forged, (await entriesForKey(publicKey, o)).entries);
     expect(r.ok).toBe(false);
-    expect(r.problems.join('\n')).toMatch(/checkpoint of a different history|this bundle does not contain/);
+    expect(r.problems.join('\n')).toMatch(/this bundle does not contain/); // the removed-tail check itself, not a later fallback
   });
 
   it('for a bundle that starts later, does not guess about entries before its range', async () => {

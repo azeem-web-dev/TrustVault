@@ -160,7 +160,7 @@ const MUTATIONS = [
     ['test/checkpoint-guard.test.ts']),
   sql('database: group membership rules trigger (no externals, no admins)',
     'ALTER TABLE group_members DISABLE TRIGGER group_members_guard', 'ALTER TABLE group_members ENABLE TRIGGER group_members_guard',
-    ['test/revocation-holes.test.ts', 'test/rls.test.ts']),
+    ['test/rls.test.ts']),
 ];
 
 function loadEnv() {
@@ -176,7 +176,8 @@ async function runSql(statement) {
 
 function runTests(files) {
   const r = spawnSync('npx', ['vitest', 'run', ...files], { cwd: API, shell: process.platform === 'win32', encoding: 'utf8', env: process.env });
-  const summary = (r.stdout + r.stderr).split('\n').find((l) => /Tests\s+\d/.test(l))?.trim().replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ') ?? '(no summary)';
+  // Strip colour codes first: vitest colours the "Tests N passed" line.
+  const summary = (r.stdout + r.stderr).replace(/\u001b\[[0-9;]*m/g, '').split('\n').find((l) => /Tests\s+\d/.test(l))?.trim().replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ') ?? '(no summary)';
   return { failed: r.status !== 0, summary };
 }
 
