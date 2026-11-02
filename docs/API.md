@@ -29,6 +29,8 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | POST | `/auth/password` | signed in | `{currentPassword, newPassword}` (12+ chars). Ends **all** your sessions. Refused for demo accounts. |
 | POST | `/auth/password/forgot` | **public** | `{email}`. Always `202 {ok:true}`, whether or not the email has an account, so it reveals nothing. If the account is active, not expired and not a demo account, emails a reset link that works once and expires in 30 minutes; a new link cancels earlier ones. `429` after 10 requests per 15 minutes from one IP. Per address, after 3 an hour it quietly stops sending and still answers `202`. Audited as `auth.reset_requested`. |
 | POST | `/auth/password/reset` | **public**: anyone holding a valid, unused, unexpired link | `{token, newPassword}` (token from the link's `#token=` fragment). `204`: password set, every session ended, lockout cleared, the cookie cleared, a notice emailed. A second factor is not removed. `400` "This link is invalid or has expired" for a used, expired, cancelled, unknown or malformed link, or a demo or inactive account; `400` for a weak password. Audited as `auth.password_reset_link`, allowed or refused. |
+| POST | `/auth/invite/check` | **public**: anyone holding a valid invitation link | `{token}` → `{email, role, accessExpiresAt}`, so the page can say who is joining. `400` (same message as accept) for any link that cannot be accepted; refusals audited as `auth.invite_check`. |
+| POST | `/auth/invite/accept` | **public**: anyone holding a valid, unused, unexpired invitation link | `{token, displayName, password}` (12+ chars). `204`: name and password set, account `ACTIVE`, a welcome email sent; the person then signs in (admins enrol a second factor first). `400` "This invitation link is invalid or has expired" for a used, expired, cancelled, unknown, malformed or reset link, or an account no longer waiting; `400` for a weak password or empty name. Check and accept share 20 per 15 minutes per IP. Audited as `auth.invite_accepted`. |
 | GET | `/auth/mfa` | signed in (*partial*) | Second-factor status and your passkeys. |
 | POST | `/auth/mfa/totp/setup` | signed in (*partial*) | Starts TOTP enrolment, returns secret and `otpauth://` URI. If you already have a factor, you must have used it this session. |
 | POST | `/auth/mfa/totp/enable` | signed in (*partial*) | `{code}` confirms enrolment. Issues a new session token. |
@@ -81,11 +83,12 @@ Levels: **READ** < **EDIT** < **MANAGE** < **owner**. Account roles: **ADMIN**, 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/admin/users` | All accounts. |
-| POST | `/admin/users` | `{email, displayName, role, password, accessExpiresAt?}` (required for EXTERNAL). |
+| POST | `/admin/users` | **Invite** `{email, role, accessExpiresAt?}` (`accessExpiresAt` required for EXTERNAL). No password or name: the account starts `INVITED` and the person chooses both from an emailed link that works once and expires after `INVITE_LINK_HOURS` (72). `201 {user, invited}`; `invited` is `false` when mail is off (send again later). `409` if the email exists. Audited as `user.create` and `user.invite` (THREATS.md S18). |
+| POST | `/admin/users/:id/invite` | Emails the invitation again; earlier links stop working. `202 {ok:true, sent}`. `400` unless the account is `INVITED`. |
 | PATCH | `/admin/users/:id` | `{displayName?, role?, accessExpiresAt?}`. A role change or a changed `accessExpiresAt` ends that user's sessions. Leaving OWNER is refused while the person owns documents (`400`). Becoming ADMIN or EXTERNAL drops their grants and group memberships. Leaving ADMIN ends any open break-glass window. Not your own role; never the last active admin; never a demo account. |
-| POST | `/admin/users/:id/deactivate` | Ends their sessions and any open break-glass window in the same transaction. Not yourself; never the last active admin; never a demo account. |
-| POST | `/admin/users/:id/reactivate` | |
-| POST | `/admin/users/:id/password` | `{password}`. Ends their sessions and emails them a notice. Kept in the API, but the website and app no longer use it: the admin would know the password (THREATS.md S15). |
+| POST | `/admin/users/:id/deactivate` | Ends their sessions, any open break-glass window and any unused invitation or reset link in the same transaction. Also how an invitation is cancelled. Not yourself; never the last active admin; never a demo account. |
+| POST | `/admin/users/:id/reactivate` | Back to `ACTIVE`, or to `INVITED` if they never accepted their invitation (nobody knows their password). |
+| POST | `/admin/users/:id/password` | `{password}`. `400` for an invited account. Ends their sessions and emails them a notice. Kept in the API, but the website and app no longer use it: the admin would know the password (THREATS.md S15). |
 | POST | `/admin/users/:id/reset-link` | Emails the person a reset link. `202 {ok:true, sent}`. The admin never gets the link or sees the new password. `sent` is `false` for a demo account or when mail is off. `404` unknown user; `400` if the account is not active. Audited as `user.reset_link_sent`. |
 | POST | `/admin/users/:id/mfa/reset` | Removes their TOTP and passkeys; ends their sessions. Not yourself. |
 | GET / POST | `/admin/groups` | List with members; create. |
@@ -106,15 +109,20 @@ Mail is sent after the change it reports is committed. It never delays or fails 
 | Event | Who gets it |
 |---|---|
 | Reset link asked for (`/auth/password/forgot`) or sent by an admin | The account holder: the link |
+| Invitation (new account, or sent again) | The invited address: the link, the role, and the access end date if any |
+| Invitation accepted | The new account holder: a welcome with a sign-in link |
 | Password changed (own settings, reset link, or an admin) | The account holder |
 | Sign-in (after the second step, if there is one) | The account holder, with time, IP and device, and a link to reset |
 | Authenticator app added, passkey added or removed, second factor reset by an admin | The account holder |
 | A document newly shared with a person | That person only: document title, sharer, level, expiry. Never contents. Group shares send no email |
 
-## Audit actions for password reset
+## Audit actions for password reset and invitations
 
 | Action | Outcome and reason |
 |---|---|
 | `auth.reset_requested` | One per request that passes the IP limit. `ALLOWED` with reason `sent`; otherwise `DENIED` with `no_account`, `not_eligible` (inactive, expired or demo account), `rate_limited` (per-address limit) or `mail_off` |
-| `auth.password_reset_link` | A link used. `ALLOWED` with the number of sessions ended; or `DENIED` with `malformed_link`, `unknown_link`, `link_used`, `link_expired` or `not_eligible` |
+| `auth.password_reset_link` | A link used. `ALLOWED` with the number of sessions ended; or `DENIED` with `malformed_link`, `unknown_link`, `wrong_link_type` (an invitation link), `link_used`, `link_expired` or `not_eligible` |
 | `user.reset_link_sent` | An admin sent a link. `ALLOWED`; or `DENIED` with `demo_account` or `mail_off` |
+| `user.invite` | An admin invited someone or sent the invitation again (`details.again`). `ALLOWED`; or `DENIED` with `mail_off` |
+| `auth.invite_accepted` | An invitation link used. `ALLOWED`; or `DENIED` with `malformed_link`, `unknown_link`, `wrong_link_type` (a reset link), `link_used`, `link_expired` or `not_eligible` |
+| `auth.invite_check` | Only refusals, with the same reasons |

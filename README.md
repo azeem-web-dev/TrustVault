@@ -29,6 +29,8 @@ Demo accounts cannot reset their password and never receive email: their address
 | Viewer | Use what they are granted. READ: view and download. EDIT: also rename, describe and upload new versions. MANAGE: also share READ or EDIT, revoke, and see who has access and the history. | Upload new documents. Give MANAGE. |
 | External | READ only, and only on grants with an expiry, until their account's end date. | Get access through a group. Anything above READ. |
 
+Accounts are created by invitation. An admin enters an email, a role and, if needed, an access end date; the person gets an email with a link (it works once and expires after 72 hours) and chooses their own name and password. Until then the account is **Invited** and can do nothing. The admin never knows the password. Admins can resend or cancel an invitation from the Users screen (THREATS.md S18).
+
 Grants are per document, to named people or to groups. A group share covers the people in the group when it is shared. Anyone added later waits until the owner (or a manager outside the group) confirms; `GET /documents/:id/access` shows them as pending.
 
 ## What to read
@@ -86,7 +88,7 @@ GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (
 cd apps/api && npx vitest run            # over 230 tests against a real Postgres and Redis
 cd apps/api && npm run test:e2e          # passkeys in real Chrome through the real pages (needs Chrome)
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (50 of them), one at a time; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (55 of them), one at a time; every removal must fail a test
 node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
 cd keyd && cargo test                    # key service
 node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE= --witness checkpoints.jsonl --rekor   # verify an audit export: pinned key, witness, Sigstore
@@ -110,6 +112,7 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `revocation-holes.test.ts` | admins never read through groups or grants; a group share reaches people added later only after the owner confirms; revoke and transfer say when a group still gives access; role changes, break-glass limits and ended sessions are enforced and recorded |
 | `refusal-audit.test.ts` | refusals before the access check (bad body, bad version number, malformed id) and the guard's second-factor and foreign-Origin refusals are recorded, and no refusal is recorded twice |
 | `email.test.ts` | password reset links reveal nothing, work once, expire, are built from the configured site and end every session; admins send links and never see passwords; notices for sign-ins, password and second-factor changes, and shares; demo accounts never get mail |
+| `invite.test.ts` | accounts by invitation: no admin-chosen password, invited accounts can do nothing, links work once, expire, are built from the configured site and never work as reset links (or the reverse); resend and cancel; reactivating a never-accepted account keeps it invited |
 | `checkpoint-guard.test.ts` | the database accepts an audit checkpoint only for a real event with the same hash, and only moving forward |
 | `tools/verify-audit.test.mjs` | the offline verifier (19 cases): pinned key, no checkpoints, recomputed forged chains, cut-off tails caught through Sigstore or the witness |
 
@@ -140,6 +143,6 @@ sudo bash infra/server/install-backup.sh age1...  # nightly encrypted backup to 
 sudo bash infra/server/deploy.sh        # fetch, install, build, migrate, restart, health check
 ```
 
-Email (optional) is set in `/etc/trustvault/mail.env` on the server (root:trustvault, 0640, read by the API service; never in git): `MAIL_TRANSPORT` (`off`, `smtp` or `memory` for tests), `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `RESET_LINK_MINUTES`. With `smtp`, the API refuses to start unless host, user and password are set.
+Email (optional) is set in `/etc/trustvault/mail.env` on the server (root:trustvault, 0640, read by the API service; never in git): `MAIL_TRANSPORT` (`off`, `smtp` or `memory` for tests), `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `RESET_LINK_MINUTES`. With `smtp`, the API refuses to start unless host, user and password are set. `INVITE_LINK_HOURS` (default 72) sets how long an invitation link works.
 
 Then seed with production passwords (`SEED_PASSWORD_*`, `SEED_ADMIN_TOTP_SECRET` in `/etc/trustvault/seed.passwords`); see `apps/api/prisma/seed.ts`.
