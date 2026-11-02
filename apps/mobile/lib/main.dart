@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import 'core/api.dart';
+import 'core/app_lock.dart';
 import 'core/session.dart';
 import 'core/theme.dart';
 import 'screens/auth.dart';
 import 'screens/shell.dart';
 import 'widgets/art.dart';
+import 'widgets/lock_screen.dart';
+import 'widgets/step_up.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -16,21 +20,32 @@ Future<void> main() async {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent, systemNavigationBarColor: Colors.transparent));
   final session = Session();
   final theme = ThemeChoice();
+  final lock = AppLock()..isSignedIn = () => session.user != null;
   await theme.load();
+  // Risky actions refused with step_up_required ask for a fresh factor here.
+  Api.I.onStepUp = () async {
+    final ctx = navigatorKey.currentContext;
+    return ctx != null && ctx.mounted && await askStepUp(ctx);
+  };
   // When the session ends (sign-out, expiry, password change) drop any
   // pushed pages so nothing from the old session stays on screen.
   session.addListener(() {
     if (session.user == null || session.mfaPending) navigatorKey.currentState?.popUntil((r) => r.isFirst);
+    if (session.user == null) lock.signedOut();
   });
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: session),
         ChangeNotifierProvider.value(value: theme),
+        ChangeNotifierProvider.value(value: lock),
       ],
       child: const TrustVaultApp(),
     ),
   );
+  // Lock first (the splash is showing), so no content flashes before it.
+  // If nobody turns out to be signed in, the listener above unlocks.
+  await lock.start(signedIn: true);
   await session.start();
 }
 
@@ -51,6 +66,12 @@ class TrustVaultApp extends StatelessWidget {
           ? ThemeMode.dark
           : ThemeMode.system,
       home: const Root(),
+      // Above the navigator, so the lock also covers pushed pages and sheets.
+      // It covers the app; it does not end or replace the session.
+      builder: (context, child) {
+        final locked = context.watch<AppLock>().locked && context.watch<Session>().user != null;
+        return Stack(children: [?child, if (locked) const Positioned.fill(child: LockScreen())]);
+      },
     );
   }
 }

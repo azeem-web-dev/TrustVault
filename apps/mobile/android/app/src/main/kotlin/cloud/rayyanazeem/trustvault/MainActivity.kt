@@ -1,5 +1,7 @@
 package cloud.rayyanazeem.trustvault
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// FragmentActivity: the biometric prompt (local_auth, app lock) and Android's
+// Credential Manager (passkeys) both need one.
+class MainActivity : FlutterFragmentActivity()

@@ -5,12 +5,12 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../widgets/phosphor.dart';
 
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-
 import '../core/api.dart';
+import '../core/passkey.dart';
 import '../core/session.dart';
 import '../core/theme.dart';
 import '../widgets/art.dart';
+import '../widgets/totp_guide.dart';
 import '../widgets/ui.dart';
 
 /// Sign-in frame: the brand story on a night-sky header, the form on a sheet.
@@ -469,6 +469,16 @@ class _MfaScreenState extends State<MfaScreen> {
     if (mounted) await context.read<Session>().refresh();
   });
 
+  /// Second step with a passkey (Credential Manager), or enrolling one as the first factor.
+  Future<void> _passkey({required bool enrol}) => _run(() async {
+    if (enrol) {
+      await Passkeys.register('Android phone');
+    } else {
+      await Passkeys.assertTo('/auth/mfa/passkeys/verify');
+    }
+    if (mounted) await context.read<Session>().refresh();
+  });
+
   Future<void> _startSetup() => _run(() async {
     final r = await Api.I.post('/auth/mfa/totp/setup') as Map;
     setState(() => _setup = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
@@ -525,17 +535,15 @@ class _MfaScreenState extends State<MfaScreen> {
               ),
             )
           else
-            Text('Administrator accounts must use an authenticator app or a passkey. Choose one to continue.', style: ts(context, size: 14, color: p.muted, height: 1.5)),
+            Text('Your account must use an authenticator app or a passkey. Choose one to continue.', style: ts(context, size: 14, color: p.muted, height: 1.5)),
           const SizedBox(height: 22),
           if (_error != null) ...[TvAlert(_error!), gap16],
-          if (passkeys.isNotEmpty && !totp)
-            const TvAlert(
-              'This account only has a passkey. Passkeys work on the website for now: sign in at vault.rayyanazeem.cloud, or add an authenticator app there to use this app.',
-              tone: Tone.blue,
-              title: 'Use the website for passkeys',
-            ),
+          if (passkeys.isNotEmpty && _setup == null) ...[
+            Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _busy && _code.text.length != 6, onPressed: _busy ? null : () => _passkey(enrol: false)),
+            if (totp) const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: DividerLabel('or enter a code')),
+          ],
           if (showCode) ...[
-            if (_setup != null) _SetupCard(secret: _setup!.secret, uri: _setup!.uri),
+            if (_setup != null) TvCard(child: TotpSetupGuide(secret: _setup!.secret, uri: _setup!.uri, child: Text('Enter it below.', style: ts(context, size: 12.5, color: p.muted)))),
             if (_setup != null) gap16,
             Row(
               children: [
@@ -614,13 +622,13 @@ class _MfaScreenState extends State<MfaScreen> {
           if (!enrolled && _setup == null) ...[
             _MethodCard(
               icon: PhosphorIconsDuotone.deviceMobile,
-              title: 'Use an authenticator app',
-              text: 'Google Authenticator, 1Password, Authy: a new code every 30 seconds.',
+              title: 'Use Google Authenticator',
+              text: 'Or any authenticator app: a new 6-digit code every 30 seconds. Takes a minute.',
               onTap: _busy ? null : _startSetup,
               recommended: true,
             ),
             const SizedBox(height: 10),
-            const _MethodCard(icon: PhosphorIconsDuotone.key, title: 'Use a passkey', text: 'Face, fingerprint or a security key. Set it up on the website.', onTap: null, badge: 'Website'),
+            _MethodCard(icon: PhosphorIconsDuotone.key, title: 'Use a passkey on this phone', text: 'Your face, fingerprint or screen lock. Saved to your Google account; can’t be phished.', onTap: _busy ? null : () => _passkey(enrol: true)),
           ],
           const SizedBox(height: 12),
           TextButton.icon(
@@ -634,78 +642,13 @@ class _MfaScreenState extends State<MfaScreen> {
   }
 }
 
-class _SetupCard extends StatelessWidget {
-  const _SetupCard({required this.secret, required this.uri});
-  final String secret;
-  final String uri;
-  @override
-  Widget build(BuildContext context) {
-    final p = Pal.of(context);
-    return TvCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _step(context, 1, 'Open Google Authenticator, 1Password or Authy'),
-          const SizedBox(height: 4),
-          _step(context, 2, 'Scan this code, or copy the key, then type the 6 digits below'),
-          const SizedBox(height: 14),
-          Center(
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: C.slate200),
-              ),
-              child: QrImageView(
-                data: uri,
-                size: 160,
-                padding: EdgeInsets.zero,
-                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: C.slate900),
-                dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: C.slate900),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text("Can't scan? Enter this key:", style: ts(context, size: 12, color: p.muted)),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
-            decoration: BoxDecoration(color: p.soft2, borderRadius: BorderRadius.circular(10)),
-            child: Row(
-              children: [
-                Expanded(child: Mono(secret, size: 12)),
-                CopyBtn(secret, label: 'Copy key'),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _step(BuildContext c, int n, String text) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        '$n. ',
-        style: ts(c, size: 13.5, w: FontWeight.w700, color: Pal.of(c).accent),
-      ),
-      Expanded(
-        child: Text(text, style: ts(c, size: 13.5, color: Pal.of(c).body)),
-      ),
-    ],
-  );
-}
-
 class _MethodCard extends StatelessWidget {
-  const _MethodCard({required this.icon, required this.title, required this.text, required this.onTap, this.recommended = false, this.badge});
+  const _MethodCard({required this.icon, required this.title, required this.text, required this.onTap, this.recommended = false});
   final PI icon;
   final String title;
   final String text;
   final VoidCallback? onTap;
   final bool recommended;
-  final String? badge;
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
@@ -735,7 +678,6 @@ class _MethodCard extends StatelessWidget {
                       children: [
                         Text(title, style: ts(context, size: 14, w: FontWeight.w600)),
                         if (recommended) const TvBadge('Recommended', tone: Tone.green),
-                        if (badge != null) TvBadge(badge!),
                       ],
                     ),
                     const SizedBox(height: 2),
