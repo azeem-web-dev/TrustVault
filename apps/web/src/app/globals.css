@@ -1,10 +1,100 @@
 @import 'tailwindcss';
 
+/* Dark mode follows the .dark class on <html>, set before first paint by the
+   theme script in layout.tsx (system preference unless the user chose). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --color-brand-600: oklch(0.47 0.12 255);
-  --color-brand-700: oklch(0.41 0.12 255);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --color-brand-50: oklch(0.97 0.02 275);
+  --color-brand-100: oklch(0.94 0.04 275);
+  --color-brand-200: oklch(0.88 0.08 275);
+  --color-brand-300: oklch(0.79 0.12 276);
+  --color-brand-400: oklch(0.68 0.17 277);
+  --color-brand-500: oklch(0.59 0.21 278);
+  --color-brand-600: oklch(0.52 0.22 279);
+  --color-brand-700: oklch(0.45 0.2 280);
+  --color-brand-800: oklch(0.38 0.16 281);
+  --color-brand-900: oklch(0.31 0.12 282);
+  --color-brand-950: oklch(0.22 0.08 283);
+
+  --color-ink-900: oklch(0.2 0.025 275);
+  --color-ink-950: oklch(0.155 0.02 275);
+
+  --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08);
+  --shadow-lift: 0 2px 4px rgb(15 23 42 / 0.04), 0 16px 40px -12px rgb(15 23 42 / 0.25);
+  --shadow-glow: 0 1px 0 rgb(255 255 255 / 0.2) inset, 0 8px 20px -6px rgb(79 70 229 / 0.55);
+
+  --animate-fade-in: fade-in 0.25s ease-out both;
+  --animate-rise: rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop: pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-slide-in: slide-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-drawer: drawer 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-pulse-ring: pulse-ring 2.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  --animate-dash: dash 3s linear infinite;
+
+  @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+  @keyframes pop { from { opacity: 0; transform: scale(0.96) translateY(6px) } to { opacity: 1; transform: none } }
+  @keyframes slide-in { from { opacity: 0; transform: translateX(24px) } to { opacity: 1; transform: none } }
+  @keyframes drawer { from { transform: translateX(-100%) } to { transform: none } }
+  @keyframes shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+  @keyframes float { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+  @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.6 } 100% { transform: scale(2.4); opacity: 0 } }
+  @keyframes dash { to { stroke-dashoffset: -40 } }
 }
 
-:root { color-scheme: light dark; }
-body { @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100; }
+:root { color-scheme: light; }
+:root.dark { color-scheme: dark; }
+
+body {
+  @apply bg-slate-50 font-sans text-slate-900 antialiased dark:bg-ink-950 dark:text-slate-100;
+}
+
+/* Soft brand glow behind every signed-in page. */
+.app-backdrop {
+  background:
+    radial-gradient(56rem 28rem at 105% -8%, rgb(99 102 241 / 0.11), transparent 60%),
+    radial-gradient(40rem 24rem at -5% 105%, rgb(168 85 247 / 0.07), transparent 60%);
+}
+.dark .app-backdrop {
+  background:
+    radial-gradient(56rem 28rem at 105% -8%, rgb(99 102 241 / 0.17), transparent 60%),
+    radial-gradient(40rem 24rem at -5% 105%, rgb(168 85 247 / 0.10), transparent 60%);
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgb(148 163 184 / 0.13) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(148 163 184 / 0.13) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.bg-brand-gradient { background-image: linear-gradient(135deg, oklch(0.55 0.22 279), oklch(0.5 0.24 300)); }
+
+.text-gradient {
+  background-image: linear-gradient(120deg, oklch(0.62 0.2 270), oklch(0.66 0.22 315));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.skeleton {
+  background-image: linear-gradient(90deg, rgb(148 163 184 / 0.12) 25%, rgb(148 163 184 / 0.26) 50%, rgb(148 163 184 / 0.12) 75%);
+  background-size: 200% 100%;
+  @apply animate-shimmer rounded-md;
+}
+
+* { scrollbar-width: thin; scrollbar-color: rgb(148 163 184 / 0.45) transparent; }
+::selection { background: rgb(99 102 241 / 0.25); }
+
+/* Native date pickers follow the theme. */
+.dark input::-webkit-calendar-picker-indicator { filter: invert(0.8); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

@@ -185,6 +185,21 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 ---
 
+## 2026-11-02 — Simpler demo logins, and a redesigned interface
+
+**Asked (Claude):** "make email and passwords simple" (for the published demo accounts), then "work hard on ui … premium icons and images … every screen section … easy to operate".
+
+**Decisions I made, and why:**
+- **Demo logins:** `@demo.com` emails and 12-character passwords (the app's minimum). They were already public in the README, so long random passwords protected nothing and only made them hard to type. The live accounts were changed in place with one `user.update` audit event each, and their sessions ended. The login page now has one-click demo account buttons that fill these in.
+- **Interface:** a sidebar layout, a Ctrl+K command palette (its document search uses the same API, so it can only find what you can access), light/dark/system themes, toasts, and a redesign of every screen. Icons are Phosphor (duotone). The illustrations are hand-drawn inline SVG, not image files, so the strict Content-Security-Policy did not need loosening. The Geist font ships inside the app. Both packages are pinned to releases months old, not the newest.
+- **Behaviour unchanged:** the API calls, permission checks and text the browser test relies on ("Use a passkey (this device)", "Add passkey", the Email and Password labels) are the same. The passkey test in real Chrome passes on the new pages.
+
+**What went wrong:**
+- **Three UI bugs found by clicking through every screen in Chrome before committing.** Text typed straight after Ctrl+K was lost because the search box was focused a moment too late. On a laptop-height screen, the sign-in page's feature cards were cut off. And the documents page told administrators "You can open what is shared", which is false: administrators cannot open documents. All three were fixed.
+- **The local dev database was one migration behind**, so document pages showed "Internal error" during the check. This was not caused by the redesign. Applying the migration fixed it; production and the test database already had it.
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:
