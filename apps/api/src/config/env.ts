@@ -42,6 +42,8 @@ const EnvSchema = z.object({
   MAIL_FROM: z.string().default('TrustVault <updates@rayyanazeem.cloud>'),
   /** Minutes a password-reset link works. */
   RESET_LINK_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
+  /** Hours an invitation link works. */
+  INVITE_LINK_HOURS: z.coerce.number().int().min(1).max(336).default(72),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

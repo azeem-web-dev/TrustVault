@@ -66,6 +66,7 @@ export class PasswordResetService {
   async adminSend(actor: Actor, userId: string): Promise<{ sent: boolean }> {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, displayName: true, status: true, isProtected: true } });
     if (!user) throw new NotFoundException('User not found');
+    if (user.status === 'INVITED') throw new BadRequestException('This person has not accepted their invitation yet. Send the invitation again instead.');
     if (user.status !== 'ACTIVE') throw new BadRequestException('Reactivate the account first');
     const sent = this.mail.canReach(user);
     if (sent) await this.issue(user, actor.userId);
@@ -78,8 +79,8 @@ export class PasswordResetService {
     const expiresAt = new Date(Date.now() + this.env.RESET_LINK_MINUTES * 60_000);
     await this.prisma.$transaction([
       // A new link cancels any earlier one.
-      this.prisma.passwordResetToken.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() } }),
-      this.prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: sha256(token), expiresAt, requestedBy } }),
+      this.prisma.passwordResetToken.updateMany({ where: { userId: user.id, usedAt: null, purpose: 'RESET' }, data: { usedAt: new Date() } }),
+      this.prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: sha256(token), expiresAt, requestedBy, purpose: 'RESET' } }),
     ]);
     const url = `${this.env.PUBLIC_ORIGIN}/reset#token=${token}`;
     this.mail.send(user, mailTemplates.resetLink(user.displayName, url, this.env.RESET_LINK_MINUTES, requestedBy !== null));
@@ -95,9 +96,12 @@ export class PasswordResetService {
     }
     const hash = await this.passwords.hash(newPassword);
     const user = await this.prisma.$transaction(async (tx) => {
-      const [row] = await tx.$queryRaw<{ id: string; user_id: string; expires_at: Date; used_at: Date | null }[]>`
-        SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ${sha256(token)} FOR UPDATE`;
-      if (!row || row.used_at || row.expires_at.getTime() <= Date.now()) return { refused: row ? (row.used_at ? 'link_used' : 'link_expired') : 'unknown_link', userId: row?.user_id ?? null };
+      const [row] = await tx.$queryRaw<{ id: string; user_id: string; purpose: string; expires_at: Date; used_at: Date | null }[]>`
+        SELECT id, user_id, purpose, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ${sha256(token)} FOR UPDATE`;
+      if (!row) return { refused: 'unknown_link', userId: null };
+      // An invitation link is not a reset link (InviteService), and the reverse.
+      if (row.purpose !== 'RESET') return { refused: 'wrong_link_type', userId: row.user_id };
+      if (row.used_at || row.expires_at.getTime() <= Date.now()) return { refused: row.used_at ? 'link_used' : 'link_expired', userId: row.user_id };
       const [u] = await tx.$queryRaw<{ id: string; email: string; display_name: string; status: string; is_protected: boolean }[]>`
         SELECT id, email, display_name, status, is_protected FROM users WHERE id = ${row.user_id}::uuid FOR UPDATE`;
       if (!u || u.status !== 'ACTIVE' || u.is_protected) return { refused: 'not_eligible', userId: row.user_id };

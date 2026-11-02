@@ -59,6 +59,36 @@ export const mailTemplates = {
     };
   },
 
+  invitation(name: string, url: string, role: string, hours: number, accessEndsAt: Date | null) {
+    const as = role === 'ADMIN' ? 'an administrator' : role === 'OWNER' ? 'a document owner' : role === 'EXTERNAL' ? 'an external guest (read-only)' : 'a viewer';
+    return {
+      subject: "You've been invited to TrustVault",
+      ...render(name, {
+        title: "You've been invited to TrustVault",
+        intro: `An administrator created a TrustVault account for you, as ${as}. Choose your name and password to start using it.`,
+        button: { label: 'Accept the invitation', url },
+        lines: [
+          `The link works once and expires in ${hours} hours. Nobody else, not even the administrator, will know your password.`,
+          ...(accessEndsAt ? [`Your access ends ${when(accessEndsAt)}.`] : []),
+          ...(role === 'ADMIN' ? ['Administrators set up a second factor (an authenticator app or passkey) the first time they sign in.'] : []),
+        ],
+        footer: "If you weren't expecting this, ignore this email: the account stays unused and the link expires.",
+      }),
+    };
+  },
+
+  welcome(name: string, origin: string) {
+    return {
+      subject: 'Your TrustVault account is ready',
+      ...render(name, {
+        title: 'Your account is ready',
+        intro: 'You accepted your invitation and chose a password. You can now sign in.',
+        button: { label: 'Sign in', url: `${origin}/login` },
+        footer: "If this wasn't you, tell your administrator now.",
+      }),
+    };
+  },
+
   passwordChanged(name: string, how: string, at: Date, origin: string) {
     return {
       subject: 'Your TrustVault password was changed',

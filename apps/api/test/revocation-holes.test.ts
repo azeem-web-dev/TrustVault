@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { appDb, as, auditRows, createUser, login, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
+import { MailService } from '../src/mail/mail.service.js';
+import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
 
 // Holes found on 2026-11-02 by an adversarial review and confirmed live
 // against a local copy before they were fixed (THREATS.md A17, R7, A15, L10).
@@ -10,7 +11,8 @@ let alice: TestUser, bob: TestUser, victor: TestUser, admin: TestUser;
 let A: Session, B: Session, V: Session, ADM: Session;
 
 beforeAll(async () => {
-  t = await startApp();
+  // Mail kept in memory: the stand-in test below reads its invitation.
+  t = await startApp({ MAIL_TRANSPORT: 'memory' });
 });
 afterAll(async () => {
   await t.close();
@@ -149,9 +151,14 @@ describe('only the owner decides who a group share reaches (A19)', () => {
     const grp = await group('Finance', [V.userId]);
     await grant(A, doc, { groupId: grp, level: 'READ' }).expect(200);
     await as(t, V).get(`/api/documents/${doc}`).expect(200);
-    // The admin creates a stand-in and puts it in the group.
+    // The admin invites a mailbox they control, accepts it, and puts the stand-in in the group.
     const pw = 'stand-in-password-123';
-    const made = await as(t, ADM).post('/api/admin/users', { email: 'standin@t.io', displayName: 'Stand In', role: 'VIEWER', password: pw }).expect(201);
+    const made = await as(t, ADM).post('/api/admin/users', { email: 'standin@t.io', role: 'VIEWER' }).expect(201);
+    // Not before the invitation is accepted: an invited account cannot join a group.
+    await as(t, ADM).post(`/api/admin/groups/${grp}/members`, { userId: made.body.user.id }).expect(400);
+    const invite = t.app.get(MailService).outbox.filter((m) => m.to === 'standin@t.io').at(-1)!;
+    const token = /\/invite#token=([A-Za-z0-9_-]+)/.exec(invite.text)![1];
+    await t.http.post('/api/auth/invite/accept').set('Origin', ORIGIN).send({ token, displayName: 'Stand In', password: pw }).expect(204);
     await as(t, ADM).post(`/api/admin/groups/${grp}/members`, { userId: made.body.user.id }).expect(204);
     const W = await login(t, { email: 'standin@t.io', password: pw });
     await as(t, W).get(`/api/documents/${doc}/download`).expect(404);

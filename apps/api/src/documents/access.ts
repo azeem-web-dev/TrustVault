@@ -44,7 +44,7 @@ const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'download', 'rest
 /** Raw facts from tv_access_facts(); no decision has been made yet. */
 export interface AccessFacts {
   document: { ownerId: string; status: 'ACTIVE' | 'DELETED' } | null;
-  user: { role: 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL'; status: 'ACTIVE' | 'DEACTIVATED'; accessExpiresAt: string | null } | null;
+  user: { role: 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL'; status: 'ACTIVE' | 'DEACTIVATED' | 'INVITED'; accessExpiresAt: string | null } | null;
   grants: { level: 'READ' | 'EDIT' | 'MANAGE'; expiresAt: string | null; viaGroup: boolean }[];
   breakGlassUntil: string | null;
 }

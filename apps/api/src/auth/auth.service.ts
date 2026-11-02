@@ -85,6 +85,10 @@ export class AuthService {
 
     if (!user) return deny('unknown_account');
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return deny('account_locked');
+    // An invitation not yet accepted: its password is random bytes nobody
+    // knows, so this only names the reason in the audit log. The person sees
+    // the same message as for any other failure.
+    if (user.status === 'INVITED') return deny('account_not_activated');
     if (!passwordOk) {
       // Counter, lock and audit row in ONE SQL statement: the same single
       // round trip as every other failure path's audit write. Doing them as

@@ -6,17 +6,17 @@ import { CurrentActor, Roles } from '../auth/decorators.js';
 import { PasswordSchema } from '../auth/password.service.js';
 import { UsersService } from './users.service.js';
 import { PasswordResetService } from '../auth/password-reset.service.js';
+import { InviteService } from '../auth/invite.service.js';
 import { NotifyService } from '../mail/notify.service.js';
 
 const RoleSchema = z.enum(['ADMIN', 'OWNER', 'VIEWER', 'EXTERNAL']);
 const Email = z.email().max(254);
 const DisplayName = z.string().trim().min(1).max(100);
 
+// No password and no name: the person chooses both from their invitation (THREATS.md S18).
 const CreateUserSchema = z.strictObject({
   email: Email,
-  displayName: DisplayName,
   role: RoleSchema,
-  password: PasswordSchema,
   accessExpiresAt: z.coerce.date().optional(),
 });
 
@@ -40,6 +40,7 @@ export class UsersController {
     @Inject(UsersService) private readonly users: UsersService,
     @Inject(PasswordResetService) private readonly resets: PasswordResetService,
     @Inject(NotifyService) private readonly notify: NotifyService,
+    @Inject(InviteService) private readonly invites: InviteService,
   ) {}
 
   @Get()
@@ -47,9 +48,19 @@ export class UsersController {
     return { users: await this.users.list() };
   }
 
+  /** Creates an INVITED account and emails the invitation. `invited` is false when mail is off. */
   @Post()
-  async create(@Body(new ZodPipe(CreateUserSchema)) body: z.infer<typeof CreateUserSchema>) {
-    return { user: await this.users.create(body) };
+  async create(@CurrentActor() actor: Actor, @Body(new ZodPipe(CreateUserSchema)) body: z.infer<typeof CreateUserSchema>) {
+    const user = await this.users.create(actor, body);
+    const { sent } = await this.invites.send(actor, user.id, false);
+    return { user, invited: sent };
+  }
+
+  /** Emails the invitation again; earlier links stop working. Only for INVITED accounts. */
+  @Post(':id/invite')
+  @HttpCode(202)
+  async resendInvite(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
+    return { ok: true, ...(await this.invites.send(actor, id, true)) };
   }
 
   @Patch(':id')

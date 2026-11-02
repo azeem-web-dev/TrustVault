@@ -25,6 +25,13 @@ enum Role {
 enum UserStatus {
   ACTIVE
   DEACTIVATED
+  /// Created by an admin; the person has not yet accepted the emailed invitation.
+  INVITED
+}
+
+enum LinkPurpose {
+  RESET
+  INVITE
 }
 
 enum AuditOutcome {
@@ -50,6 +57,8 @@ model User {
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   createdById       String?    @map("created_by_id") @db.Uuid
   deactivatedAt     DateTime?  @map("deactivated_at") @db.Timestamptz(6)
+  /// When the person first chose a password. Null for an invitation never accepted.
+  activatedAt       DateTime?  @default(now()) @map("activated_at") @db.Timestamptz(6)
   /// Published demo accounts: cannot be deactivated, demoted, renamed or
   /// have their password changed through the API (THREATS.md I8).
   isProtected       Boolean    @default(false) @map("is_protected")
@@ -359,6 +368,8 @@ model PasswordResetToken {
   expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
   usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
   requestedBy String?   @map("requested_by") @db.Uuid
+  /// RESET (forgot password) or INVITE (new account). Each flow accepts only its own.
+  purpose     LinkPurpose @default(RESET)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user User @relation("ResetTokenUser", fields: [userId], references: [id], onDelete: Cascade)

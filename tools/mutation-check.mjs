@@ -161,6 +161,20 @@ const MUTATIONS = [
   sql('database: group membership rules trigger (no externals, no admins)',
     'ALTER TABLE group_members DISABLE TRIGGER group_members_guard', 'ALTER TABLE group_members ENABLE TRIGGER group_members_guard',
     ['test/rls.test.ts']),
+
+  // --- invitations (THREATS.md S18) ------------------------------------------
+  code('invite: an invitation link works once', 'src/auth/invite.service.ts',
+    "if (row.used_at) return 'link_used';", '', ['test/invite.test.ts']),
+  code('invite: only an account still waiting can accept', 'src/auth/invite.service.ts',
+    "if (!u || u.status !== 'INVITED' || u.is_protected) return { refused: 'not_eligible', userId: row!.user_id };", '',
+    ['test/invite.test.ts']),
+  code('reset: an invitation link is not a reset link', 'src/auth/password-reset.service.ts',
+    "if (row.purpose !== 'RESET') return { refused: 'wrong_link_type', userId: row.user_id };", '', ['test/invite.test.ts']),
+  code('users: deactivating cancels outstanding links', 'src/users/users.service.ts',
+    'const links = await tx.passwordResetToken.updateMany({ where: { userId: id, usedAt: null }, data: { usedAt: new Date() } });', 'const links = { count: 0 };',
+    ['test/invite.test.ts']),
+  code('users: reactivating a never-accepted invitation does not make it ACTIVE', 'src/users/users.service.ts',
+    "const status = before.activatedAt ? 'ACTIVE' : 'INVITED';", "const status = 'ACTIVE';", ['test/invite.test.ts']),
 ];
 
 function loadEnv() {

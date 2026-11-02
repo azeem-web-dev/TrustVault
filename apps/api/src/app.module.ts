@@ -29,6 +29,7 @@ import { JobsService } from './jobs/jobs.service.js';
 import { MailService } from './mail/mail.service.js';
 import { NotifyService } from './mail/notify.service.js';
 import { PasswordResetService } from './auth/password-reset.service.js';
+import { InviteService } from './auth/invite.service.js';
 import { RescanService } from './scanning/rescan.service.js';
 import { ClamdScanner, MALWARE_SCANNER, NoScanner, type MalwareScanner } from './scanning/malware-scanner.js';
 import { HealthController } from './health.controller.js';
@@ -74,6 +75,7 @@ export class AppModule {
         MailService,
         NotifyService,
         PasswordResetService,
+        InviteService,
         // Global: runs before every route. Deny-by-default authentication.
         { provide: APP_GUARD, useClass: SecurityGuard },
       ],

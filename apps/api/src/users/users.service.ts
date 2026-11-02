@@ -3,6 +3,7 @@ import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { PasswordService } from '../auth/password.service.js';
 import { SessionService } from '../auth/session.service.js';
+import { InviteService } from '../auth/invite.service.js';
 import { normaliseEmail } from '../auth/auth.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { Role } from '../generated/prisma/enums.js';
@@ -12,18 +13,19 @@ export interface AdminUserView {
   email: string;
   displayName: string;
   role: Role;
-  status: 'ACTIVE' | 'DEACTIVATED';
+  status: 'ACTIVE' | 'DEACTIVATED' | 'INVITED';
   accessExpiresAt: Date | null;
   lockedUntil: Date | null;
   createdAt: Date;
   deactivatedAt: Date | null;
+  activatedAt: Date | null;
   isProtected: boolean;
   totpEnabledAt: Date | null;
 }
 
 const VIEW = {
   id: true, email: true, displayName: true, role: true, status: true,
-  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true, isProtected: true, totpEnabledAt: true,
+  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true, activatedAt: true, isProtected: true, totpEnabledAt: true,
 } as const;
 
 /** Published demo accounts (README) must stay usable for every visitor. THREATS.md I8. */
@@ -38,26 +40,34 @@ export class UsersService {
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(PasswordService) private readonly passwords: PasswordService,
     @Inject(SessionService) private readonly sessions: SessionService,
+    @Inject(InviteService) private readonly invites: InviteService,
   ) {}
 
   list(): Promise<AdminUserView[]> {
     return this.prisma.user.findMany({ select: VIEW, orderBy: { createdAt: 'asc' } });
   }
 
-  async create(input: { email: string; displayName: string; role: Role; password: string; accessExpiresAt?: Date | undefined }): Promise<AdminUserView> {
+  /**
+   * Creates an INVITED account (THREATS.md S18). The admin chooses no
+   * password: the account gets one nobody knows, and the person picks their
+   * own name and password from the emailed link (InviteService).
+   */
+  async create(actor: Actor, input: { email: string; role: Role; accessExpiresAt?: Date | undefined }): Promise<AdminUserView> {
     const email = normaliseEmail(input.email);
     checkExternalExpiry(input.role, input.accessExpiresAt ?? null);
-    const passwordHash = await this.passwords.hash(input.password);
+    const passwordHash = await this.invites.unusablePasswordHash();
     try {
       return await this.prisma.$transaction(async (tx) => {
         const user = await tx.user.create({
           data: {
-            email, displayName: input.displayName.trim(), role: input.role, passwordHash,
+            // A placeholder until they choose their own name.
+            email, displayName: email.split('@')[0]!.slice(0, 100) || email, role: input.role, passwordHash,
+            status: 'INVITED', activatedAt: null, createdById: actor.userId,
             accessExpiresAt: input.accessExpiresAt ?? null,
           },
           select: VIEW,
         });
-        await this.audit.record({ action: 'user.create', outcome: 'ALLOWED', targetType: 'user', targetId: user.id, details: { email, role: input.role } }, tx);
+        await this.audit.record({ action: 'user.create', outcome: 'ALLOWED', targetType: 'user', targetId: user.id, details: { email, role: input.role, status: 'INVITED' } }, tx);
         return user;
       });
     } catch (err) {
@@ -124,9 +134,12 @@ export class UsersService {
       if (before.role === 'ADMIN') await this.ensureAnotherAdmin(tx, id);
       const user = await tx.user.update({ where: { id }, data: { status: 'DEACTIVATED', deactivatedAt: new Date() }, select: VIEW });
       const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'deactivated');
+      // Outstanding invitation and reset links die with the account: this is
+      // also how an admin cancels an invitation.
+      const links = await tx.passwordResetToken.updateMany({ where: { userId: id, usedAt: null }, data: { usedAt: new Date() } });
       // An admin's open break-glass window must not outlive the account (A21).
       await tx.$queryRaw`SELECT tv_end_break_glass(${id}::uuid)`;
-      await this.audit.record({ action: 'user.deactivate', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);
+      await this.audit.record({ action: 'user.deactivate', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended, linksCancelled: links.count, wasInvited: before.status === 'INVITED' } }, tx);
       return user;
     });
   }
@@ -134,9 +147,12 @@ export class UsersService {
   async reactivate(id: string): Promise<AdminUserView> {
     return this.prisma.$transaction(async (tx) => {
       const before = await this.lockUser(tx, id);
-      if (before.status === 'ACTIVE') return before;
-      const user = await tx.user.update({ where: { id }, data: { status: 'ACTIVE', deactivatedAt: null, failedLoginCount: 0, lockedUntil: null }, select: VIEW });
-      await this.audit.record({ action: 'user.reactivate', outcome: 'ALLOWED', targetType: 'user', targetId: id }, tx);
+      if (before.status !== 'DEACTIVATED') return before;
+      // Someone who never accepted their invitation goes back to INVITED, not
+      // ACTIVE: nobody knows their password. The admin sends the invitation again.
+      const status = before.activatedAt ? 'ACTIVE' : 'INVITED';
+      const user = await tx.user.update({ where: { id }, data: { status, deactivatedAt: null, failedLoginCount: 0, lockedUntil: null }, select: VIEW });
+      await this.audit.record({ action: 'user.reactivate', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { status } }, tx);
       return user;
     });
   }
@@ -145,7 +161,10 @@ export class UsersService {
     if (id === actor.userId) throw new BadRequestException('Use the change-password page for your own account');
     const passwordHash = await this.passwords.hash(password);
     await this.prisma.$transaction(async (tx) => {
-      assertNotProtected(await this.lockUser(tx, id));
+      const before = await this.lockUser(tx, id);
+      assertNotProtected(before);
+      // An invited person chooses their own password from their link.
+      if (!before.activatedAt) throw new BadRequestException('This person has not accepted their invitation yet');
       await tx.user.update({ where: { id }, data: { passwordHash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null } });
       const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'password_reset_by_admin');
       await this.audit.record({ action: 'user.password_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);

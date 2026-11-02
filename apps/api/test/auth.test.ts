@@ -255,7 +255,7 @@ describe('account roles', () => {
       expect(res.status).toBe(403);
       const rows = await auditRows(`request_id = $1`, [res.headers['x-request-id']]);
       expect(rows[0]).toMatchObject({ action: 'security.role', outcome: 'DENIED', actor_id: u.id });
-      const create = await as(t, s).post('/api/admin/users', { email: 'x@t.io', displayName: 'x', role: 'ADMIN', password: 'long-enough-password' });
+      const create = await as(t, s).post('/api/admin/users', { email: 'x@t.io', role: 'ADMIN' });
       expect(create.status).toBe(403);
     });
   }
@@ -280,15 +280,16 @@ describe('account roles', () => {
   it('external accounts must have a future expiry', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const a = await login(t, admin);
-    await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password' }).expect(400);
-    await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password', accessExpiresAt: '2001-01-01' }).expect(400);
-    await as(t, a).post('/api/admin/users', { email: 'e@p.io', displayName: 'E', role: 'EXTERNAL', password: 'long-enough-password', accessExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }).expect(201);
+    await as(t, a).post('/api/admin/users', { email: 'e@p.io', role: 'EXTERNAL' }).expect(400);
+    await as(t, a).post('/api/admin/users', { email: 'e@p.io', role: 'EXTERNAL', accessExpiresAt: '2001-01-01' }).expect(400);
+    await as(t, a).post('/api/admin/users', { email: 'e@p.io', role: 'EXTERNAL', accessExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }).expect(201);
   });
 
-  it('short passwords are refused', async () => {
+  it('an admin cannot choose a new user’s password or name (they come from the invitation)', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const a = await login(t, admin);
-    await as(t, a).post('/api/admin/users', { email: 'short@t.io', displayName: 'S', role: 'VIEWER', password: 'short' }).expect(400);
+    await as(t, a).post('/api/admin/users', { email: 'new@t.io', role: 'VIEWER', password: 'long-enough-password' }).expect(400);
+    await as(t, a).post('/api/admin/users', { email: 'new@t.io', role: 'VIEWER', displayName: 'New' }).expect(400);
   });
 });
 

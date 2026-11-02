@@ -5,6 +5,7 @@ import { ZodPipe } from '../common/zod.pipe.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { NotifyService } from '../mail/notify.service.js';
 import { PasswordResetService } from './password-reset.service.js';
+import { InviteService } from './invite.service.js';
 import { CurrentActor, PartialAuth, Public } from './decorators.js';
 import { AuthService } from './auth.service.js';
 import { PasswordSchema } from './password.service.js';
@@ -24,6 +25,12 @@ const ChangePasswordSchema = z.strictObject({
 
 const ForgotSchema = z.strictObject({ email: z.string().trim().min(3).max(254) });
 const ResetSchema = z.strictObject({ token: z.string().max(100), newPassword: z.string().min(1).max(1024) });
+const InviteCheckSchema = z.strictObject({ token: z.string().max(100) });
+const InviteAcceptSchema = z.strictObject({
+  token: z.string().max(100),
+  displayName: z.string().trim().min(1).max(100),
+  password: z.string().min(1).max(1024),
+});
 
 const COOKIE_BASE = { httpOnly: true, secure: true, sameSite: 'strict' as const, path: '/' };
 
@@ -41,6 +48,7 @@ export class AuthController {
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(NotifyService) private readonly notify: NotifyService,
     @Inject(PasswordResetService) private readonly resets: PasswordResetService,
+    @Inject(InviteService) private readonly invites: InviteService,
   ) {}
 
   /**
@@ -118,6 +126,26 @@ export class AuthController {
   @HttpCode(204)
   async reset(@Body(new ZodPipe(ResetSchema)) body: z.infer<typeof ResetSchema>, @Res({ passthrough: true }) res: Response): Promise<void> {
     await this.resets.reset(body.token, body.newPassword);
+    clearSessionCookie(res);
+  }
+
+  /**
+   * Who may call: anyone holding a valid, unused, unexpired invitation link.
+   * Says which email and role it is for, so the page can show it. `400` otherwise.
+   */
+  @Public()
+  @Post('invite/check')
+  @HttpCode(200)
+  async checkInvite(@Body(new ZodPipe(InviteCheckSchema)) body: z.infer<typeof InviteCheckSchema>) {
+    return await this.invites.check(body.token);
+  }
+
+  /** Who may call: anyone holding a valid invitation link. Sets their name and password; then they sign in. */
+  @Public()
+  @Post('invite/accept')
+  @HttpCode(204)
+  async acceptInvite(@Body(new ZodPipe(InviteAcceptSchema)) body: z.infer<typeof InviteAcceptSchema>, @Res({ passthrough: true }) res: Response): Promise<void> {
+    await this.invites.accept(body.token, body.displayName, body.password);
     clearSessionCookie(res);
   }
 }
