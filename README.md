@@ -20,6 +20,14 @@ The demo accounts are published because the brief asks for them, so they are **p
 
 Demo accounts cannot reset their password and never receive email: their addresses belong to someone else.
 
+## Second factor
+
+- **Google Authenticator in three steps** (Account page, website or app): install the app, scan the QR code (or tap "Open in authenticator app" on the phone, or copy the key shown in groups of four), type the 6-digit code. Codes are standard RFC 6238, tested against the RFC's own vectors, so any authenticator app works.
+- **Who must use one:** every admin, always. An admin can add owners, viewers or externals under Administration → Settings; it applies from everyone's next click.
+- **Step-up:** risky actions (role changes, deactivating, resets, break-glass, the policy itself, transferring or permanently deleting a document, removing a factor, signing out devices) ask for a fresh code or passkey if the last one was more than 5 minutes ago (THREATS.md S19).
+- **Signed-in devices:** Account shows where you are signed in; sign out one device or all others (S22).
+- **Android app:** passkeys through Android's Credential Manager, the same passkeys as the website (S21), and a face / fingerprint / PIN lock when the app is opened or comes back after 30 seconds (S23).
+
 ## Roles
 
 | Role | Can | Cannot |
@@ -53,7 +61,7 @@ Grants are per document, to named people or to groups. A group share covers the 
 ```
 Browser ──HTTPS──► nginx (TLS, HSTS, rate limits, X-Forwarded-For overwritten)
                     ├── /api/* ──► NestJS API (user trustvault, systemd sandbox, loopback only)
-                    │               ├─ SecurityGuard: Origin → session → CSRF → 2nd factor → role
+                    │               ├─ SecurityGuard: Origin → session → CSRF → 2nd factor → role → step-up
                     │               ├─ decide()  ← LOCK 1: every document route, deny by default
                     │               ├─ prisma.asUser(): sets app.user_id for the transaction
                     │               ├─ uploads ──unix socket──► clamd (ClamAV; no clean answer, no upload)
@@ -109,6 +117,11 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `scanner.unit.test.ts` | only an exact "clean" from ClamAV passes; production refuses to start without it |
 | `revocation-holes.test.ts` | admins never read through groups or grants; a group share reaches people added later only after the owner confirms; revoke and transfer say when a group still gives access; role changes, break-glass limits and ended sessions are enforced and recorded |
 | `refusal-audit.test.ts` | refusals before the access check (bad body, bad version number, malformed id) and the guard's second-factor and foreign-Origin refusals are recorded, and no refusal is recorded twice |
+| `step-up.test.ts` | risky actions refused without a recent second factor, then allowed after `POST /auth/mfa/step-up` (code or passkey); replay and rate limit still apply |
+| `mfa-policy.test.ts` | adding a role to the MFA policy forces its open password-only sessions to enrol; ADMIN cannot be removed (API and database); admins only, with step-up |
+| `devices.test.ts` | your own sessions only: list, sign out one, sign out all others; someone else's session is `404` |
+| `passkeys-android.test.ts` | the Android app's `android:apk-key-hash` origin accepted only when configured; other signing keys refused |
+| `totp.unit.test.ts` | RFC 6238 Appendix B vectors, clock drift of one step, the `otpauth://` URI Google Authenticator reads |
 | `email.test.ts` | password reset links reveal nothing, work once, expire, are built from the configured site and end every session; admins send links and never see passwords; notices for sign-ins, password and second-factor changes, and shares; demo accounts never get mail |
 | `checkpoint-guard.test.ts` | the database accepts an audit checkpoint only for a real event with the same hash, and only moving forward |
 | `tools/verify-audit.test.mjs` | the offline verifier (19 cases): pinned key, no checkpoints, recomputed forged chains, cut-off tails caught through Sigstore or the witness |
