@@ -38,7 +38,7 @@ Started 2026-11-01. This file records the decisions and why I made them. It chan
 ### Account roles
 | Role | Can | Cannot |
 |---|---|---|
-| ADMIN | Manage users and groups, deactivate accounts, view all audit and alerts, verify the audit chain | Open document contents (except break-glass: written reason, 1-hour expiry, flagged alert) |
+| ADMIN | Manage users and groups, deactivate accounts, view all audit and alerts, verify the audit chain | Open document contents (except break-glass: written reason, 1-hour expiry, flagged alert); be granted access, join groups |
 | OWNER | Upload documents (and so own them), everything a viewer can | Touch documents they were not granted |
 | VIEWER | Work with documents granted to them | Upload new documents |
 | EXTERNAL | Read documents granted to them | Hold EDIT/MANAGE, join groups, hold a grant without an expiry date |

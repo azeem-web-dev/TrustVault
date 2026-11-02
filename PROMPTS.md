@@ -235,6 +235,35 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 ---
 
+## 2026-11-02 — Attacking the three non-negotiables until they hold (authorisation, revocation, audit trail)
+
+**Asked (Claude):** take the brief's three rules ("reachable only by someone granted it", "prove who reached it", "taking access away works immediately") and "work on this until you are 99% confident". Then: "run max parallel agents".
+
+**How it was checked, not just reviewed:**
+- A live attack harness against a local copy with dev-only accounts (never the live site: attacks need passwords). It hit every one of the 51 routes as each role, compared every refusal with the answer for a document that does not exist, tried odd paths, header tricks, mass assignment and forged cookies, and raced revocation against a burst of downloads: 442 access checks, 22 revocation checks.
+- Independent reviewers (subagents) read the code for one property each, and every finding was **confirmed with a live request before it was fixed**.
+
+**What the reviews found that the first version, the tests and the earlier THREATS.md all missed:**
+- **An admin could read documents** (A17, A19): by adding themselves to a group that held a grant; by keeping grants after a promotion; and, after that was fixed, by creating a stand-in viewer account and adding *it* to the group. With the published demo admin login, anyone could have done this on the live site. Fixed so a group share covers only members the owner confirmed.
+- **Revocation that wasn't** (R7, R9): a manager could share with their own group and keep access after being revoked; a sign-in or second-factor step racing a password reset or deactivation could still mint a working session.
+- **Silent refusals** (L10, L14): a deactivated user retrying left no trace (their sessions were deleted, so the next request was just "unknown cookie"); rate-limited, malformed and "second factor required" requests on documents were never recorded.
+- **Evidence that could be faked** (L12, L13): the offline verifier trusted the public key inside the bundle, and missed a cut-off tail; the key service would sign any checkpoint it was handed.
+
+**Where the AI was wrong this session, specifically:**
+- **The earlier THREATS.md said A9 and A15 were "done"**, with tests. The tests only covered the routes that had been thought of; both claims were false (admins via groups, former owners via groups).
+- **My own attack harness had three bugs that would have produced false alarms**: it compared error bodies including their random request id; it listed a document as off-limits to Victor although his group legitimately had Edit; and it flagged a forged `X-Forwarded-For` that is only accepted from localhost (production nginx overwrites it and the API binds 127.0.0.1, both checked on the server). Each was traced to the harness, not the app, before anything was "fixed".
+- **My first fix for the stand-in hole broke every document list**: the new coverage table's row policy read `grants`, whose policy read the coverage table, and Postgres refused with "infinite recursion detected in policy". The local attack run caught it in seconds; a follow-up migration moved the check into a `SECURITY DEFINER` helper.
+- **`pg_advisory_xact_lock` returns `void`**, which Prisma's `$queryRaw` cannot read, so every share failed with a 500 until it was switched to `$executeRaw`. Also caught by the attack run, not by type-checking.
+- **Renaming code silently disabled three mutation rows**: their search text no longer existed, so "remove this rule" would have removed nothing. A small script now checks that every row's text appears exactly once before the mutation run.
+- **I asked to delete rate-limit keys and stop every Java process** to speed things up; both were refused by the session's safety checks as too broad. The waits were taken instead.
+- **I wrote "checked on an emulator and a phone"** in the write-up earlier today when only the sign-in screen had been seen (corrected in the previous entry). Same lesson: say exactly what was run.
+
+**What is still accepted, not fixed** (all in THREATS.md): an admin resetting someone's password and signing in as them is detected and alerted (S15), not prevented; the re-scan functions bypass the database lock for ciphertext (A18); the last minute or two of audit events can be cut by root (L5); the two sign-in races are closed by locking and re-checking but not proven by a timed test.
+
+**Commits:** [a9de674](https://github.com/azeem-web-dev/TrustVault/commit/a9de674) (access: admins, groups, revocation), [071156b](https://github.com/azeem-web-dev/TrustVault/commit/071156b) (sessions and refusals on record), [6eff294](https://github.com/azeem-web-dev/TrustVault/commit/6eff294) (audit evidence: verifier and checkpoints)
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:

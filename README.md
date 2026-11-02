@@ -18,6 +18,17 @@ A document platform where the wrong person can never read the file, and you can 
 
 The demo accounts are published because the brief asks for them, so they are **protected**: nobody can deactivate, demote, rename them or change their password or second factor (THREATS.md I7, I8). Each code works once (replay-protected). If a code is refused, wait for the next one.
 
+## Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| Admin | Manage users and groups. See the audit log and alerts, verify integrity, export evidence. Break-glass: a written reason of at least 20 characters gives one hour of READ on one document; it is alerted and shown in that document's history. | Open, download or upload documents (except READ through break-glass). Be given access to a document. Join a group. Change the protected demo accounts. |
+| Owner | Upload documents. On their own documents: share (READ, EDIT or MANAGE), revoke, edit, upload new versions, move to folders, trash, restore, delete permanently, transfer ownership. | Be moved to another role while they own documents. |
+| Viewer | Use what they are granted. READ: view and download. EDIT: also rename, describe and upload new versions. MANAGE: also share READ or EDIT, revoke, and see who has access and the history. | Upload new documents. Give MANAGE. |
+| External | READ only, and only on grants with an expiry, until their account's end date. | Get access through a group. Anything above READ. |
+
+Grants are per document, to named people or to groups. A group share covers the people in the group when it is shared. Anyone added later waits until the owner (or a manager outside the group) confirms; `GET /documents/:id/access` shows them as pending.
+
 ## What to read
 
 | File | What it is |
@@ -70,12 +81,13 @@ GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (
 ## Tests
 
 ```bash
-cd apps/api && npx vitest run            # 200 tests against a real Postgres and Redis
+cd apps/api && npx vitest run            # over 230 tests against a real Postgres and Redis
 cd apps/api && npm run test:e2e          # passkeys in real Chrome through the real pages (needs Chrome)
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes each authorisation rule; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (50 of them), one at a time; every removal must fail a test
+node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
 cd keyd && cargo test                    # key service
-node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl --rekor   # verify an audit export, against the witness and Sigstore
+node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE= --witness checkpoints.jsonl --rekor   # verify an audit export: pinned key, witness, Sigstore
 ```
 
 | Test file | Proves |
@@ -93,6 +105,10 @@ node tools/verify-audit.mjs bundle.json --witness checkpoints.jsonl --rekor   # 
 | `e2e/passkey.e2e.ts` | the same in real Chrome (virtual authenticator) through the real Next.js pages and API |
 | `rescan.test.ts` | a file stored clean and caught by a later signature is quarantined; downloads refused; the app cannot release it |
 | `scanner.unit.test.ts` | only an exact "clean" from ClamAV passes; production refuses to start without it |
+| `revocation-holes.test.ts` | admins never read through groups or grants; a group share reaches people added later only after the owner confirms; revoke and transfer say when a group still gives access; role changes, break-glass limits and ended sessions are enforced and recorded |
+| `refusal-audit.test.ts` | refusals before the access check (bad body, bad version number, malformed id) and the guard's second-factor and foreign-Origin refusals are recorded, and no refusal is recorded twice |
+| `checkpoint-guard.test.ts` | the database accepts an audit checkpoint only for a real event with the same hash, and only moving forward |
+| `tools/verify-audit.test.mjs` | the offline verifier (19 cases): pinned key, no checkpoints, recomputed forged chains, cut-off tails caught through Sigstore or the witness |
 
 ## Run it locally
 
