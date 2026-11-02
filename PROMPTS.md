@@ -21,6 +21,8 @@ Tools: ChatGPT (early brainstorming), Claude Code / Claude Opus (planning, code,
 
 **What I did instead:** kept the parts that serve the rules (Next.js, NestJS, Postgres, Redis for jobs only, AES-256-GCM, HKDF, Ed25519, passkeys, hash-chained signed audit). Replaced Auth0/Keycloak with server-side sessions checked on every request. Replaced OPA with one `decide()` function plus Postgres Row-Level Security as a second layer. Kept Rust only for a small isolated key service where process isolation actually adds something. Reasons recorded in [docs/PLAN.md](docs/PLAN.md).
 
+**Commit:** [a43fb25](https://github.com/azeem-web-dev/TrustVault/commit/a43fb25) (the design written down before any code)
+
 ---
 
 ## Reused context
@@ -45,6 +47,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 - Added a unique index on `prev_hash`, so a fork is structurally impossible: a second event claiming the same predecessor fails to insert.
 - Field encoding uses length prefixes (`<bytes>:<value>`, NULL as `~`) so text cannot be shifted between fields without changing the hash.
 - Wrote a probe that attacks the table as the app role and as the table owner. All of UPDATE/DELETE/TRUNCATE/setval are refused, forged `seq`/`hash`/`occurred_at` values are overwritten by the trigger, and `audit_verify()` reports the chain intact. These become automated tests next.
+
+**Commit:** [d91b245](https://github.com/azeem-web-dev/TrustVault/commit/d91b245)
 
 ---
 
@@ -131,6 +135,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 **What I did instead:** (1) tests that deactivate an account, move `password_changed_at` or expire an external account **directly in the database**, so only the per-request check stands between the old cookie and the app; (2) moved the search filter into `buildSearchWhere()` and tested it with a database connection as the table owner (which RLS does not apply to), so the app filter is tested alone. RLS is tested alone in `rls.test.ts`, and `decide()` alone in `access.unit.test.ts`. The mutation report shows each removal caught: [docs/MUTATION_REPORT.md](docs/MUTATION_REPORT.md).
 
+**Commits:** [84db532](https://github.com/azeem-web-dev/TrustVault/commit/84db532) (the second lock tested on its own), [f4455cc](https://github.com/azeem-web-dev/TrustVault/commit/f4455cc) (direct-database tests, search filter, mutation check)
+
 ---
 
 ## 2026-11-01 — Toolchain surprises (not security, recorded because they cost time)
@@ -151,6 +157,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 **What I did instead:** the counter, the lock and the audit row are now **one SQL statement** (a data-modifying CTE), so every failure path costs one Argon2 verify plus one statement. As a second layer, every failed login is padded to 450 ms. Measured again with the padding off: 56% and 51% (chance); with it on: see [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md). A new test checks the single statement still locks for 15 minutes and then doubles, with the right audit reason.
 
+**Commit:** [a9a8a67](https://github.com/azeem-web-dev/TrustVault/commit/a9a8a67)
+
 ---
 
 ## 2026-11-01 — Closing the audit and upload gaps (audit trail)
@@ -165,6 +173,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 **What was wrong:** the witness test helper first read only the first 1000 checkpoints. Checkpoints can never be deleted from the test database, so after enough test runs the newest ones would have fallen off the page and the test would have failed for no real reason. It now pages exactly as the real tool does. Small, but it would have looked like a real alarm.
 
 **And one in the mutation check itself:** running the full suite showed the local test database's audit log had been wiped earlier. The mutation check disables the audit table's append-only trigger and then runs the test "even the table owner cannot TRUNCATE audit rows". With the trigger gone the TRUNCATE succeeded: the test failed as intended (mutation caught), but it also emptied the log, leaving signed checkpoints that pointed at events that no longer existed. Only the test database was affected. Those owner attempts now run inside a transaction that is always rolled back, so a missing guard fails the test without destroying anything; the orphaned test checkpoints were removed.
+
+**Commits:** [ab39147](https://github.com/azeem-web-dev/TrustVault/commit/ab39147) (witness), [9b5446b](https://github.com/azeem-web-dev/TrustVault/commit/9b5446b) (malware scan), [f0c8afe](https://github.com/azeem-web-dev/TrustVault/commit/f0c8afe) (passkey test), [c04a5d9](https://github.com/azeem-web-dev/TrustVault/commit/c04a5d9) (backups), [b89fc09](https://github.com/azeem-web-dev/TrustVault/commit/b89fc09) (mutation check fix)
 
 ---
 
@@ -183,6 +193,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 - **I suspected a UI bug that was not there.** The browser test's screenshot showed the Account page without the newly added passkey, and an exact-text check for it timed out. The API already returned both passkeys. The page was fine: the screenshot was taken before the list reloaded, and the exact match could never succeed because the name and its "Added …" line share one element. The test now waits for the list item instead.
 - **Checked the new checks fail when broken.** Seven new mutations (a receipt for the wrong checkpoint, an unverified receipt, an unmatched public entry, a checkpoint left unpublished, a full bundle disagreeing with the log, a quarantined version downloaded, an infected file treated as clean): each made at least one test fail.
 
+**Commit:** [afc0c48](https://github.com/azeem-web-dev/TrustVault/commit/afc0c48)
+
 ---
 
 ## 2026-11-02 — Simpler demo logins, and a redesigned interface
@@ -197,6 +209,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 **What went wrong:**
 - **Three UI bugs found by clicking through every screen in Chrome before committing.** Text typed straight after Ctrl+K was lost because the search box was focused a moment too late. On a laptop-height screen, the sign-in page's feature cards were cut off. And the documents page told administrators "You can open what is shared", which is false: administrators cannot open documents. All three were fixed.
 - **The local dev database was one migration behind**, so document pages showed "Internal error" during the check. This was not caused by the redesign. Applying the migration fixed it; production and the test database already had it.
+
+**Commits:** [e4f63ad](https://github.com/azeem-web-dev/TrustVault/commit/e4f63ad) (demo logins), [91e59cf](https://github.com/azeem-web-dev/TrustVault/commit/91e59cf) (redesign), [12aa239](https://github.com/azeem-web-dev/TrustVault/commit/12aa239) (secret-scan follow-up: the redesign put the demo password on the sign-in page and CI flagged it)
 
 ---
 
