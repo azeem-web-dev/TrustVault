@@ -10,6 +10,8 @@ import { CurrentActor, Roles } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
 import { SharingService } from './sharing.service.js';
+import { ViewingService } from './viewing.service.js';
+import { ENV, type Env } from '../config/env.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
 
@@ -50,7 +52,7 @@ const GrantSchema = z
   .strictObject({
     userId: Uuid.optional(),
     groupId: Uuid.optional(),
-    level: z.enum(['READ', 'EDIT', 'MANAGE']),
+    level: z.enum(['VIEW', 'READ', 'EDIT', 'MANAGE']),
     expiresAt: z.coerce.date().nullable().optional(),
     fromSuggestion: z.boolean().optional(),
   })
@@ -80,6 +82,8 @@ export class DocumentsController {
     @Inject(DocumentsService) private readonly docs: DocumentsService,
     @Inject(SharingService) private readonly sharing: SharingService,
     @Inject(RateLimitService) private readonly limits: RateLimitService,
+    @Inject(ViewingService) private readonly viewing: ViewingService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   /** Search documents I own or hold a live grant on. */
@@ -135,6 +139,39 @@ export class DocumentsController {
   async downloadVersion(@CurrentActor() actor: Actor, @Param('id') id: string, @Param('versionNo', new ParseIntPipe()) versionNo: number, @Res() res: Response) {
     await this.limits.hit(`download:${actor.userId}`, 300, 600, 'Too many downloads. Try again in a few minutes.');
     this.send(res, await this.docs.download(actor, docId(id), versionNo));
+  }
+
+  /** VIEW or better: how many pages the current version has (THREATS.md V2). */
+  @Get(':id/pages')
+  pages(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.viewing.pageCount(actor, docId(id));
+  }
+
+  /**
+   * VIEW or better: one page as a PNG with the viewer's watermark. Never the
+   * original bytes; each page is a `document.page_view` audit row with the
+   * trace code drawn on it (THREATS.md V2-V4, V7).
+   */
+  @Get(':id/pages/:n')
+  async page(@CurrentActor() actor: Actor, @Param('id') id: string, @Param('n', new ParseIntPipe()) n: number, @Res() res: Response) {
+    await this.limits.hit(`pages:${actor.userId}`, this.env.PAGE_VIEW_RATE_LIMIT, 600, 'Too many pages viewed. Try again in a few minutes.');
+    const { png, trace } = await this.viewing.page(actor, docId(id), n);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', String(png.length));
+    res.setHeader('Content-Disposition', 'inline; filename="page.png"');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader('X-Trace-Code', trace);
+    res.end(png);
+  }
+
+  /** READ or better: the key for the Android app's encrypted copy (THREATS.md V6). */
+  @Post(':id/offline-key')
+  @HttpCode(200)
+  offlineKey(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.viewing.offlineKey(actor, docId(id));
   }
 
   /** Owner only. */
@@ -200,7 +237,7 @@ export class DocumentsController {
    * Files are always sent as attachments with a locked-down CSP, so even a
    * file that slipped past validation can never run as a page on our origin.
    */
-  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string }) {
+  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string; trace: string; stamped: boolean }) {
     const ascii = file.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     res.setHeader('Content-Type', file.mimeType);
     res.setHeader('Content-Length', String(file.data.length));
@@ -208,7 +245,11 @@ export class DocumentsController {
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store, private');
+    // The stored version's hash. A stamped copy differs from it by design;
+    // X-Stamped says so, and X-Trace-Code matches the download's audit row.
     res.setHeader('X-Document-SHA256', file.sha256);
+    res.setHeader('X-Stamped', file.stamped ? 'yes' : 'no');
+    res.setHeader('X-Trace-Code', file.trace);
     res.end(file.data);
   }
 }

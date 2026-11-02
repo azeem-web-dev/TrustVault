@@ -99,7 +99,7 @@ export const mailTemplates = {
   },
 
   sharedWithYou(name: string, sharer: string, title: string, level: string, expiresAt: Date | null, url: string) {
-    const can = level === 'READ' ? 'read' : level === 'EDIT' ? 'edit' : 'manage';
+    const can = level === 'VIEW' ? 'view (but not download)' : level === 'READ' ? 'read and download' : level === 'EDIT' ? 'edit' : 'manage';
     return {
       subject: `${sharer} shared a document with you`,
       ...render(name, {

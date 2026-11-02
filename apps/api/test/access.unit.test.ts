@@ -11,7 +11,8 @@ const FUTURE = '2026-12-01T00:00:00Z';
 const PAST = '2026-10-01T00:00:00Z';
 
 const ALL_ACTIONS = Object.keys(REQUIRED_LEVEL) as DocAction[];
-const READ_ACTIONS: DocAction[] = ['view', 'download'];
+const VIEW_ACTIONS: DocAction[] = ['view', 'view_pages'];
+const READ_ACTIONS: DocAction[] = [...VIEW_ACTIONS, 'download', 'offline_key'];
 const EDIT_ACTIONS: DocAction[] = ['edit', 'upload_version'];
 const MANAGE_ACTIONS: DocAction[] = ['view_access', 'share', 'view_history'];
 const OWNER_ACTIONS: DocAction[] = ['move_folder', 'trash', 'restore', 'purge', 'transfer'];
@@ -45,7 +46,14 @@ describe('decide(): deny by default', () => {
 });
 
 describe('decide(): levels map to actions', () => {
-  it('READ grant allows exactly view and download', () => {
+  it('VIEW grant allows metadata and pages, never the original file (THREATS.md V1)', () => {
+    const f = facts({ grants: [{ level: 'VIEW', expiresAt: null, viaGroup: false }] });
+    expect(allowedSet(f)).toEqual([...VIEW_ACTIONS].sort());
+    expect(evaluate(f, ME, 'download', NOW)).toMatchObject({ allowed: false, reason: 'needs_read' });
+    expect(evaluate(f, ME, 'offline_key', NOW)).toMatchObject({ allowed: false, reason: 'needs_read' });
+  });
+
+  it('READ grant allows exactly view, pages, download and the offline key', () => {
     expect(allowedSet(facts({ grants: [{ level: 'READ', expiresAt: null, viaGroup: false }] }))).toEqual([...READ_ACTIONS].sort());
   });
 
@@ -91,6 +99,11 @@ describe('decide(): grants that must not count', () => {
     const f = facts({ role: 'EXTERNAL', grants: [{ level: 'MANAGE', expiresAt: FUTURE, viaGroup: false }] });
     expect(allowedSet(f)).toEqual([...READ_ACTIONS].sort());
   });
+
+  it('an external with VIEW sees pages and cannot download', () => {
+    const f = facts({ role: 'EXTERNAL', grants: [{ level: 'VIEW', expiresAt: FUTURE, viaGroup: false }] });
+    expect(allowedSet(f)).toEqual([...VIEW_ACTIONS].sort());
+  });
 });
 
 describe('decide(): account state', () => {
@@ -112,9 +125,9 @@ describe('decide(): trash', () => {
     expect(allowedSet(f)).toEqual([]);
   });
 
-  it('the owner of a deleted document can view, download, restore, purge and see history only', () => {
+  it('the owner of a deleted document can view, see pages, download, restore, purge and see history only', () => {
     const f = facts({ document: { ownerId: ME, status: 'DELETED' } });
-    expect(allowedSet(f)).toEqual(['download', 'purge', 'restore', 'view', 'view_history']);
+    expect(allowedSet(f)).toEqual(['download', 'purge', 'restore', 'view', 'view_history', 'view_pages']);
   });
 });
 
@@ -123,8 +136,8 @@ describe('decide(): admin and break-glass', () => {
     expect(allowedSet(facts({ role: 'ADMIN' }))).toEqual([]);
   });
 
-  it('a live break-glass window gives an admin READ only', () => {
-    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE }))).toEqual([...READ_ACTIONS].sort());
+  it('a live break-glass window gives an admin VIEW only: pages, no download (THREATS.md V9)', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE }))).toEqual([...VIEW_ACTIONS].sort());
   });
 
   it('an expired break-glass window gives nothing', () => {
@@ -140,8 +153,8 @@ describe('decide(): admin and break-glass', () => {
     expect(allowedSet(facts({ role: 'ADMIN', document: { ownerId: ME, status: 'ACTIVE' } }))).toEqual([]);
   });
 
-  it('break-glass gives READ only, even if the admin also holds a grant', () => {
-    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE, grants: [{ level: 'MANAGE', expiresAt: null, viaGroup: false }] }))).toEqual([...READ_ACTIONS].sort());
+  it('break-glass gives VIEW only, even if the admin also holds a grant', () => {
+    expect(allowedSet(facts({ role: 'ADMIN', breakGlassUntil: FUTURE, grants: [{ level: 'MANAGE', expiresAt: null, viaGroup: false }] }))).toEqual([...VIEW_ACTIONS].sort());
   });
 
   it('break-glass does not open a document in the trash', () => {

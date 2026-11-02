@@ -10,6 +10,7 @@ import { AccessService, Level } from './access.js';
 import { remainingLevel } from './sharing.service.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
+import { pageKind, stampDownload, traceCode } from './pages.js';
 
 export interface UploadedFile {
   buffer: Buffer;
@@ -29,7 +30,7 @@ export interface SearchFilters {
 }
 
 const PAGE_SIZE = 25;
-const LEVEL_NAME: Record<number, string> = { 1: 'READ', 2: 'EDIT', 3: 'MANAGE', 4: 'OWNER' };
+const LEVEL_NAME: Record<number, string> = { 1: 'VIEW', 2: 'READ', 3: 'EDIT', 4: 'MANAGE', 5: 'OWNER' };
 
 const LIST_SELECT = {
   id: true, title: true, category: true, description: true, status: true,
@@ -203,8 +204,15 @@ export class DocumentsService {
    * 'download')` line below. Remove it and the request still returns 404 —
    * row-level security hides the version and blob rows — but the refusal is
    * no longer audited, and the decide() tests fail.
+   *
+   * VIEW is not enough: decide() wants READ, and row-level security hides
+   * the blob row from a VIEW grantee as well (THREATS.md V1). The copy sent
+   * is stamped with who, when and a trace code where the type allows
+   * (THREATS.md V5); the trace code is in the download's audit row.
    */
   async download(actor: Actor, id: string, versionNo?: number) {
+    const trace = traceCode();
+    const at = new Date();
     const found = await this.prisma.asUser(actor.userId, async (tx) => {
       const decision = await this.access.require(tx, actor, id, 'download');
       const doc = await tx.document.findUnique({ where: { id }, select: { currentVersionNo: true } });
@@ -228,7 +236,11 @@ export class DocumentsService {
       // audit write fails, nothing is sent.
       await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
-        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex') },
+        details: {
+          versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'),
+          // What the copy carries: 'pdf' or 'image' stamp, or 'none' (sent unchanged).
+          trace, stamp: ['pdf', 'image'].includes(pageKind(version.mimeType) ?? '') ? pageKind(version.mimeType) : 'none',
+        },
       }, tx);
       return version;
     });
@@ -248,7 +260,18 @@ export class DocumentsService {
       await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'hash_mismatch', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
-    return { data: plaintext, fileName: found.fileName, mimeType: found.mimeType, sha256: Buffer.from(found.sha256).toString('hex') };
+    let stamped: Buffer | null = null;
+    try {
+      stamped = await stampDownload(plaintext, found.mimeType, { email: actor.email, at, trace });
+    } catch (err) {
+      // A file pdf-lib cannot rewrite (an encrypted PDF, say) goes out as it
+      // is; the record says so, next to the download row (THREATS.md V5).
+      await this.audit.record({ action: 'document.download_stamp', outcome: 'FAILED', reason: 'stamp_failed', targetType: 'document', targetId: id, documentId: id, details: { trace, versionNo: found.versionNo, error: String((err as Error)?.message ?? err).slice(0, 200) } });
+    }
+    return {
+      data: stamped ?? plaintext, fileName: found.fileName, mimeType: found.mimeType, sha256: Buffer.from(found.sha256).toString('hex'),
+      trace, stamped: stamped !== null,
+    };
   }
 
   // ----------------------------------------------------------------- change

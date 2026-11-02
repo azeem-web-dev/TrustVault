@@ -199,8 +199,8 @@ describe('guard triggers', () => {
 describe('tv_doc_level: the SQL access decision', () => {
   const level = async (user: string) => Number((await app.query(`SELECT tv_doc_level($1, $2) AS l`, [doc, user])).rows[0].l);
 
-  it('owner 4, stranger 0', async () => {
-    expect(await level(ids.alice)).toBe(4);
+  it('owner 5, stranger 0 (0 none, 1 VIEW, 2 READ, 3 EDIT, 4 MANAGE, 5 owner)', async () => {
+    expect(await level(ids.alice)).toBe(5);
     expect(await level(ids.bob)).toBe(0);
   });
 
@@ -220,7 +220,7 @@ describe('tv_doc_level: the SQL access decision', () => {
     // A group grant covers only members the sharer confirmed (THREATS.md A19).
     expect(await level(ids.vic)).toBe(0);
     await owner.query(`INSERT INTO grant_group_members (grant_id, user_id) VALUES ($1, $2)`, [gr, ids.vic]);
-    expect(await level(ids.vic)).toBe(2);
+    expect(await level(ids.vic)).toBe(3);
     await owner.query(`DELETE FROM group_members WHERE user_id = $1`, [ids.vic]);
     expect(await level(ids.vic)).toBe(0);
   });
@@ -229,7 +229,7 @@ describe('tv_doc_level: the SQL access decision', () => {
     await owner.query(`INSERT INTO grants (id, document_id, user_id, level, granted_by_id, updated_at) VALUES ($1, $2, $3, 'MANAGE', $4, now())`, [id(), doc, ids.vic, ids.alice]);
     await owner.query(`UPDATE documents SET status = 'DELETED', deleted_at = now() WHERE id = $1`, [doc]);
     expect(await level(ids.vic)).toBe(0);
-    expect(await level(ids.alice)).toBe(4);
+    expect(await level(ids.alice)).toBe(5);
   });
 
   it('deactivated owners lose access to their own documents', async () => {
@@ -241,11 +241,84 @@ describe('tv_doc_level: the SQL access decision', () => {
     await owner.query(`ALTER TABLE grants DISABLE TRIGGER grants_guard`);
     await owner.query(`INSERT INTO grants (id, document_id, user_id, level, expires_at, granted_by_id, updated_at) VALUES ($1, $2, $3, 'MANAGE', now() + interval '1 day', $4, now())`, [id(), doc, ids.erin, ids.alice]);
     await owner.query(`ALTER TABLE grants ENABLE TRIGGER grants_guard`);
-    expect(await level(ids.erin)).toBe(1);
+    expect(await level(ids.erin)).toBe(2);
   });
 
-  it('break-glass gives an admin READ for its window only', async () => {
+  it('break-glass gives an admin VIEW (1) for its window only, never READ (THREATS.md V9)', async () => {
     await owner.query(`INSERT INTO break_glass (id, admin_id, document_id, reason, expires_at) VALUES ($1, $2, $3, 'emergency reason long enough', now() + interval '30 minutes')`, [id(), ids.adm, doc]);
     expect(await level(ids.adm)).toBe(1);
+  });
+});
+
+describe('view-only: the database refuses original bytes below READ (THREATS.md V1, V6, V9)', () => {
+  const grantRow = (user: string, level: string, expires: string | null = null) =>
+    owner.query(`INSERT INTO grants (id, document_id, user_id, level, expires_at, granted_by_id, updated_at) VALUES ($1, $2, $3, $4, $5, $6, now())`,
+      [id(), doc, user, level, expires, ids.alice]);
+  const level = async (user: string) => Number((await app.query(`SELECT tv_doc_level($1, $2) AS l`, [doc, user])).rows[0].l);
+
+  it('a VIEW grantee sees the document and its versions but no blob row', async () => {
+    await grantRow(ids.vic, 'VIEW');
+    expect(await level(ids.vic)).toBe(1);
+    await asUser(ids.vic, async () => {
+      expect(await count('SELECT 1 FROM documents')).toBe(1);
+      expect(await count('SELECT 1 FROM document_versions')).toBe(1);
+      expect(await count('SELECT 1 FROM document_blobs')).toBe(0);
+    });
+  });
+
+  it('a READ grantee sees the blob row', async () => {
+    await grantRow(ids.vic, 'READ');
+    expect(await level(ids.vic)).toBe(2);
+    await asUser(ids.vic, async () => {
+      expect(await count('SELECT 1 FROM document_blobs')).toBe(1);
+    });
+  });
+
+  it('an admin in a break-glass window sees no blob row', async () => {
+    await owner.query(`INSERT INTO break_glass (id, admin_id, document_id, reason, expires_at) VALUES ($1, $2, $3, 'emergency reason long enough', now() + interval '30 minutes')`, [id(), ids.adm, doc]);
+    await asUser(ids.adm, async () => {
+      expect(await count('SELECT 1 FROM documents')).toBe(1);
+      expect(await count('SELECT 1 FROM document_blobs')).toBe(0);
+    });
+  });
+
+  it('tv_render_source() answers only for the current user at VIEW or better, and never for a quarantined version', async () => {
+    const ver = (await owner.query(`SELECT id FROM document_versions WHERE document_id = $1`, [doc])).rows[0].id as string;
+    const src = () => count(`SELECT 1 FROM tv_render_source($1)`, [ver]);
+    await asUser(ids.bob, async () => expect(await src()).toBe(0));
+    await asUser(null, async () => expect(await src()).toBe(0));
+    await grantRow(ids.vic, 'VIEW');
+    await asUser(ids.vic, async () => expect(await src()).toBe(1));
+    await owner.query(`INSERT INTO version_quarantine (version_id, signature, scanner) VALUES ($1, 'Eicar-Test-Signature', 'test')`, [ver]);
+    await asUser(ids.vic, async () => expect(await src()).toBe(0));
+  });
+
+  it('externals may be given VIEW or READ with an expiry, nothing more', async () => {
+    const soon = new Date(Date.now() + 86_400_000).toISOString();
+    await asUser(ids.alice, () => grantAs(ids.alice, ids.erin, 'VIEW', soon));
+    await asUser(ids.alice, async () => {
+      await expect(grantAs(ids.alice, ids.erin, 'VIEW', null)).rejects.toThrow(/external/);
+    });
+  });
+
+  it('offline keys: READ or better only, own row only, and gone when the grant goes', async () => {
+    const key = (user: string) => app.query(`INSERT INTO offline_keys (document_id, user_id, wrapped_key, key_id) VALUES ($1, $2, '\x01', 'k')`, [doc, user]);
+    await grantRow(ids.vic, 'VIEW');
+    await asUser(ids.vic, async () => {
+      await expect(key(ids.vic)).rejects.toThrow(/row-level security/);
+    });
+    await owner.query(`UPDATE grants SET level = 'READ' WHERE user_id = $1`, [ids.vic]);
+    await asUser(ids.vic, async () => {
+      await expect(key(ids.bob)).rejects.toThrow(/row-level security/);   // not in someone else's name
+    });
+    await app.query('BEGIN');
+    await app.query(`SELECT set_config('app.user_id', $1, true)`, [ids.vic]);
+    await key(ids.vic);
+    await app.query('COMMIT');
+    await asUser(ids.vic, async () => expect(await count('SELECT 1 FROM offline_keys')).toBe(1));
+    await asUser(ids.bob, async () => expect(await count('SELECT 1 FROM offline_keys')).toBe(0));
+    // Lowered to VIEW: the key is destroyed by the database itself.
+    await owner.query(`UPDATE grants SET level = 'VIEW' WHERE user_id = $1`, [ids.vic]);
+    expect((await owner.query(`SELECT 1 FROM offline_keys`)).rowCount).toBe(0);
   });
 });

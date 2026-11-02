@@ -70,6 +70,7 @@ model User {
   versionsUploaded DocumentVersion[]
   breakGlass       BreakGlass[]
   passkeys         Passkey[]
+  offlineKeys      OfflineKey[]
 
   @@map("users")
 }
@@ -143,7 +144,9 @@ enum DocumentStatus {
   DELETED
 }
 
+/// VIEW: see the document and its rendered pages, never the original file.
 enum GrantLevel {
+  VIEW
   READ
   EDIT
   MANAGE
@@ -181,6 +184,7 @@ model Document {
   versions   DocumentVersion[]
   grants     Grant[]
   breakGlass BreakGlass[]
+  offlineKeys OfflineKey[]
 
   @@index([ownerId])
   @@index([category])
@@ -365,4 +369,20 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+/// Key for one person's encrypted copy of a document on the Android app.
+/// Wrapped by keyd; deleted when that person drops below READ (THREATS.md V6).
+model OfflineKey {
+  documentId String   @map("document_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  wrappedKey Bytes    @map("wrapped_key")
+  keyId      String   @map("key_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([documentId, userId])
+  @@map("offline_keys")
 }

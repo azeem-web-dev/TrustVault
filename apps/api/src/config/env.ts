@@ -27,6 +27,11 @@ const EnvSchema = z.object({
   CLAMD_SOCKET: z.string().default('/run/clamav/clamd.ctl'),
   CLAMD_TIMEOUT_MS: z.coerce.number().int().min(500).max(300_000).default(60_000),
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(100).default(25),
+  /** View-only pages one person may open per 10 minutes (THREATS.md V7). */
+  PAGE_VIEW_RATE_LIMIT: z.coerce.number().int().min(10).max(100_000).default(600),
+  /** Alert when one person views more pages, or more documents, than this within 10 minutes (THREATS.md V7). */
+  PAGE_VIEW_ALERT_PAGES: z.coerce.number().int().min(1).max(100_000).default(150),
+  PAGE_VIEW_ALERT_DOCUMENTS: z.coerce.number().int().min(1).max(10_000).default(15),
   /** Documents in the trash longer than this are permanently removed. */
   TRASH_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
   /** Minimum response time of a failed login, so timing does not reveal which emails have accounts. */
