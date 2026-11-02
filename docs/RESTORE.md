@@ -17,11 +17,15 @@ Inside the archive:
 | `trustvault.dump` | `pg_dump --format=custom` of the whole database, taken as the postgres superuser so row-level security hides nothing. Checked with `pg_restore --list` before it is kept |
 | `etc/tvkeyd/` | the key service's master key. **Without it, no stored file can be decrypted** |
 | `etc/trustvault/` | the app's configuration and database passwords |
-| `MANIFEST` | creation time, the git commit that was running, the audit chain head (seq and hash), and a SHA-256 of every file |
+| `MANIFEST` | creation time, the git commit that was running, the audit chain head (seq and hash) and every table's row count (`rows <table> <n>`, taken from the same database snapshot as the dump since 2026-11-03), and a SHA-256 of every file |
 
 The archive is encrypted with [age](https://age-encryption.org) to a **public** key (`/etc/trustvault-backup/recipient.txt`). The matching private key is not on the server; the owner keeps it offline. So a copied backup is useless without it, and someone who later gets root on the server still cannot read older backups. 14 days are kept.
 
-Backups stay on this server, by the owner's choice. That covers mistakes and a broken database, but not losing the machine. To keep a copy elsewhere, copy the newest file off the server, for example `scp root@server:/var/backups/trustvault/trustvault-*.tar.age .`; it is safe to store anywhere because it is encrypted.
+Backups are written on this server. Since 2026-11-03 the owner's PC also pulls a copy of each one (`pull-backups.ps1`, kept outside this repository), and `infra/server/offsite-push.sh` can push them to write-once (Object Lock) cloud storage; it is off until the owner sets it up. Targets, retention, key custody and the drill schedule are in [BACKUP_DR.md](BACKUP_DR.md). A backup is safe to store anywhere because it is encrypted.
+
+## Restore drill (no server needed)
+
+`tools/restore-drill.sh` restores a backup into a fresh, throwaway PostgreSQL on any Linux/WSL machine and checks everything end to end: row counts against `MANIFEST`, `audit_verify()`, checkpoint signatures with the independent verifier, and decryption of every document version with the restored master key. See [BACKUP_DR.md](BACKUP_DR.md) for the exact command and the drill schedule.
 
 ## Restore
 
@@ -30,7 +34,7 @@ On a machine that has the private key (`trustvault-backup-identity.txt`):
 ```bash
 age --decrypt --identity trustvault-backup-identity.txt trustvault-20261101T033000Z.tar.age > backup.tar
 mkdir restore && tar -C restore -xf backup.tar
-cd restore && sha256sum -c <(grep -v '=' MANIFEST)    # every file intact
+cd restore && grep -E '^[0-9a-f]{64}  ' MANIFEST | sha256sum --check --strict   # every file intact
 ```
 
 On the server (a fresh one: run `provision.sh` and `install-app.sh` first):
