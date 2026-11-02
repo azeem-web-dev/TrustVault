@@ -33,6 +33,15 @@ const EnvSchema = z.object({
   LOGIN_FAILURE_FLOOR_MS: z.coerce.number().int().min(0).max(5000).default(450),
   /** Background jobs (audit checkpoints, retention, session cleanup). */
   JOBS_ENABLED: bool.default(true),
+  /** Email: 'off' sends nothing, 'smtp' sends, 'memory' keeps messages for tests. */
+  MAIL_TRANSPORT: z.enum(['off', 'smtp', 'memory']).default('off'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(465),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  MAIL_FROM: z.string().default('TrustVault <updates@rayyanazeem.cloud>'),
+  /** Minutes a password-reset link works. */
+  RESET_LINK_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -49,6 +58,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     if (!env.PUBLIC_ORIGIN.startsWith('https://')) throw new Error('Invalid configuration: PUBLIC_ORIGIN must be https in production');
     if (env.KEY_PROVIDER !== 'keyd') throw new Error('Invalid configuration: production requires KEY_PROVIDER=keyd');
     if (env.SCANNER !== 'clamd') throw new Error('Invalid configuration: production requires SCANNER=clamd');
+  }
+  if (env.MAIL_TRANSPORT === 'smtp' && (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS)) {
+    throw new Error('Invalid configuration: MAIL_TRANSPORT=smtp needs SMTP_HOST, SMTP_USER and SMTP_PASS');
   }
   if (env.KEY_PROVIDER === 'local') {
     const key = env.LOCAL_MASTER_KEY ? Buffer.from(env.LOCAL_MASTER_KEY, 'base64') : null;

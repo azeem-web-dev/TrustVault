@@ -11,6 +11,9 @@ User=trustvault
 Group=trustvault
 WorkingDirectory=/opt/trustvault/app/apps/api
 EnvironmentFile=/etc/trustvault/api.env
+# Email (reset links and account notices). Optional: without it, no mail is sent.
+# Holds the SMTP password, so it is root:trustvault 0640 and never in git.
+EnvironmentFile=-/etc/trustvault/mail.env
 Environment=KEY_PROVIDER=keyd
 Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
 # Every upload is scanned by ClamAV before it is stored.

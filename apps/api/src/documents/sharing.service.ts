@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { GrantLevel } from '../generated/prisma/enums.js';
 import { AccessService, Level } from './access.js';
+import { NotifyService } from '../mail/notify.service.js';
 
 export interface GrantInput {
   userId?: string | undefined;
@@ -38,6 +39,7 @@ export class SharingService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(AccessService) private readonly access: AccessService,
+    @Inject(NotifyService) private readonly notify: NotifyService,
   ) {}
 
   async list(actor: Actor, documentId: string) {
@@ -75,7 +77,7 @@ export class SharingService {
       if (input.expiresAt.getTime() > Date.now() + MAX_GRANT_DAYS * 86_400_000) throw new BadRequestException('Expiry can be at most one year away');
     }
 
-    return this.prisma.asUser(actor.userId, async (tx) => {
+    const result = await this.prisma.asUser(actor.userId, async (tx) => {
       const decision = await this.access.require(tx, actor, documentId, 'share');
       if (input.userId === actor.userId) throw new BadRequestException('You cannot change your own access');
       if (input.level === 'MANAGE' && decision.level < Level.OWNER) throw new ForbiddenException('Only the owner can give MANAGE access');
@@ -136,8 +138,14 @@ export class SharingService {
           ...(covered !== null ? { membersCovered: covered } : {}),
         },
       }, tx);
-      return { id: saved.id };
+      return { id: saved.id, notice: input.userId && !existing ? { granteeId: input.userId, title: doc.title, level: input.level, expiresAt } : null };
     });
+    // A person (not a group) newly given access hears about it, after the commit.
+    if (result.notice) {
+      const n = result.notice;
+      this.notify.sharedWithYou(n.granteeId, actor.email, documentId, n.title, n.level, n.expiresAt);
+    }
+    return { id: result.id };
   }
 
   async revoke(actor: Actor, documentId: string, grantId: string) {

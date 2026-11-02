@@ -2,7 +2,9 @@ import { Body, Controller, Get, HttpCode, Inject, Post, Req, Res } from '@nestjs
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
-import type { Actor } from '../common/request-context.js';
+import { currentContext, type Actor } from '../common/request-context.js';
+import { NotifyService } from '../mail/notify.service.js';
+import { PasswordResetService } from './password-reset.service.js';
 import { CurrentActor, PartialAuth, Public } from './decorators.js';
 import { AuthService } from './auth.service.js';
 import { PasswordSchema } from './password.service.js';
@@ -20,6 +22,9 @@ const ChangePasswordSchema = z.strictObject({
   newPassword: PasswordSchema,
 });
 
+const ForgotSchema = z.strictObject({ email: z.string().trim().min(3).max(254) });
+const ResetSchema = z.strictObject({ token: z.string().max(100), newPassword: z.string().min(1).max(1024) });
+
 const COOKIE_BASE = { httpOnly: true, secure: true, sameSite: 'strict' as const, path: '/' };
 
 export function setSessionCookie(res: Response, session: NewSession): void {
@@ -32,7 +37,11 @@ export function clearSessionCookie(res: Response): void {
 
 @Controller('auth')
 export class AuthController {
-  constructor(@Inject(AuthService) private readonly auth: AuthService) {}
+  constructor(
+    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(NotifyService) private readonly notify: NotifyService,
+    @Inject(PasswordResetService) private readonly resets: PasswordResetService,
+  ) {}
 
   /**
    * Who may call: anyone (this is how a session is obtained). If the account
@@ -50,6 +59,9 @@ export class AuthController {
     const previous = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
     const { session, user, mfa } = await this.auth.login(body.email, body.password, previous);
     setSessionCookie(res, session);
+    // Without a second step this is the moment of signing in; with one, the
+    // notice goes out when the second step succeeds.
+    if (!mfa.required) this.notify.signIn(user.id, currentContext()?.ip ?? null, currentContext()?.userAgent ?? null);
     return { user, csrfToken: session.csrfToken, mfaRequired: mfa.required, mfaEnrolled: mfa.enrolled, mfaMethods: mfa.methods };
   }
 
@@ -84,6 +96,28 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     await this.auth.changePassword(actor, body.currentPassword, body.newPassword);
+    clearSessionCookie(res);
+    this.notify.passwordChanged(actor.userId, 'from your account settings');
+  }
+
+  /**
+   * Who may call: anyone. Emails a reset link if the account exists and can
+   * be reset. Always answers 202, so it cannot reveal which emails exist.
+   */
+  @Public()
+  @Post('password/forgot')
+  @HttpCode(202)
+  async forgot(@Body(new ZodPipe(ForgotSchema)) body: z.infer<typeof ForgotSchema>) {
+    await this.resets.request(body.email);
+    return { ok: true };
+  }
+
+  /** Who may call: anyone holding a valid, unused, unexpired reset link. Ends every session. */
+  @Public()
+  @Post('password/reset')
+  @HttpCode(204)
+  async reset(@Body(new ZodPipe(ResetSchema)) body: z.infer<typeof ResetSchema>, @Res({ passthrough: true }) res: Response): Promise<void> {
+    await this.resets.reset(body.token, body.newPassword);
     clearSessionCookie(res);
   }
 }

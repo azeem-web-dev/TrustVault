@@ -66,6 +66,7 @@ model User {
   grantsGiven      Grant[]           @relation("GrantGrantedBy")
   groupMemberships GroupMember[]
   groupGrantCoverage GrantGroupMember[]
+  resetTokens      PasswordResetToken[] @relation("ResetTokenUser")
   versionsUploaded DocumentVersion[]
   breakGlass       BreakGlass[]
   passkeys         Passkey[]
@@ -348,4 +349,20 @@ model Passkey {
 
   @@index([userId])
   @@map("passkeys")
+}
+
+/// A password reset link. Only its SHA-256 is stored; single use, short-lived.
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   Bytes     @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  requestedBy String?   @map("requested_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation("ResetTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
