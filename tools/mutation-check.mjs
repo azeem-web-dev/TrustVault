@@ -231,7 +231,7 @@ const MUTATIONS = [
     ['test/identity-guards.test.ts']),
   sql('database: the app role cannot read password hashes or TOTP secrets',
     'GRANT SELECT ON users TO trustvault_app',
-    'REVOKE SELECT ON users FROM trustvault_app; GRANT SELECT ("id", "email", "display_name", "role", "status", "password_changed_at", "failed_login_count", "locked_until", "access_expires_at", "created_at", "updated_at", "created_by_id", "deactivated_at", "activated_at", "is_protected", "totp_enabled_at", "totp_last_step") ON users TO trustvault_app', ['test/identity-guards.test.ts']),
+    'REVOKE SELECT ON users FROM trustvault_app; GRANT SELECT ("id", "email", "display_name", "role", "status", "password_changed_at", "failed_login_count", "locked_until", "access_expires_at", "created_at", "updated_at", "created_by_id", "deactivated_at", "activated_at", "is_protected", "totp_enabled_at", "totp_last_step", "email_otp_enabled_at") ON users TO trustvault_app', ['test/identity-guards.test.ts']),
   // --- step-up, MFA policy, signed-in devices (THREATS.md S20, S21, S23) -----
   code('guard: risky actions need a recent second factor (step-up)', GUARD,
     'if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {', 'if (false) {', ['test/step-up.test.ts']),
@@ -586,6 +586,28 @@ const MUTATIONS = [
     '@UseInterceptors(UploadRefusalInterceptor, upload)', '@UseInterceptors(upload)', ['test/upload-sanitize.test.ts']),
   code('refused uploads: new version checks permission before the file', 'src/documents/documents.service.ts',
     "await this.prisma.asUser(actor.userId, (tx) => this.access.require(tx, actor, id, 'upload_version'));", '', ['test/upload-sanitize.test.ts']),
+  // --- email codes as a second factor (THREATS.md S30) ---
+  code('email codes: a code works once', 'src/auth/email-code.service.ts',
+    "return (await this.redis.client.del(key)) === 1 ? 'ok' : 'code_used';", "return 'ok';", ['test/email-otp.test.ts']),
+  code('email codes: five wrong tries end the code', 'src/auth/email-code.service.ts',
+    'export const EMAIL_CODE_MAX_TRIES = 5;', 'export const EMAIL_CODE_MAX_TRIES = 1000;', ['test/email-otp.test.ts']),
+  code('email codes: sign-in takes only sign-in codes (purpose binding)', 'src/auth/mfa.service.ts',
+    "await this.checkEmailCode(actor, 'signin', code, 'mfa.email_verify');", "await this.checkEmailCode(actor, 'stepup', code, 'mfa.email_verify');", ['test/email-otp.test.ts']),
+  code('email codes: turning on needs the emailed code', 'src/auth/mfa.service.ts',
+    "await this.checkEmailCode(actor, 'enable', code, 'mfa.email_enable');", '', ['test/email-otp.test.ts']),
+  code('email codes: sends limited per account', 'src/auth/mfa.service.ts',
+    'await this.limits.hit(`emailcode:${actor.userId}`, EMAIL_SENDS_PER_ACCOUNT, EMAIL_SEND_WINDOW, message);', '', ['test/email-otp.test.ts']),
+  code('email codes: not offered to administrators', 'src/auth/mfa.service.ts',
+    "if (u.role === 'ADMIN') return refuse('admin_not_allowed', new ForbiddenException({ message: this.emailUnavailable(u)!, code: 'email_codes_not_for_admins' }));", '', ['test/email-otp.test.ts']),
+  code('email codes: turning off is a step-up route', 'src/auth/mfa.controller.ts',
+    "@Delete('email')\n  @HttpCode(204)\n  @StepUp()", "@Delete('email')\n  @HttpCode(204)", ['test/email-otp.test.ts']),
+  code('email codes: a policy-covered role keeps its last factor', 'src/auth/mfa.service.ts',
+    'if (!user.totpEnabledAt && user.passkeys.length === 0) await this.refuseLastFactor(actor, tx);', '', ['test/email-otp.test.ts']),
+  sql('database: never an administrator\'s email codes (check constraint)',
+    'ALTER TABLE users DROP CONSTRAINT users_email_otp_not_admin',
+    "ALTER TABLE users ADD CONSTRAINT users_email_otp_not_admin CHECK (email_otp_enabled_at IS NULL OR role <> 'ADMIN')", ['test/email-otp.test.ts']),
+  sql('database: email codes turned on only by their owner',
+    'ALTER TABLE users DISABLE TRIGGER users_guard_update_email_otp', 'ALTER TABLE users ENABLE TRIGGER users_guard_update_email_otp', ['test/email-otp.test.ts']),
 ];
 
 function loadEnv() {

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import {
   generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse,
   type AuthenticationResponseJSON, type AuthenticatorTransportFuture, type RegistrationResponseJSON,
@@ -12,7 +12,10 @@ import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { base32Encode, matchTotp, newTotpSecret, otpauthUri } from './totp.js';
 import { SessionService, type NewSession } from './session.service.js';
-import { MfaPolicyService } from './mfa-policy.service.js';
+import { emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
+import { MailService } from '../mail/mail.service.js';
+import { mailTemplates } from '../mail/templates.js';
+import { EMAIL_CODE_TTL_SECONDS, EmailCodeService, maskEmail, type EmailCodePurpose, type EmailCodeResult } from './email-code.service.js';
 import { expectedPasskeyOrigins } from './passkey-origins.js';
 import { DeviceTrustService } from './device-trust.service.js';
 
@@ -28,6 +31,25 @@ export const unpackWrapped = (stored: Buffer): { keyId: string; wrapped: Buffer 
   return { keyId: stored.subarray(1, 1 + n).toString('utf8'), wrapped: stored.subarray(1 + n) };
 };
 const CHALLENGE_TTL = 300;
+
+/** Emailed codes sent per account (or per trusted device of it), and per IP, every 10 minutes. */
+const EMAIL_SENDS_PER_ACCOUNT = 3;
+const EMAIL_SENDS_PER_IP = 10;
+const EMAIL_SEND_WINDOW = 600;
+
+const EMAIL_CODE_WHY: Record<EmailCodePurpose, string> = {
+  signin: 'Someone signed in to your TrustVault account with your password and asked for a code to finish signing in.',
+  enable: 'You asked to turn on email codes for signing in to TrustVault.',
+  stepup: 'You asked to confirm it’s you before a sensitive change in TrustVault.',
+};
+
+const EXPIRED = { message: 'That code has expired or was already used. Send a new code.', code: 'code_expired' };
+const EMAIL_REFUSAL: Record<Exclude<EmailCodeResult, 'ok'>, { message: string; code: string }> = {
+  no_code: EXPIRED,
+  code_used: EXPIRED,
+  wrong_code: { message: 'That code didn’t match. Check the newest email from TrustVault, or send a new code.', code: 'wrong_code' },
+  too_many_tries: { message: 'Too many wrong tries for that code. Send a new code.', code: 'code_expired' },
+};
 
 /**
  * Second factor: an authenticator-app code (TOTP) or a passkey. Required
@@ -50,6 +72,8 @@ export class MfaService {
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(MfaPolicyService) private readonly policy: MfaPolicyService,
     @Inject(DeviceTrustService) private readonly devices: DeviceTrustService,
+    @Inject(MailService) private readonly mail: MailService,
+    @Inject(EmailCodeService) private readonly emailCodes: EmailCodeService,
   ) {}
 
   /** The web origin, plus the Android app's signing-key origin(s) (THREATS.md S22). */
@@ -64,11 +88,15 @@ export class MfaService {
   async status(actor: Actor) {
     const u = await this.prisma.user.findUniqueOrThrow({
       where: { id: actor.userId },
-      select: { totpEnabledAt: true, passkeys: { select: { id: true, name: true, createdAt: true, lastUsedAt: true }, orderBy: { createdAt: 'asc' } } },
+      select: {
+        email: true, role: true, isProtected: true, totpEnabledAt: true, emailOtpEnabledAt: true,
+        passkeys: { select: { id: true, name: true, createdAt: true, lastUsedAt: true }, orderBy: { createdAt: 'asc' } },
+      },
     });
     const roles = await this.policy.requiredRoles();
+    const email = emailCodesOn(u);
     return {
-      required: MfaPolicyService.isRequired(actor.role, u.totpEnabledAt !== null || u.passkeys.length > 0, roles),
+      required: MfaPolicyService.isRequired(actor.role, u.totpEnabledAt !== null || u.passkeys.length > 0 || email, roles),
       /** Required because of the account's role (so the last factor cannot be removed). */
       requiredByRole: MfaPolicyService.isRequired(actor.role, false, roles),
       satisfied: actor.authLevel === 'mfa',
@@ -77,6 +105,12 @@ export class MfaService {
       stepUpFresh: actor.mfaVerifiedAt !== null && Date.now() - actor.mfaVerifiedAt.getTime() <= this.env.STEP_UP_MINUTES * 60_000,
       totp: u.totpEnabledAt !== null,
       passkeys: u.passkeys,
+      /** Emailed codes are on (THREATS.md S30). */
+      email,
+      /** Where codes go, masked (r***@gmail.com). */
+      emailTo: maskEmail(u.email),
+      /** Why email codes cannot be turned on here, or null if they can. */
+      emailUnavailable: this.emailUnavailable(u),
     };
   }
 
@@ -235,6 +269,125 @@ export class MfaService {
     });
   }
 
+  // ----------------------------------------------------------- email codes
+
+  /** Why this account cannot turn email codes on, or null (THREATS.md S30). */
+  private emailUnavailable(u: { role: string; isProtected: boolean }): string | null {
+    if (u.isProtected) return 'Demo accounts cannot use email codes: they never receive mail.';
+    if (u.role === 'ADMIN') return 'Administrators must use an authenticator app or a passkey: an administrator’s mailbox must not be enough to sign in as them.';
+    if (!this.mail.enabled) return 'Email is not set up on this server.';
+    return null;
+  }
+
+  private async requireEmailOn(actor: Actor): Promise<void> {
+    const u = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { role: true, isProtected: true, emailOtpEnabledAt: true } });
+    if (!emailCodesOn(u)) throw new BadRequestException({ message: 'Email codes are not turned on for this account', code: 'email_codes_off' });
+  }
+
+  /**
+   * Emails a 6-digit code for one purpose, bound to this session. Asking
+   * again replaces the previous code. Limited per account (or per trusted
+   * device of it) and per IP; every send and refusal is audited, never the code.
+   */
+  async sendEmailCode(actor: Actor, purpose: EmailCodePurpose): Promise<{ sentTo: string; expiresInSeconds: number }> {
+    const u = await this.prisma.user.findUniqueOrThrow({
+      where: { id: actor.userId },
+      select: { email: true, displayName: true, role: true, isProtected: true, totpEnabledAt: true, emailOtpEnabledAt: true, _count: { select: { passkeys: true } } },
+    });
+    const refuse = async (reason: string, err: Error): Promise<never> => {
+      await this.audit.record({ action: 'mfa.email_send', outcome: 'DENIED', reason, targetType: 'user', targetId: actor.userId, details: { purpose } });
+      throw err;
+    };
+    if (u.isProtected) return refuse('demo_account', new ForbiddenException('Demo accounts cannot use email codes: they never receive mail.'));
+    if (purpose === 'enable') {
+      if (u.role === 'ADMIN') return refuse('admin_not_allowed', new ForbiddenException({ message: this.emailUnavailable(u)!, code: 'email_codes_not_for_admins' }));
+      if (emailCodesOn(u)) throw new ConflictException('Email codes are already on');
+      if ((u.totpEnabledAt || u._count.passkeys > 0) && actor.authLevel !== 'mfa') throw new ForbiddenException('Confirm your existing second factor first');
+    } else {
+      if (!emailCodesOn(u)) throw new BadRequestException({ message: 'Email codes are not turned on for this account', code: 'email_codes_off' });
+      if (purpose === 'signin' && actor.authLevel === 'mfa') throw new BadRequestException('You are already signed in');
+      if (purpose === 'stepup' && actor.authLevel !== 'mfa') throw new ForbiddenException({ message: 'Finish signing in first', code: 'mfa_required' });
+    }
+    if (!this.mail.canReach(u)) return refuse('mail_unavailable', new ServiceUnavailableException('Email is not available right now. Use another method.'));
+    try {
+      await this.emailSendLimit(actor);
+    } catch (err) {
+      if (err instanceof HttpException && err.getStatus() === 429) return refuse('rate_limited', err);
+      throw err;
+    }
+    const code = await this.emailCodes.issue(actor.userId, actor.sessionId, purpose);
+    this.mail.send(u, mailTemplates.emailCode(u.displayName, code, EMAIL_CODE_WHY[purpose], EMAIL_CODE_TTL_SECONDS / 60));
+    await this.audit.record({ action: 'mfa.email_send', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { purpose } });
+    return { sentTo: maskEmail(u.email), expiresInSeconds: EMAIL_CODE_TTL_SECONDS };
+  }
+
+  /** Per IP, then per account; a trusted device of the account has its own budget (as mfaLimit). */
+  private async emailSendLimit(actor: Actor): Promise<void> {
+    const ctx = currentContext();
+    const message = 'Too many codes sent. Wait 10 minutes, or use another way to confirm it’s you.';
+    await this.limits.hit(`emailcode:ip:${ctx?.ip ?? 'unknown'}`, EMAIL_SENDS_PER_IP, EMAIL_SEND_WINDOW, message);
+    const device = this.devices.verify(ctx?.deviceCookie);
+    if (device && device.userId === actor.userId) {
+      await this.limits.hit(`emailcode:dev:${actor.userId}:${device.deviceId}`, EMAIL_SENDS_PER_ACCOUNT, EMAIL_SEND_WINDOW, message);
+      return;
+    }
+    await this.limits.hit(`emailcode:${actor.userId}`, EMAIL_SENDS_PER_ACCOUNT, EMAIL_SEND_WINDOW, message);
+  }
+
+  /** Same per-session and per-account try limits as authenticator codes, then the code's own five tries. */
+  private async checkEmailCode(actor: Actor, purpose: EmailCodePurpose, code: string, action: string): Promise<void> {
+    await this.mfaLimit(actor, 'Too many codes tried. Wait five minutes.');
+    const result = await this.emailCodes.consume(actor.userId, actor.sessionId, purpose, code);
+    if (result !== 'ok') {
+      await this.audit.record({ action, outcome: 'DENIED', reason: result, targetType: 'user', targetId: actor.userId, details: { method: 'email', purpose } });
+      throw new UnauthorizedException(EMAIL_REFUSAL[result]);
+    }
+  }
+
+  /**
+   * Turns email codes on with a code sent to the account's address (proves
+   * the mailbox works). As the first factor, the session becomes MFA level.
+   */
+  async enableEmail(actor: Actor, code: string): Promise<NewSession | null> {
+    const u = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { role: true, isProtected: true, emailOtpEnabledAt: true } });
+    if (u.isProtected) throw new ForbiddenException('Demo accounts cannot use email codes: they never receive mail.');
+    if (u.role === 'ADMIN') throw new ForbiddenException({ message: this.emailUnavailable(u)!, code: 'email_codes_not_for_admins' });
+    if (emailCodesOn(u)) throw new ConflictException('Email codes are already on');
+    await this.requireMfaIfEnrolled(actor);
+    await this.checkEmailCode(actor, 'enable', code, 'mfa.email_enable');
+    const wasMfa = actor.authLevel === 'mfa';
+    // As the person themselves: only they may turn their own factor on (A23).
+    return this.prisma.asUser(actor.userId, async (tx) => {
+      await tx.user.update({ where: { id: actor.userId }, data: { emailOtpEnabledAt: new Date() } });
+      await this.audit.record({ action: 'mfa.email_enable', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
+      return wasMfa ? null : this.upgrade(actor, tx);
+    });
+  }
+
+  /** Second step of sign-in with an emailed code. */
+  async verifyEmail(actor: Actor, code: string): Promise<NewSession> {
+    await this.requireEmailOn(actor);
+    await this.checkEmailCode(actor, 'signin', code, 'mfa.email_verify');
+    return this.prisma.$transaction(async (tx) => {
+      await this.audit.record({ action: 'mfa.email_verify', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
+      return this.upgrade(actor, tx);
+    });
+  }
+
+  /** Turns email codes off. Step-up is enforced by the route (@StepUp). */
+  async removeEmail(actor: Actor): Promise<void> {
+    if (actor.authLevel !== 'mfa') throw new ForbiddenException('Confirm your second factor first');
+    await this.prisma.asUser(actor.userId, async (tx) => {
+      const user = await this.lockFactors(tx, actor.userId);
+      if (user.isProtected) throw new ForbiddenException('Demo accounts cannot change their second factor');
+      if (!user.email) throw new NotFoundException('Email codes are not turned on');
+      if (!user.totpEnabledAt && user.passkeys.length === 0) await this.refuseLastFactor(actor, tx);
+      await tx.user.update({ where: { id: actor.userId }, data: { emailOtpEnabledAt: null } });
+      await this.audit.record({ action: 'mfa.email_disable', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
+    });
+    await this.emailCodes.discard(actor.sessionId);
+  }
+
   // --------------------------------------------------------------- step-up
 
   /**
@@ -244,14 +397,23 @@ export class MfaService {
    * already passed its second factor; the token is not rotated (see
    * SessionService.markStepUp).
    */
-  async stepUp(actor: Actor, proof: { code: string } | { response: AuthenticationResponseJSON }): Promise<void> {
+  async stepUp(actor: Actor, proof: { code: string; method?: 'totp' | 'email' } | { response: AuthenticationResponseJSON }): Promise<void> {
     if (actor.authLevel !== 'mfa') throw new ForbiddenException({ message: 'Finish signing in first', code: 'mfa_required' });
     const mark = async (tx: Tx) => {
       if (!(await this.sessions.markStepUp(actor.sessionId, tx))) throw new UnauthorizedException('Your session ended. Sign in again.');
     };
+    if ('code' in proof && proof.method === 'email') {
+      await this.requireEmailOn(actor);
+      await this.checkEmailCode(actor, 'stepup', proof.code, 'mfa.step_up');
+      await this.prisma.$transaction(async (tx) => {
+        await mark(tx);
+        await this.audit.record({ action: 'mfa.step_up', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { method: 'email' } }, tx);
+      });
+      return;
+    }
     if ('code' in proof) {
       const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true } });
-      if (!user.totpEnabledAt) throw new BadRequestException('No authenticator app is set up. Use your passkey.');
+      if (!user.totpEnabledAt) throw new BadRequestException('No authenticator app is set up. Use your passkey or an emailed code.');
       await this.checkCode(actor, proof.code, 'mfa.step_up');
       await this.prisma.$transaction(async (tx) => {
         await mark(tx);
@@ -267,7 +429,7 @@ export class MfaService {
     await this.prisma.asUser(actor.userId, async (tx) => {
       const user = await this.lockFactors(tx, actor.userId);
       if (!user.passkeys.some((p) => p.id === id)) throw new NotFoundException('Passkey not found');
-      if (!user.totpEnabledAt && user.passkeys.length === 1) await this.refuseLastFactor(actor, tx);
+      if (!user.totpEnabledAt && !user.email && user.passkeys.length === 1) await this.refuseLastFactor(actor, tx);
       await tx.passkey.delete({ where: { id } });
       await this.audit.record({ action: 'mfa.passkey_remove', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId, details: { passkeyId: id } }, tx);
     });
@@ -280,7 +442,7 @@ export class MfaService {
       const user = await this.lockFactors(tx, actor.userId);
       if (user.isProtected) throw new ForbiddenException('Demo accounts cannot change their second factor');
       if (!user.totpEnabledAt) throw new NotFoundException('No authenticator app is set up');
-      if (user.passkeys.length === 0) await this.refuseLastFactor(actor, tx);
+      if (user.passkeys.length === 0 && !user.email) await this.refuseLastFactor(actor, tx);
       await tx.user.update({ where: { id: actor.userId }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
       await this.audit.record({ action: 'mfa.totp_remove', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
     });
@@ -294,7 +456,8 @@ export class MfaService {
    */
   private async lockFactors(tx: Tx, userId: string) {
     await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
-    return tx.user.findUniqueOrThrow({ where: { id: userId }, select: { isProtected: true, totpEnabledAt: true, passkeys: { select: { id: true } } } });
+    const u = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true, isProtected: true, totpEnabledAt: true, emailOtpEnabledAt: true, passkeys: { select: { id: true } } } });
+    return { ...u, email: emailCodesOn(u) };
   }
 
   /** Admins, and roles in the MFA policy, must keep at least one factor. */
@@ -323,8 +486,8 @@ export class MfaService {
 
   /** Someone who already has a second factor must use it before adding another. */
   private async requireMfaIfEnrolled(actor: Actor): Promise<void> {
-    const u = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true, _count: { select: { passkeys: true } } } });
-    if ((u.totpEnabledAt || u._count.passkeys > 0) && actor.authLevel !== 'mfa') {
+    const u = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { role: true, isProtected: true, totpEnabledAt: true, emailOtpEnabledAt: true, _count: { select: { passkeys: true } } } });
+    if ((u.totpEnabledAt || u._count.passkeys > 0 || emailCodesOn(u)) && actor.authLevel !== 'mfa') {
       throw new ForbiddenException('Confirm your existing second factor first');
     }
   }
@@ -336,14 +499,15 @@ export class MfaService {
     // deactivation also take: if the password-only session was ended, or the
     // account changed, while the code was being checked, no full session is
     // issued (THREATS.md R9).
-    const [u] = await tx.$queryRaw<{ status: string; access_expires_at: Date | null; password_changed_at: Date; totp: boolean; passkeys: number }[]>`
+    const [u] = await tx.$queryRaw<{ status: string; access_expires_at: Date | null; password_changed_at: Date; totp: boolean; email: boolean; passkeys: number }[]>`
       SELECT status, access_expires_at, password_changed_at, totp_enabled_at IS NOT NULL AS totp,
+             (email_otp_enabled_at IS NOT NULL AND role <> 'ADMIN' AND NOT is_protected) AS email,
              (SELECT count(*)::int FROM passkeys p WHERE p.user_id = users.id) AS passkeys
         FROM users WHERE id = ${actor.userId}::uuid FOR UPDATE`;
     const [s] = await tx.$queryRaw<{ created_at: Date }[]>`SELECT created_at FROM sessions WHERE id = ${actor.sessionId}::uuid`;
     const ended = (await this.sessions.revoke(actor.sessionId, tx, 'replaced_after_second_factor')) !== 1;
     if (ended || !u || !s || u.status !== 'ACTIVE' || (u.access_expires_at && u.access_expires_at.getTime() <= Date.now())
-        || s.created_at.getTime() < u.password_changed_at.getTime() || (!u.totp && u.passkeys === 0)) {
+        || s.created_at.getTime() < u.password_changed_at.getTime() || (!u.totp && !u.email && u.passkeys === 0)) {
       throw new UnauthorizedException('Your session ended. Sign in again.');
     }
     return this.sessions.create(actor.userId, { ip: ctx?.ip ?? null, userAgent: ctx?.userAgent ?? null, authLevel: 'mfa' }, tx);

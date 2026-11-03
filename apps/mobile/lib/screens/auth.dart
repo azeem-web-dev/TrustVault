@@ -421,6 +421,8 @@ class _MfaScreenState extends State<MfaScreen> {
   Map? _status;
   final _code = TextEditingController();
   ({String secret, String uri})? _setup;
+  /// An emailed code is on its way: to finish signing in, or to turn email codes on (THREATS.md S30).
+  ({String purpose, String sentTo})? _emailFlow;
   String? _error;
   bool _busy = false;
 
@@ -466,8 +468,25 @@ class _MfaScreenState extends State<MfaScreen> {
   }
 
   Future<void> _verify() => _run(() async {
-    await Api.I.post(_setup != null ? '/auth/mfa/totp/enable' : '/auth/mfa/totp/verify', {'code': _code.text});
+    final flow = _emailFlow;
+    final url = flow != null
+        ? (flow.purpose == 'enable' ? '/auth/mfa/email/enable' : '/auth/mfa/email/verify')
+        : _setup != null
+            ? '/auth/mfa/totp/enable'
+            : '/auth/mfa/totp/verify';
+    await Api.I.post(url, {'code': _code.text});
     if (mounted) await context.read<Session>().refresh();
+  });
+
+  /// Emails a 6-digit code (`signin`, or `enable` to turn email codes on as the first factor).
+  Future<void> _sendEmail(String purpose) => _run(() async {
+    final r = await Api.I.post('/auth/mfa/email/send', {'purpose': purpose}) as Map;
+    if (!mounted) return;
+    setState(() {
+      _setup = null;
+      _code.clear();
+      _emailFlow = (purpose: purpose, sentTo: r['sentTo'] as String);
+    });
   });
 
   /// Second step with a passkey (Credential Manager), or enrolling one as the first factor.
@@ -509,8 +528,14 @@ class _MfaScreenState extends State<MfaScreen> {
     }
     final passkeys = (s['passkeys'] as List?) ?? const [];
     final totp = s['totp'] == true;
-    final enrolled = totp || passkeys.isNotEmpty;
-    final showCode = totp || _setup != null;
+    final email = s['email'] == true;
+    final emailTo = (s['emailTo'] as String?) ?? 'your email';
+    final emailAllowed = s['emailUnavailable'] == null;
+    final enrolled = totp || passkeys.isNotEmpty || email;
+    final flow = _emailFlow;
+    // Authenticator first, then passkey, then email (the weakest).
+    final showCode = totp || _setup != null || flow != null;
+    final onlyEmail = email && !totp && passkeys.isEmpty;
 
     return AuthLayout(
       compact: true,
@@ -536,10 +561,12 @@ class _MfaScreenState extends State<MfaScreen> {
               ),
             )
           else
-            Text('Your account must use an authenticator app or a passkey. Choose one to continue.', style: ts(context, size: 14, color: p.muted, height: 1.5)),
+            Text(emailAllowed ? 'Your account needs two-step verification. Choose how you want to confirm it’s you.' : 'Your account must use an authenticator app or a passkey. Choose one to continue.', style: ts(context, size: 14, color: p.muted, height: 1.5)),
           const SizedBox(height: 22),
           if (_error != null) ...[TvAlert(_error!), gap16],
-          if (passkeys.isNotEmpty && _setup == null) ...[
+          if (onlyEmail && flow == null)
+            Btn('Send code to $emailTo', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _busy ? null : () => _sendEmail('signin')),
+          if (passkeys.isNotEmpty && _setup == null && flow == null) ...[
             Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _busy && _code.text.length != 6, onPressed: _busy ? null : () => _passkey(enrol: false)),
             if (totp) const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: DividerLabel('or enter a code')),
           ],
@@ -548,11 +575,13 @@ class _MfaScreenState extends State<MfaScreen> {
             if (_setup != null) gap16,
             Row(
               children: [
-                Ic(PhosphorIconsDuotone.deviceMobile, size: 16, color: p.body),
+                Ic(flow != null ? PhosphorIconsDuotone.envelope : PhosphorIconsDuotone.deviceMobile, size: 16, color: p.body),
                 const SizedBox(width: 8),
-                Text(
-                  '6-digit code from your authenticator app',
-                  style: ts(context, size: 13, w: FontWeight.w500, color: p.body),
+                Flexible(
+                  child: Text(
+                    flow != null ? '6-digit code we emailed to ${flow.sentTo}' : '6-digit code from your authenticator app',
+                    style: ts(context, size: 13, w: FontWeight.w500, color: p.body),
+                  ),
                 ),
               ],
             ),
@@ -603,24 +632,36 @@ class _MfaScreenState extends State<MfaScreen> {
             ),
             const SizedBox(height: 18),
             Btn(
-              _setup != null ? 'Turn on and continue' : 'Verify',
+              _setup != null || flow?.purpose == 'enable' ? 'Turn on and continue' : 'Verify',
               variant: BtnVariant.primary,
               size: BtnSize.lg,
               expand: true,
               loading: _busy && _code.text.length == 6,
               onPressed: _code.text.length == 6 && !_busy ? _verify : null,
             ),
-            if (_setup != null)
+            if (flow != null)
+              TextButton(
+                onPressed: _busy ? null : () => _sendEmail(flow.purpose),
+                child: Text('No email? Send a new code', style: ts(context, size: 13, color: p.muted)),
+              ),
+            if (_setup != null || flow != null)
               TextButton.icon(
                 onPressed: () => setState(() {
                   _setup = null;
+                  _emailFlow = null;
                   _code.clear();
                 }),
                 icon: Ic(PhosphorIconsBold.arrowLeft, size: 14, color: p.muted),
-                label: Text('Choose another method', style: ts(context, size: 13, color: p.muted)),
+                label: Text(enrolled ? 'Use another method' : 'Choose another method', style: ts(context, size: 13, color: p.muted)),
               ),
           ],
-          if (!enrolled && _setup == null) ...[
+          if (enrolled && email && !onlyEmail && flow == null)
+            TextButton.icon(
+              onPressed: _busy ? null : () => _sendEmail('signin'),
+              icon: Ic(PhosphorIconsDuotone.envelope, size: 16, color: p.muted),
+              label: Text('Email a code to $emailTo instead', style: ts(context, size: 13, color: p.muted)),
+            ),
+          if (!enrolled && _setup == null && flow == null) ...[
             _MethodCard(
               icon: PhosphorIconsDuotone.deviceMobile,
               title: 'Use Google Authenticator',
@@ -630,6 +671,10 @@ class _MfaScreenState extends State<MfaScreen> {
             ),
             const SizedBox(height: 10),
             _MethodCard(icon: PhosphorIconsDuotone.key, title: 'Use a passkey on this phone', text: 'Your face, fingerprint or screen lock. Saved to your Google account; can’t be phished.', onTap: _busy ? null : () => _passkey(enrol: true)),
+            if (emailAllowed) ...[
+              const SizedBox(height: 10),
+              _MethodCard(icon: PhosphorIconsDuotone.envelope, title: 'Email me a code ($emailTo)', text: 'Simplest, but weakest: anyone who can read your email could use it. We send a code now to check it reaches you.', onTap: _busy ? null : () => _sendEmail('enable')),
+            ],
           ],
           const SizedBox(height: 12),
           TextButton.icon(

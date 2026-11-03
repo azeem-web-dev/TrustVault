@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
-import { ArrowLeft, CaretRight, DeviceMobile, Fingerprint, Key, ShieldCheckered, SignOut } from '@phosphor-icons/react';
+import { ArrowLeft, CaretRight, DeviceMobile, EnvelopeSimple, Fingerprint, Key, ShieldCheckered, SignOut } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
 import { AuthLayout } from '@/components/auth-layout';
 import { Alert, Button, Divider, IconTile, Skeleton } from '@/components/ui';
@@ -15,6 +15,10 @@ interface Status {
   satisfied: boolean;
   totp: boolean;
   passkeys: { id: string; name: string }[];
+  /** Emailed codes are on (THREATS.md S30). */
+  email: boolean;
+  emailTo: string;
+  emailUnavailable: string | null;
 }
 
 /**
@@ -27,6 +31,8 @@ export default function MfaPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [code, setCode] = useState('');
   const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  /** An emailed code is on its way: to finish signing in, or to turn email codes on. */
+  const [emailFlow, setEmailFlow] = useState<{ purpose: 'signin' | 'enable'; sentTo: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -54,13 +60,22 @@ export default function MfaPage() {
     }
   }
 
-  const verifyTotp = (e: FormEvent) => {
+  const verifyCode = (e: FormEvent) => {
     e.preventDefault();
+    const url = emailFlow ? (emailFlow.purpose === 'enable' ? '/auth/mfa/email/enable' : '/auth/mfa/email/verify')
+      : setup ? '/auth/mfa/totp/enable' : '/auth/mfa/totp/verify';
     void run(async () => {
-      await api.post(setup ? '/auth/mfa/totp/enable' : '/auth/mfa/totp/verify', { code });
+      await api.post(url, { code });
       await done();
     });
   };
+
+  const sendEmail = (purpose: 'signin' | 'enable') => run(async () => {
+    const r = await api.post<{ sentTo: string }>('/auth/mfa/email/send', { purpose });
+    setSetup(null);
+    setCode('');
+    setEmailFlow({ purpose, sentTo: r.sentTo });
+  });
 
   const usePasskey = () => run(async () => {
     const options = await api.post<Parameters<typeof startAuthentication>[0]['optionsJSON']>('/auth/mfa/passkeys/options');
@@ -90,7 +105,10 @@ export default function MfaPage() {
       </AuthLayout>
     );
   }
-  const enrolled = status.totp || status.passkeys.length > 0;
+  const enrolled = status.totp || status.passkeys.length > 0 || status.email;
+  // Authenticator first, then passkey, then email (an emailed code is the weakest).
+  const showCodeForm = Boolean(emailFlow) || Boolean(setup) || status.totp;
+  const onlyEmail = status.email && !status.totp && status.passkeys.length === 0;
 
   return (
     <AuthLayout>
@@ -102,21 +120,25 @@ export default function MfaPage() {
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
           {enrolled
             ? <>Signed in as <span className="font-medium text-slate-700 dark:text-slate-200">{user?.email ?? ''}</span>. Your account needs a second factor.</>
-            : 'Your account must use an authenticator app or a passkey. Choose one to continue.'}
+            : status.emailUnavailable ? 'Your account must use an authenticator app or a passkey. Choose one to continue.' : 'Your account needs two-step verification. Choose how you want to confirm it’s you.'}
         </p>
       </div>
 
       <div className="space-y-4">
         {error && <Alert>{error}</Alert>}
 
-        {enrolled && status.passkeys.length > 0 && (
+        {enrolled && status.passkeys.length > 0 && !emailFlow && (
           <Button variant="primary" size="lg" className="w-full" onClick={() => void usePasskey()} loading={busy} icon={<Fingerprint size={20} />}>Use a passkey</Button>
         )}
 
-        {enrolled && status.passkeys.length > 0 && status.totp && <Divider label="or enter a code" />}
+        {enrolled && status.passkeys.length > 0 && status.totp && !emailFlow && <Divider label="or enter a code" />}
 
-        {(status.totp || setup) && (
-          <form onSubmit={verifyTotp} className="space-y-4">
+        {onlyEmail && !emailFlow && (
+          <Button variant="primary" size="lg" className="w-full" onClick={() => void sendEmail('signin')} loading={busy} icon={<EnvelopeSimple size={20} />}>Send code to {status.emailTo}</Button>
+        )}
+
+        {showCodeForm && (
+          <form onSubmit={verifyCode} className="space-y-4">
             {setup && (
               <div className="animate-pop rounded-2xl border border-slate-200 bg-white p-5 shadow-soft dark:border-white/10 dark:bg-white/[0.03]">
                 <TotpSetupGuide secret={setup.secret} otpauthUri={setup.otpauthUri}>
@@ -125,7 +147,9 @@ export default function MfaPage() {
               </div>
             )}
             <label className="block">
-              <span className="mb-2 flex items-center gap-2 text-[13px] font-medium text-slate-700 dark:text-slate-300"><DeviceMobile size={16} />6-digit code from your authenticator app</span>
+              <span className="mb-2 flex items-center gap-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">
+                {emailFlow ? <><EnvelopeSimple size={16} />6-digit code we emailed to {emailFlow.sentTo}</> : <><DeviceMobile size={16} />6-digit code from your authenticator app</>}
+              </span>
               <input
                 inputMode="numeric"
                 autoComplete="one-time-code"
@@ -144,20 +168,35 @@ export default function MfaPage() {
               ))}
             </div>
             <Button type="submit" variant={status.passkeys.length ? 'secondary' : 'primary'} size="lg" className="w-full" loading={busy && code.length === 6} disabled={busy || code.length !== 6}>
-              {setup ? 'Turn on and continue' : 'Verify'}
+              {setup || emailFlow?.purpose === 'enable' ? 'Turn on and continue' : 'Verify'}
             </Button>
-            {setup && (
-              <button type="button" onClick={() => { setSetup(null); setCode(''); }} className="flex w-full items-center justify-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
-                <ArrowLeft size={14} />Choose another method
+            {emailFlow && (
+              <p className="text-center text-xs text-slate-500">
+                It works once, for 10 minutes. No email?{' '}
+                <button type="button" disabled={busy} onClick={() => void sendEmail(emailFlow.purpose)} className="font-medium text-brand-600 hover:underline dark:text-brand-300">Send a new code</button>
+              </p>
+            )}
+            {(setup || emailFlow) && (
+              <button type="button" onClick={() => { setSetup(null); setEmailFlow(null); setCode(''); }} className="flex w-full items-center justify-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
+                <ArrowLeft size={14} />{enrolled ? 'Use another method' : 'Choose another method'}
               </button>
             )}
           </form>
         )}
 
-        {!enrolled && !setup && (
+        {enrolled && status.email && !onlyEmail && !emailFlow && (
+          <button type="button" disabled={busy} onClick={() => void sendEmail('signin')} className="flex w-full items-center justify-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
+            <EnvelopeSimple size={16} />Email a code to {status.emailTo} instead
+          </button>
+        )}
+
+        {!enrolled && !setup && !emailFlow && (
           <div className="grid gap-3">
             <MethodButton onClick={() => void startTotpSetup()} disabled={busy} icon={<DeviceMobile size={22} />} title="Use Google Authenticator" text="Or any authenticator app: a new 6-digit code every 30 seconds. Takes a minute." />
             <MethodButton onClick={() => void registerPasskey()} disabled={busy} icon={<Key size={22} />} title="Use a passkey (this device)" text="Face, fingerprint, PIN or a security key. Can't be phished." recommended />
+            {!status.emailUnavailable && (
+              <MethodButton onClick={() => void sendEmail('enable')} disabled={busy} icon={<EnvelopeSimple size={22} />} title={`Email me a code (${status.emailTo})`} text="Simplest, but weakest: anyone who can read your email could use it. We send a code now to check it reaches you." />
+            )}
           </div>
         )}
 

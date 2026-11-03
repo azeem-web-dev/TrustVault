@@ -127,6 +127,19 @@ export const mailTemplates = {
     };
   },
 
+  /** A one-time code (THREATS.md S30). No link, ever: there is nothing to click, so nothing to fake. */
+  emailCode(name: string, code: string, why: string, minutes: number) {
+    return {
+      subject: 'Your TrustVault code',
+      ...render(name, {
+        title: `Your code is ${code}`,
+        intro: `${why} Enter this code in TrustVault: ${code}`,
+        lines: [`It works once and expires in ${minutes} minutes. TrustVault will never ask you for it by phone, chat or email.`],
+        footer: "If this wasn't you, someone may know your password: change your password now.",
+      }),
+    };
+  },
+
   secondFactorChanged(name: string, what: string, at: Date, origin: string) {
     return {
       subject: 'Your TrustVault sign-in security changed',

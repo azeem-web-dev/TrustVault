@@ -74,6 +74,9 @@ model User {
   totpEnabledAt     DateTime?  @map("totp_enabled_at") @db.Timestamptz(6)
   /// Last accepted 30-second step, so a code cannot be replayed.
   totpLastStep      BigInt?    @map("totp_last_step")
+  /// Emailed one-time codes turned on as a second factor (THREATS.md S30).
+  /// Never for ADMIN or demo accounts (check constraints).
+  emailOtpEnabledAt DateTime?  @map("email_otp_enabled_at") @db.Timestamptz(6)
 
   sessions         Session[]
   ownedDocuments   Document[]        @relation("DocumentOwner")

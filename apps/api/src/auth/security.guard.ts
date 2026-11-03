@@ -127,7 +127,7 @@ export class SecurityGuard implements CanActivate {
       if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {
         await this.refuse(
           { action: 'security.step_up_required', outcome: 'DENIED', reason: actor.mfaVerifiedAt ? 'second_factor_stale' : 'no_second_factor_in_session', details: { method: req.method, path: req.path } },
-          new ForbiddenException({ message: 'Confirm it’s you: enter a code from your authenticator app or use your passkey', code: 'step_up_required' }),
+          new ForbiddenException({ message: 'Confirm it’s you: enter a code from your authenticator app or email, or use your passkey', code: 'step_up_required' }),
         );
       }
     }

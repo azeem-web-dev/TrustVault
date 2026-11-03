@@ -7,7 +7,7 @@ import { RateLimitService } from '../redis/rate-limit.service.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type NewSession } from './session.service.js';
-import { MfaPolicyService } from './mfa-policy.service.js';
+import { emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
 import { DeviceTrustService } from './device-trust.service.js';
 import { LoginThrottleService } from './login-throttle.service.js';
 import { SIGNIN_TOKEN_SHAPE, SignInLinkService } from './signin-link.service.js';
@@ -27,7 +27,8 @@ export interface PublicUser {
 export interface LoginResult {
   session: NewSession;
   user: PublicUser;
-  mfa: { required: boolean; enrolled: boolean; methods: ('totp' | 'passkey')[] };
+  /** Methods in the order a client should offer them: authenticator, passkey, email code. */
+  mfa: { required: boolean; enrolled: boolean; methods: ('totp' | 'passkey' | 'email')[] };
 }
 
 /** The account is under attack and this device is not trusted: no session from the password alone. */
@@ -43,6 +44,8 @@ interface LoginUser {
   displayName: string;
   role: Role;
   totpEnabledAt: Date | null;
+  emailOtpEnabledAt: Date | null;
+  isProtected: boolean;
   _count: { passkeys: number };
 }
 
@@ -197,9 +200,10 @@ export class AuthService {
   }
 
   private async loginResult(user: LoginUser, session: NewSession): Promise<LoginResult> {
-    const methods: ('totp' | 'passkey')[] = [];
+    const methods: ('totp' | 'passkey' | 'email')[] = [];
     if (user.totpEnabledAt) methods.push('totp');
     if (user._count.passkeys > 0) methods.push('passkey');
+    if (emailCodesOn(user)) methods.push('email');
     const enrolled = methods.length > 0;
     return {
       session,

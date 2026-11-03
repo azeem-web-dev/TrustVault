@@ -16,7 +16,10 @@ const CodeSchema = z.strictObject({ code: z.string().trim().regex(/^\d{6}$/, 'En
 const WebAuthnResponse = z.looseObject({ id: z.string().max(1024), rawId: z.string().max(1024), type: z.literal('public-key'), response: z.looseObject({}) });
 const RegisterSchema = z.strictObject({ response: WebAuthnResponse, name: z.string().trim().min(1).max(60) });
 const VerifySchema = z.strictObject({ response: WebAuthnResponse });
-const StepUpSchema = z.union([CodeSchema, VerifySchema]);
+// An emailed code says so; a bare {code} is an authenticator code, as before.
+const EmailStepUpSchema = z.strictObject({ code: CodeSchema.shape.code, method: z.literal('email') });
+const StepUpSchema = z.union([CodeSchema, EmailStepUpSchema, VerifySchema]);
+const SendSchema = z.strictObject({ purpose: z.enum(['signin', 'enable', 'stepup']) });
 
 /**
  * Who may call: any signed-in user, including one who has only passed the
@@ -83,6 +86,42 @@ export class MfaController {
     return this.issue(res, await this.mfa.passkeyVerify(actor, body.response as never), actor);
   }
 
+  // ------------------------------------------------ email codes (THREATS.md S30)
+
+  /**
+   * Emails a 6-digit code: `signin` (second sign-in step), `enable` (turning
+   * email codes on) or `stepup` (confirming a risky action). Each code works
+   * only for its purpose, in this session, once, for 10 minutes.
+   */
+  @Post('email/send')
+  @HttpCode(200)
+  sendEmailCode(@CurrentActor() actor: Actor, @Body(new ZodPipe(SendSchema)) body: z.infer<typeof SendSchema>) {
+    return this.mfa.sendEmailCode(actor, body.purpose);
+  }
+
+  @Post('email/enable')
+  @HttpCode(200)
+  async enableEmail(@CurrentActor() actor: Actor, @Body(new ZodPipe(CodeSchema)) body: z.infer<typeof CodeSchema>, @Res({ passthrough: true }) res: Response) {
+    const session = await this.mfa.enableEmail(actor, body.code);
+    this.notify.secondFactorChanged(actor.userId, 'Email codes were turned on for your account. You will be asked for a code sent to this address when you sign in.');
+    return session ? this.issue(res, session, actor) : { csrfToken: actor.csrfToken, mfa: true };
+  }
+
+  @Post('email/verify')
+  @HttpCode(200)
+  async verifyEmail(@CurrentActor() actor: Actor, @Body(new ZodPipe(CodeSchema)) body: z.infer<typeof CodeSchema>, @Res({ passthrough: true }) res: Response) {
+    return this.issue(res, await this.mfa.verifyEmail(actor, body.code), actor);
+  }
+
+  /** Turns email codes off. Needs a fresh second factor, like removing any other. */
+  @Delete('email')
+  @HttpCode(204)
+  @StepUp()
+  async removeEmail(@CurrentActor() actor: Actor): Promise<void> {
+    await this.mfa.removeEmail(actor);
+    this.notify.secondFactorChanged(actor.userId, 'Email codes were turned off for your account.');
+  }
+
   /**
    * Step-up: a fresh code or passkey assertion (from POST passkeys/options)
    * before a risky action. Full sessions only; the token is kept (THREATS.md S20).
@@ -90,7 +129,7 @@ export class MfaController {
   @Post('step-up')
   @HttpCode(200)
   async stepUp(@CurrentActor() actor: Actor, @Body(new ZodPipe(StepUpSchema)) body: z.infer<typeof StepUpSchema>) {
-    await this.mfa.stepUp(actor, 'code' in body ? { code: body.code } : { response: body.response as never });
+    await this.mfa.stepUp(actor, 'method' in body ? { code: body.code, method: 'email' } : 'code' in body ? { code: body.code } : { response: body.response as never });
     return { ok: true };
   }
 

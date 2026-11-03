@@ -21,11 +21,12 @@ export interface AdminUserView {
   activatedAt: Date | null;
   isProtected: boolean;
   totpEnabledAt: Date | null;
+  emailOtpEnabledAt: Date | null;
 }
 
 const VIEW = {
   id: true, email: true, displayName: true, role: true, status: true,
-  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true, activatedAt: true, isProtected: true, totpEnabledAt: true,
+  accessExpiresAt: true, lockedUntil: true, createdAt: true, deactivatedAt: true, activatedAt: true, isProtected: true, totpEnabledAt: true, emailOtpEnabledAt: true,
 } as const;
 
 /** Published demo accounts (README) must stay usable for every visitor. THREATS.md I8. */
@@ -177,7 +178,7 @@ export class UsersService {
         throw new ConflictException({ message: 'Clearing an owner\u2019s or administrator\u2019s second factor needs a second administrator\u2019s approval. Ask for it on the Approvals page.', code: 'approval_required' });
       }
       if (needsTwo) await this.approvals.use(tx, actor, approvalId!, 'MFA_RESET', { userId: id });
-      await tx.user.update({ where: { id }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
+      await tx.user.update({ where: { id }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null, emailOtpEnabledAt: null } });
       const removed = await tx.passkey.deleteMany({ where: { userId: id } });
       const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'second_factor_reset_by_admin');
       await this.audit.record({ action: 'user.mfa_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { passkeysRemoved: removed.count, sessionsEnded: ended, role: before.role, ...(needsTwo ? { approvalId: approvalId! } : {}) } }, tx);

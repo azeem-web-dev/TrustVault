@@ -24,15 +24,23 @@ Future<bool> askStepUp(BuildContext context) async {
     title: 'Confirm it’s you',
     icon: PhosphorIconsDuotone.shieldCheckered,
     description: 'This action needs a second factor from the last ${status?['stepUpMinutes'] ?? 5} minutes.',
-    builder: (_) => _StepUpForm(totp: status?['totp'] != false, passkey: ((status?['passkeys'] as List?) ?? const []).isNotEmpty),
+    builder: (_) => _StepUpForm(
+      totp: status?['totp'] != false,
+      passkey: ((status?['passkeys'] as List?) ?? const []).isNotEmpty,
+      email: status?['email'] == true,
+      emailTo: (status?['emailTo'] as String?) ?? 'your email',
+    ),
   );
   return ok == true;
 }
 
 class _StepUpForm extends StatefulWidget {
-  const _StepUpForm({required this.totp, required this.passkey});
+  const _StepUpForm({required this.totp, required this.passkey, required this.email, required this.emailTo});
   final bool totp;
   final bool passkey;
+  /// Emailed codes are on for this account (THREATS.md S30).
+  final bool email;
+  final String emailTo;
   @override
   State<_StepUpForm> createState() => _StepUpFormState();
 }
@@ -41,11 +49,33 @@ class _StepUpFormState extends State<_StepUpForm> {
   final _code = TextEditingController();
   String? _error;
   bool _busy = false;
+  /// Where the emailed step-up code went, once one was sent.
+  String? _sentTo;
 
   @override
   void initState() {
     super.initState();
     _code.addListener(() => setState(() {}));
+  }
+
+  Future<void> _sendEmail() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final r = await Api.I.post('/auth/mfa/email/send', {'purpose': 'stepup'}) as Map;
+      if (mounted) {
+        setState(() {
+          _code.clear();
+          _sentTo = r['sentTo'] as String;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -75,14 +105,20 @@ class _StepUpFormState extends State<_StepUpForm> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (_error != null) ...[TvAlert(_error!), gap12],
-        if (widget.passkey) ...[
+        if (widget.passkey && _sentTo == null) ...[
           Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _busy && _code.text.isEmpty, onPressed: _busy ? null : () => _try(() => Passkeys.assertTo('/auth/mfa/step-up'))),
-          if (widget.totp) const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: DividerLabel('or enter a code')),
+          if (widget.totp || widget.email) const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: DividerLabel('or enter a code')),
         ],
-        if (widget.totp) ...[
+        if (widget.email && !widget.totp && _sentTo == null)
+          Btn('Email a code to ${widget.emailTo}', variant: widget.passkey ? BtnVariant.secondary : BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _busy ? null : _sendEmail),
+        if (_sentTo != null) ...[
+          Text('6-digit code we emailed to $_sentTo', textAlign: TextAlign.center),
+          gap12,
+        ],
+        if (widget.totp || _sentTo != null) ...[
           TextField(
             controller: _code,
-            autofocus: !widget.passkey,
+            autofocus: !widget.passkey || _sentTo != null,
             keyboardType: TextInputType.number,
             autofillHints: const [AutofillHints.oneTimeCode],
             maxLength: 6,
@@ -94,13 +130,22 @@ class _StepUpFormState extends State<_StepUpForm> {
           gap12,
           Btn(
             'Confirm and continue',
-            variant: widget.passkey ? BtnVariant.secondary : BtnVariant.primary,
+            variant: widget.passkey && _sentTo == null ? BtnVariant.secondary : BtnVariant.primary,
             size: BtnSize.lg,
             expand: true,
             loading: _busy && _code.text.length == 6,
-            onPressed: _code.text.length == 6 && !_busy ? () => _try(() => Api.I.post('/auth/mfa/step-up', {'code': _code.text})) : null,
+            onPressed: _code.text.length == 6 && !_busy
+                ? () => _try(() => Api.I.post('/auth/mfa/step-up', _sentTo != null ? {'code': _code.text, 'method': 'email'} : {'code': _code.text}))
+                : null,
           ),
+          if (_sentTo != null) TextButton(onPressed: _busy ? null : _sendEmail, child: const Text('No email? Send a new code')),
         ],
+        if (widget.email && widget.totp && _sentTo == null)
+          TextButton.icon(
+            onPressed: _busy ? null : _sendEmail,
+            icon: const Ic(PhosphorIconsDuotone.envelope, size: 16),
+            label: const Text('Email me a code instead'),
+          ),
       ],
     );
   }

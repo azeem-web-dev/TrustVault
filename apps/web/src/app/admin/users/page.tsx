@@ -25,6 +25,7 @@ interface AdminUser {
   activatedAt: string | null;
   isProtected: boolean;
   totpEnabledAt: string | null;
+  emailOtpEnabledAt?: string | null;
 }
 
 const ROLES: Role[] = ['ADMIN', 'OWNER', 'VIEWER', 'EXTERNAL'];
@@ -184,6 +185,7 @@ export default function AdminUsersPage() {
                           {locked && <Badge tone="amber" icon={<LockKey size={11} />}>Locked</Badge>}
                           {u.isProtected && <span title="Published demo account: cannot be changed"><Badge tone="violet" icon={<Sparkle size={11} />}>Demo</Badge></span>}
                           {u.totpEnabledAt && <Badge tone="blue" icon={<ShieldCheck size={11} />}>2FA</Badge>}
+                          {u.emailOtpEnabledAt && <span title="Signs in with codes sent by email"><Badge tone="neutral" icon={<ShieldCheck size={11} />}>Email 2FA</Badge></span>}
                         </div>
                       </td>
                       <td className="hidden px-4 py-3 text-slate-500 md:table-cell dark:text-slate-400">
@@ -191,7 +193,7 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 text-right">
                         <div className="inline-flex gap-1.5">
-                          {!self && !u.isProtected && u.totpEnabledAt && (
+                          {!self && !u.isProtected && (u.totpEnabledAt || u.emailOtpEnabledAt) && (
                             // An owner's or admin's second factor is cleared only with a second
                             // admin's approval (THREATS.md S19): this asks for it.
                             u.role === 'OWNER' || u.role === 'ADMIN'

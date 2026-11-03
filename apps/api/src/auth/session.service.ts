@@ -4,7 +4,7 @@ import { ENV, type Env } from '../config/env.js';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import type { Actor } from '../common/request-context.js';
 import { AuditService } from '../audit/audit.service.js';
-import { MfaPolicyService } from './mfa-policy.service.js';
+import { emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
 import { deviceName } from './device-name.js';
 
 export const SESSION_COOKIE = '__Host-tv_session';
@@ -111,7 +111,7 @@ export class SessionService {
       await this.prisma.session.updateMany({ where: { id: session.id }, data: { lastSeenAt: new Date(now) } });
     }
 
-    const mfaEnrolled = user.totpEnabledAt !== null || user._count.passkeys > 0;
+    const mfaEnrolled = user.totpEnabledAt !== null || user._count.passkeys > 0 || emailCodesOn(user);
     return {
       userId: user.id,
       email: user.email,

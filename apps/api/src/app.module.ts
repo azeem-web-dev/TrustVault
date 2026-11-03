@@ -17,6 +17,7 @@ import { LoginThrottleService } from './auth/login-throttle.service.js';
 import { SignInLinkService } from './auth/signin-link.service.js';
 import { AuthController } from './auth/auth.controller.js';
 import { MfaService } from './auth/mfa.service.js';
+import { EmailCodeService } from './auth/email-code.service.js';
 import { MfaController } from './auth/mfa.controller.js';
 import { SecurityGuard } from './auth/security.guard.js';
 import { MfaPolicyService } from './auth/mfa-policy.service.js';
@@ -97,6 +98,7 @@ export class AppModule {
         LoginThrottleService,
         SignInLinkService,
         MfaService,
+        EmailCodeService,
         UsersService,
         ApprovalsService,
         AccessService,
