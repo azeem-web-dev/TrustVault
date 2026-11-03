@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'core/api.dart';
 import 'core/app_lock.dart';
 import 'core/offline_copies.dart';
+import 'core/secure_screen.dart';
 import 'core/session.dart';
 import 'core/theme.dart';
 import 'screens/auth.dart';
@@ -37,6 +38,12 @@ Future<void> main() async {
   // Plain copies handed to another app go when the user is back here (THREATS.md V6).
   await OfflineCopies.wipeOpened();
   AppLifecycleListener(onResume: () => OfflineCopies.wipeOpened());
+  // Blank the Android Recents / app-switcher thumbnail whenever the app is
+  // not in the foreground, so authenticated content (document titles, people's
+  // emails, the audit log) is never left in the task switcher, where the app
+  // lock (THREATS.md S24) does not reach. FLAG_SECURE elsewhere is scoped to
+  // the document screens (V3); this covers every screen while backgrounded.
+  BackgroundShield().start();
   runApp(
     MultiProvider(
       providers: [
