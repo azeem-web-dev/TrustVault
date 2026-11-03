@@ -303,7 +303,7 @@ describe('credential stuffing and spraying are detected', () => {
     const adm = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const { alerts } = (await as(t, await login(t, adm)).get('/api/admin/alerts')).body as { alerts: { kind: string; severity: string; message: string }[] };
     expect(alerts.find((a) => a.kind === 'auth_abuse_detected')).toMatchObject({ severity: 'high' });
-    const mine = alerts.find((a) => a.kind === 'stuffing_from_ip' && a.message.startsWith(`${X} `));
+    const mine = (await authAbuseAlerts(t.app.get(PrismaService), since)).find((a) => a.kind === 'stuffing_from_ip' && a.message.startsWith(`${X} `));
     // 6 accounts that failed, plus list-99 refused by the block; 10 attempts in all.
     expect(mine).toMatchObject({ severity: 'high', message: `${X} failed to sign in to 7 different accounts (10 attempts)` });
   });
@@ -344,6 +344,7 @@ describe('credential stuffing and spraying are detected', () => {
 
   it('the alerts come from the audit log, so they survive the throttles being reset', async () => {
     const X = `10.78.${RUN}`;
+    const since = await dbNow();
     for (let i = 0; i < 6; i++) await attempt(`gone-${i}@t.io`, 'Winter2026!', { ip: X });
     const redis = t.app.get(RedisService).client;
     let cursor = '0';
@@ -353,9 +354,9 @@ describe('credential stuffing and spraying are detected', () => {
       cursor = next;
       if (found.length) await redis.del(...found.map((k) => k.slice(prefix.length)));
     } while (cursor !== '0');
-    const adm = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
-    const { alerts } = (await as(t, await login(t, adm)).get('/api/admin/alerts')).body as { alerts: { kind: string; message: string }[] };
-    expect(alerts.some((a) => a.kind === 'stuffing_from_ip' && a.message.startsWith(`${X} `))).toBe(true);
+    // Over this test's window (the shared test log holds bigger offenders from other tests).
+    const recent = await authAbuseAlerts(t.app.get(PrismaService), since);
+    expect(recent.some((a) => a.kind === 'stuffing_from_ip' && a.message.startsWith(`${X} `))).toBe(true);
   });
 });
 
