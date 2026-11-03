@@ -78,6 +78,13 @@ flutter build apk --release --split-per-abi # smaller, one per CPU type
 Release signing reads `android/key.properties` (not committed). Without it
 the build falls back to the debug key, which is fine for side-loading tests.
 
+You rarely need to build by hand: the **Android release build** workflow
+(`.github/workflows/android-release.yml`) keeps a ready APK and AAB as
+downloadable artifacts on every push to `main` that touches `apps/mobile/**`,
+and on demand. How to download them, how to set the signing secrets, and why
+Play Console upload stays the owner's step are in
+[`docs/ANDROID_RELEASE.md`](../../docs/ANDROID_RELEASE.md).
+
 `flutter analyze` must report no issues.
 
 ## Tests

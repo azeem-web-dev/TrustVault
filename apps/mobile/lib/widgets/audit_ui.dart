@@ -15,6 +15,7 @@ final _exact = <String, ActionMeta>{
   'document.download': ActionMeta(PhosphorIconsDuotone.downloadSimple, 'Downloaded'),
   'document.view': ActionMeta(PhosphorIconsDuotone.eye, 'Viewed'),
   'document.page_view': ActionMeta(PhosphorIconsDuotone.eye, 'Page viewed'),
+  'document.capture_attempt': ActionMeta(PhosphorIconsDuotone.camera, 'Tried to take a screenshot'),
   'document.offline_key': ActionMeta(PhosphorIconsDuotone.key, 'Opened offline copy'),
   'document.download_stamp': ActionMeta(PhosphorIconsDuotone.shieldWarning, 'Download not stamped'),
   'document.upload': ActionMeta(PhosphorIconsDuotone.uploadSimple, 'Uploaded'),

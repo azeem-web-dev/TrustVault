@@ -191,6 +191,16 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     final current = versions.isEmpty ? null : versions.first;
     final canManage = level >= _rank['MANAGE']!;
     final canDownload = level >= _rank['READ']!;
+    // Prefer the API's `download` object (since 2026-11-04); otherwise fall back
+    // to the older shape (READ access + the downloadNeedsApproval flag). This is
+    // what lets a VIEW-only holder ask the owner for a one-file download (V1).
+    final dl = doc['download'] as Map?;
+    final canDownloadNow = dl != null ? dl['allowed'] == true : (canDownload && doc['downloadNeedsApproval'] != true);
+    final requestStatus = (dl?['requestStatus'] as String?) ?? 'NONE';
+    // Shown when the viewer cannot download yet but may ask, or already asked.
+    final inRequestFlow = dl != null
+        ? (dl['allowed'] != true && (dl['requestable'] == true || requestStatus != 'NONE'))
+        : (doc['downloadNeedsApproval'] == true && !canDownloadNow);
     final owner = doc['owner'] as Map;
     final folder = doc['folder'] as Map?;
     final isOwner = doc['isOwner'] == true;
@@ -273,18 +283,15 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                         const Btn('Download blocked', icon: PhosphorIconsDuotone.prohibit, expand: true, onPressed: null)
                       else ...[
                         Btn(
-                          canDownload ? 'View pages' : 'View  ·  view only',
-                          variant: canDownload ? BtnVariant.secondary : BtnVariant.primary,
+                          canDownloadNow ? 'View pages' : 'View  ·  view only',
+                          variant: canDownloadNow ? BtnVariant.secondary : BtnVariant.primary,
                           size: BtnSize.lg,
                           expand: true,
                           icon: PhosphorIconsDuotone.eye,
                           onPressed: () => _openPages(doc, !canDownload),
                         ),
-                        if (canDownload) ...[
+                        if (canDownloadNow) ...[
                           gap8,
-                          if (doc['downloadNeedsApproval'] == true)
-                            _ApprovalDownload(docId: doc['id'] as String, versionNo: current['versionNo'] as int, fileName: current['fileName'] as String)
-                          else
                           Btn(
                             'Download  ·  ${current['fileName']}',
                             variant: BtnVariant.primary,
@@ -298,6 +305,17 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                               apiPath: '/documents/${doc['id']}/download',
                               fallbackName: current['fileName'] as String,
                             ),
+                          ),
+                        ] else if (inRequestFlow) ...[
+                          gap8,
+                          // A READ+ holder whose share needs approval, or a VIEW-only
+                          // holder (V1): ask the owner, then download once allowed.
+                          _ApprovalDownload(
+                            docId: doc['id'] as String,
+                            versionNo: current['versionNo'] as int,
+                            fileName: current['fileName'] as String,
+                            requestable: dl != null ? dl['requestable'] == true : true,
+                            requestStatus: requestStatus,
                           ),
                         ],
                       ],
@@ -326,7 +344,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           gap16,
           _ProtectionCard(isOwner: isOwner),
         ],
-        if (_tab == 'versions') _Versions(doc: doc, canDownload: canDownload, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: () => _act(() async {}, 'New version uploaded'), onError: _setError),
+        if (_tab == 'versions') _Versions(doc: doc, canDownload: canDownload, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: (note) => _act(() async {}, note == null ? 'New version uploaded' : 'New version uploaded. $note'), onError: _setError),
         if (_tab == 'access') _AccessPanel(doc: doc, onError: _setError),
         if (_tab == 'history') _History(docId: doc['id'] as String),
         gap16,
@@ -639,7 +657,7 @@ class _Versions extends StatefulWidget {
   final Map doc;
   final bool canDownload;
   final bool canUpload;
-  final VoidCallback onUploaded;
+  final ValueChanged<String?> onUploaded;
   final ValueChanged<String?> onError;
   @override
   State<_Versions> createState() => _VersionsState();
@@ -653,8 +671,8 @@ class _VersionsState extends State<_Versions> {
     if (f == null) return;
     setState(() => _busy = true);
     try {
-      await Api.I.upload('/documents/${widget.doc['id']}/versions', bytes: await f.readAsBytes(), fileName: f.name);
-      widget.onUploaded();
+      final r = await Api.I.upload('/documents/${widget.doc['id']}/versions', bytes: await f.readAsBytes(), fileName: f.name);
+      widget.onUploaded(_sanitizedFrom(r));
     } catch (e) {
       widget.onError(errorText(e));
     } finally {
@@ -1340,6 +1358,11 @@ class _HistoryState extends State<_History> {
                                   '${ev[i]['actorEmail'] ?? 'system'} · ${relativeTime(ev[i]['occurredAt'] as String?)}${ev[i]['reason'] != null ? ' · ${(ev[i]['reason'] as String).replaceAll('_', ' ')}' : ''}',
                                   style: ts(context, size: 12, color: p.muted),
                                 ),
+                                if (_sanitizedFrom(ev[i]['details']) case final note?)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(note, style: ts(context, size: 12, color: p.muted, height: 1.4)),
+                                  ),
                               ],
                             ),
                           ),
@@ -1541,6 +1564,43 @@ class _OwnerActionsState extends State<_OwnerActions> {
 
 String _levelWord(String level) => const {'VIEW': 'view', 'READ': 'read', 'EDIT': 'edit', 'MANAGE': 'manage', 'OWNER': 'own'}[level] ?? 'open';
 
+/// What the API says it rebuilt out of an uploaded PDF (THREATS.md C9):
+/// `sanitized.removed` on POST /documents and /documents/:id/versions, and in
+/// an upload event's history details. Mirrors apps/web/src/lib/sanitized.ts.
+const _sanitizeWords = <String, String>{
+  'JavaScript': 'JavaScript',
+  'OpenAction': 'actions that run on opening',
+  'Automatic actions (AA)': 'automatic actions',
+  'Launch action': 'commands that start programs',
+  'Links to other files (GoToR/GoToE)': 'links to other files',
+  'ImportData action': 'form data import',
+  'SubmitForm action': 'form submission',
+  'EmbeddedFiles': 'attachments',
+  'FileAttachment annotation': 'attachments',
+  'RichMedia/3D/multimedia': 'embedded media',
+  'XFA form': 'form fields',
+  'Form fields (AcroForm)': 'form fields',
+  'Non-web link (URI)': 'links to local files',
+};
+
+/// "Interactive content was removed for safety: JavaScript, attachments." or
+/// null when nothing was removed (or the field is absent / not a PDF).
+String? sanitizedNotice(Object? removed) {
+  if (removed is! List || removed.isEmpty) return null;
+  final words = <String>[];
+  for (final r in removed) {
+    final w = _sanitizeWords['$r'] ?? '$r';
+    if (!words.contains(w)) words.add(w);
+  }
+  return 'Interactive content was removed for safety: ${words.join(', ')}.';
+}
+
+/// Pulls the sanitize note out of an upload response or a history event's details.
+String? _sanitizedFrom(Object? node) {
+  final sanitized = node is Map ? node['sanitized'] : null;
+  return sanitizedNotice(sanitized is Map ? sanitized['removed'] : null);
+}
+
 /* ------------------------------------------------------ access policies */
 
 List<Widget> _conditionBadges(Map? policy) {
@@ -1557,10 +1617,15 @@ List<Widget> _conditionBadges(Map? policy) {
 /// For a share whose downloads need approval: ask with a reason, or download
 /// with an approval the owner gave (THREATS.md P8). The server checks both.
 class _ApprovalDownload extends StatefulWidget {
-  const _ApprovalDownload({required this.docId, required this.versionNo, required this.fileName});
+  const _ApprovalDownload({required this.docId, required this.versionNo, required this.fileName, this.requestable = true, this.requestStatus = 'NONE'});
   final String docId;
   final int versionNo;
   final String fileName;
+  /// The server says this user may ask now (not PENDING/APPROVED, an approver
+  /// exists, the version is not quarantined). Defaults true for the older shape.
+  final bool requestable;
+  /// Latest request state for the current version: NONE | PENDING | APPROVED | REJECTED.
+  final String requestStatus;
   @override
   State<_ApprovalDownload> createState() => _ApprovalDownloadState();
 }
@@ -1612,7 +1677,7 @@ class _ApprovalDownloadState extends State<_ApprovalDownload> {
     final live = (_mine ?? const <Map>[]).where((r) =>
         r['status'] == 'APPROVED' && r['versionNo'] == widget.versionNo && r['validUntil'] != null &&
         DateTime.parse(r['validUntil'] as String).isAfter(now) && ((r['maxUses'] as int?) ?? 0) > (r['uses'] as int)).toList();
-    final pending = (_mine ?? const <Map>[]).any((r) => r['status'] == 'PENDING' && r['versionNo'] == widget.versionNo);
+    final pending = widget.requestStatus == 'PENDING' || (_mine ?? const <Map>[]).any((r) => r['status'] == 'PENDING' && r['versionNo'] == widget.versionNo);
     if (live.isNotEmpty) {
       final left = (live.first['maxUses'] as int) - (live.first['uses'] as int);
       return Btn(
@@ -1627,13 +1692,20 @@ class _ApprovalDownloadState extends State<_ApprovalDownload> {
         },
       );
     }
+    if (pending) {
+      return const Btn('Waiting for the owner…', variant: BtnVariant.soft, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.clockCounterClockwise, onPressed: null);
+    }
+    // The owner declined, and the server does not let us ask again right now.
+    if (widget.requestStatus == 'REJECTED' && !widget.requestable) {
+      return const Btn('Request declined', variant: BtnVariant.secondary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.prohibit, onPressed: null);
+    }
     return Btn(
-      pending ? 'Waiting for the owner…' : 'Ask to download',
+      widget.requestStatus == 'REJECTED' ? 'Ask again to download' : 'Ask to download',
       variant: BtnVariant.primary,
       size: BtnSize.lg,
       expand: true,
       icon: PhosphorIconsDuotone.sealCheck,
-      onPressed: _mine == null || pending ? null : _ask,
+      onPressed: _mine == null || !widget.requestable ? null : _ask,
     );
   }
 }

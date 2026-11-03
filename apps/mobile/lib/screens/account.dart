@@ -31,7 +31,11 @@ class _AccountScreenState extends State<AccountScreen> {
   String? _error;
   String? _busy;
   ({String secret, String uri})? _totp;
+  // Turning email codes on (THREATS.md S30): where the code was sent, and what
+  // was typed. Null until the user asks for a code.
+  String? _emailSetup;
   final _code = TextEditingController();
+  final _emailCode = TextEditingController();
   final _current = TextEditingController();
   final _next = TextEditingController();
 
@@ -41,11 +45,13 @@ class _AccountScreenState extends State<AccountScreen> {
     _load();
     _next.addListener(() => setState(() {}));
     _code.addListener(() => setState(() {}));
+    _emailCode.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
     _code.dispose();
+    _emailCode.dispose();
     _current.dispose();
     _next.dispose();
     super.dispose();
@@ -99,6 +105,14 @@ class _AccountScreenState extends State<AccountScreen> {
     final checks = [(true, 'Strong password (12+ characters)'), (mfa?['totp'] == true, 'Authenticator app'), (hasPasskey, 'Passkey (phishing-resistant)')];
     final score = checks.where((c) => c.$1).length;
     final nextLen = _next.text.length;
+    // Email codes (THREATS.md S30): a non-admin can turn them on/off. Admins and
+    // demo accounts are refused by the API, reported via `emailUnavailable`.
+    final emailOn = mfa?['email'] == true;
+    final emailTo = (mfa?['emailTo'] as String?) ?? 'your email';
+    final emailUnavailable = mfa?['emailUnavailable'] as String?;
+    final factorCount = ((mfa?['totp'] == true) ? 1 : 0) + passkeys.length + (emailOn ? 1 : 0);
+    // Your role must keep a factor, and email codes are the only one left.
+    final lastRequired = (mfa?['requiredByRole'] == true) && factorCount <= 1;
 
     return PageBody(
       onRefresh: _load,
@@ -288,6 +302,129 @@ class _AccountScreenState extends State<AccountScreen> {
                       setState(() => _totp = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
                     }, 'Follow the three steps to finish'),
                   ),
+                ),
+        ),
+        gap16,
+        TvCard(
+          title: 'Email code',
+          icon: PhosphorIconsDuotone.envelope,
+          description: 'A 6-digit code emailed to you each time you sign in. Easy, but weaker: anyone who can read your email can use it.',
+          actions: mfa == null ? null : TvBadge(emailOn ? 'On' : 'Off', tone: emailOn ? Tone.green : Tone.neutral, dot: true),
+          child: mfa == null
+              ? const Skeleton(height: 40)
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            emailUnavailable ?? (emailOn ? 'On. A code is emailed to $emailTo when you sign in.' : 'Off. Turn it on to get a code at $emailTo.'),
+                            style: ts(context, size: 13, color: p.muted, height: 1.4),
+                          ),
+                        ),
+                        gap12,
+                        Switch(
+                          value: emailOn,
+                          onChanged: (emailUnavailable != null && !emailOn) || (emailOn && lastRequired) || _busy != null || _emailSetup != null
+                              ? null
+                              : (on) {
+                                  if (on) {
+                                    _run('email-send', () async {
+                                      final r = await Api.I.post('/auth/mfa/email/send', {'purpose': 'enable'}) as Map;
+                                      setState(() {
+                                        _emailCode.clear();
+                                        _emailSetup = r['sentTo'] as String;
+                                      });
+                                    }, 'Code sent. Check your email.');
+                                  } else {
+                                    // Turning off is a step-up route: the API asks for a fresh factor first.
+                                    _run('email-off', () => Api.I.delete('/auth/mfa/email'), 'Email codes turned off');
+                                  }
+                                },
+                        ),
+                      ],
+                    ),
+                    if (emailOn && lastRequired) ...[
+                      gap8,
+                      Text('Your role must keep two-step verification. Add an authenticator app or passkey before turning email codes off.', style: ts(context, size: 12, color: p.muted, height: 1.45)),
+                    ],
+                    if (_emailSetup != null) ...[
+                      gap12,
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(14)),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text('We emailed a 6-digit code to $_emailSetup. Enter it to turn email codes on.', style: ts(context, size: 13, height: 1.4)),
+                            gap12,
+                            Row(
+                              children: [
+                                SizedBox(
+                                  width: 150,
+                                  child: TextField(
+                                    controller: _emailCode,
+                                    keyboardType: TextInputType.number,
+                                    autofillHints: const [AutofillHints.oneTimeCode],
+                                    maxLength: 6,
+                                    textAlign: TextAlign.center,
+                                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                    style: const TextStyle(fontFamily: C.mono, fontSize: 18, letterSpacing: 6),
+                                    decoration: fieldDeco(hint: '000000').copyWith(counterText: ''),
+                                  ),
+                                ),
+                                gap8,
+                                Btn(
+                                  'Turn on',
+                                  variant: BtnVariant.primary,
+                                  loading: _busy == 'email-on',
+                                  onPressed: _emailCode.text.length != 6
+                                      ? null
+                                      : () => _run('email-on', () async {
+                                          await Api.I.post('/auth/mfa/email/enable', {'code': _emailCode.text});
+                                          setState(() {
+                                            _emailSetup = null;
+                                            _emailCode.clear();
+                                          });
+                                          await session.refresh();
+                                        }, 'Email codes turned on'),
+                                ),
+                              ],
+                            ),
+                            gap8,
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: _busy != null
+                                        ? null
+                                        : () => _run('email-send', () async {
+                                            final r = await Api.I.post('/auth/mfa/email/send', {'purpose': 'enable'}) as Map;
+                                            setState(() {
+                                              _emailCode.clear();
+                                              _emailSetup = r['sentTo'] as String;
+                                            });
+                                          }, 'Code sent. Check your email.'),
+                                    child: Text('No email? Send a new code', style: ts(context, size: 13, color: p.accent)),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => setState(() {
+                                      _emailSetup = null;
+                                      _emailCode.clear();
+                                    }),
+                                    child: Text('Cancel', style: ts(context, size: 13, color: p.muted)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
         ),
         gap16,
