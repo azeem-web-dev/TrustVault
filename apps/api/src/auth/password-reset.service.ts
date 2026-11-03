@@ -58,8 +58,9 @@ export class PasswordResetService {
     try {
       await this.requestInner(normaliseEmail(rawEmail));
     } finally {
-      const wait = started + this.env.LOGIN_FAILURE_FLOOR_MS - performance.now();
-      if (wait > 0) await sleep(wait);
+      // Whole milliseconds, and never a fraction early (see AuthService.login).
+      const until = started + this.env.LOGIN_FAILURE_FLOOR_MS;
+      for (let wait = until - performance.now(); wait > 0; wait = until - performance.now()) await sleep(Math.ceil(wait));
     }
   }
 

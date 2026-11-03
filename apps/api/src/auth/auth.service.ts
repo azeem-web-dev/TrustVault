@@ -72,8 +72,10 @@ export class AuthService {
   async login(rawEmail: string, password: string, previousToken?: string): Promise<LoginResult | StepUpResult> {
     const started = performance.now();
     const pad = async () => {
-      const wait = started + this.env.LOGIN_FAILURE_FLOOR_MS - performance.now();
-      if (wait > 0) await sleep(wait);
+      // setTimeout counts whole milliseconds and may wake a fraction early:
+      // keep waiting until the floor has really passed.
+      const until = started + this.env.LOGIN_FAILURE_FLOOR_MS;
+      for (let wait = until - performance.now(); wait > 0; wait = until - performance.now()) await sleep(Math.ceil(wait));
     };
     try {
       const result = await this.attemptLogin(rawEmail, password, previousToken);
