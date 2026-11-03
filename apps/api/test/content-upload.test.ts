@@ -3,8 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { as, auditRows, createUser, login, ownerDb, resetState, startApp, withDb, type Session, type TestApp } from './helpers.js';
 import * as B from './fixtures/hostile/build.js';
 
-// The adversarial corpus through the real upload route (THREATS.md C1-C8):
-// refused files never reach storage or the scanner; the CSV
+// The adversarial corpus through the real upload route (THREATS.md C1-C11):
+// refused files never reach storage or the scanner; PDFs with active
+// content are stored as a rebuilt copy without it; the CSV
 // formulas-disabled copy is served without touching the stored bytes.
 
 let t: TestApp;
@@ -27,11 +28,6 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
 describe('hostile uploads are refused through the API', () => {
   const hostile: [string, Buffer, string][] = [
-    ['PDF: JavaScript in a compressed object stream', B.pdf({ catalogExtra: '/OpenAction 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</S/JavaScript/JS(app.alert(1))>>' }])] }), 'a.pdf'],
-    ['PDF: hex-escaped /J#61vaScript', B.pdf({ catalogExtra: '/OpenAction<</S/J#61vaScript/J#53(x)>>' }), 'a.pdf'],
-    ['PDF: annotation AA in an object stream', B.pdf({ pageExtra: '/Annots[5 0 R]', extra: [B.objStm(4, [{ num: 5, body: '<</Type/Annot/Subtype/Widget/Rect[0 0 1 1]/AA<</E<</S/JavaScript/JS(1)>>>>>>' }])] }), 'a.pdf'],
-    ['PDF: XFA', B.pdf({ catalogExtra: '/AcroForm 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</Fields[]/XFA 6 0 R>>' }])] }), 'a.pdf'],
-    ['PDF: embedded file', B.pdf({ catalogExtra: '/Names 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</EmbeddedFiles<</Names[]>>>>' }])] }), 'a.pdf'],
     ['PDF: truncated', B.pdf().subarray(0, 120), 'a.pdf'],
     ['PDF + ZIP polyglot', B.pdf({ extra: [B.streamObj(4, '', B.zip([{ name: 'x.txt', data: 'x' }]))] }), 'a.pdf'],
     ['PNG with HTML after IEND', Buffer.concat([B.png(), Buffer.from('<html><script>alert(1)</script></html>')]), 'a.png'],
@@ -44,13 +40,18 @@ describe('hostile uploads are refused through the API', () => {
     ['ZIP: central directory and local header disagree', B.docx({}, { localName: { 'word/document.xml': 'word/evil.xml' } }), 'a.docx'],
   ];
   for (const [name, body, file] of hostile) {
-    it(`refuses ${name}, stores nothing, and never calls the scanner`, async () => {
+    it(`refuses ${name}, stores nothing, never calls the scanner, and audits the refusal`, async () => {
       const before = { docs: await docCount(), scans: t.clamd.scans };
       const res = await as(t, A).upload('/api/documents', body, file, { title: 't', category: 'c' });
       expect(res.status, JSON.stringify(res.body)).toBe(400);
       expect(typeof res.body.message).toBe('string');
       expect(await docCount()).toBe(before.docs);
       expect(t.clamd.scans).toBe(before.scans);
+      // Refused, and the refusal is in the audit log with what was received.
+      const rows = await auditRows('request_id = $1', [res.headers['x-request-id']]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ action: 'document.upload', outcome: 'DENIED', reason: 'content_rejected', actor_id: ownerId });
+      expect(rows[0]!.details).toMatchObject({ fileName: file, sizeBytes: body.length, sha256: sha(body), message: res.body.message });
     });
   }
 
@@ -60,6 +61,27 @@ describe('hostile uploads are refused through the API', () => {
       expect(res.status, `${file}: ${JSON.stringify(res.body)}`).toBe(201);
     }
   });
+});
+
+describe('PDFs with active content are stored sanitized, not refused (THREATS.md C9)', () => {
+  const active: [string, Buffer, string][] = [
+    ['PDF: JavaScript in a compressed object stream', B.pdf({ catalogExtra: '/OpenAction 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</S/JavaScript/JS(app.alert(1))>>' }])] }), 'JavaScript'],
+    ['PDF: hex-escaped /J#61vaScript', B.pdf({ catalogExtra: '/OpenAction<</S/J#61vaScript/J#53(x)>>' }), 'JavaScript'],
+    ['PDF: annotation AA in an object stream', B.pdf({ pageExtra: '/Annots[5 0 R]', extra: [B.objStm(4, [{ num: 5, body: '<</Type/Annot/Subtype/Widget/Rect[0 0 1 1]/AA<</E<</S/JavaScript/JS(1)>>>>>>' }])] }), 'JavaScript'],
+    ['PDF: XFA', B.pdf({ catalogExtra: '/AcroForm 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</Fields[]/XFA 6 0 R>>' }])] }), 'XFA form'],
+    ['PDF: embedded file', B.pdf({ catalogExtra: '/Names 5 0 R', extra: [B.objStm(4, [{ num: 5, body: '<</EmbeddedFiles<</Names[]>>>>' }])] }), 'EmbeddedFiles'],
+  ];
+  for (const [name, body, label] of active) {
+    it(`${name}: stored as a rebuilt copy that passes the strict check; the uploader is told what was removed`, async () => {
+      const res = await as(t, A).upload('/api/documents', body, 'a.pdf', { title: 't', category: 'c' });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body.sanitized.removed).toContain(label);
+      const meta = (await as(t, A).get(`/api/documents/${res.body.id}`)).body;
+      expect(meta.versions[0].sha256).not.toBe(sha(body));
+      const [row] = await auditRows(`document_id = $1 AND action = 'document.upload'`, [res.body.id]);
+      expect((row!.details as { sanitized: { originalSha256: string; removed: string[] } }).sanitized).toMatchObject({ originalSha256: sha(body), removed: res.body.sanitized.removed });
+    });
+  }
 });
 
 describe('CSV downloads: original bytes, or a formulas-disabled copy', () => {

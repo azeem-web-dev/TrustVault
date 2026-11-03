@@ -104,7 +104,8 @@ describe('keyd authorises decryption itself (compromised API)', () => {
     expect(v.keyId).toBe('local-g1-blob');
     const before = keys.ledger.head().seq;
     const res = await as(t, ownerS).get(`/api/documents/${v.docId}/download`).expect(200);
-    expect(Buffer.from(res.body)).toEqual(PDF);
+    // The stored copy (a PDF is stored rebuilt, THREATS.md C9), sent unchanged: a page-less PDF has nothing to stamp.
+    expect(createHash('sha256').update(Buffer.from(res.body)).digest('hex')).toBe(res.headers['x-document-sha256']);
     const [entry] = keys.ledger.read(before + 1, 10).filter((e) => e.event === 'unwrap');
     expect(entry).toMatchObject({ result: 'ok', action: 'download', user: owner.id, doc: v.docId, ver: v.versionId });
     const [event] = await auditRows(`id = $1`, [entry!.audit_id]);

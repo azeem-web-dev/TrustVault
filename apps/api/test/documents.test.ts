@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EICAR } from './fake-clamd.js';
 import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser, approved } from './helpers.js';
@@ -180,7 +181,8 @@ describe('grants give exactly what they say', () => {
       res.on('end', () => cb(null, Buffer.concat(chunks)));
     });
     expect(dl.status).toBe(200);
-    expect((dl.body as Buffer).equals(PDF)).toBe(true);
+    // The stored copy (a PDF is stored rebuilt, THREATS.md C9), sent unchanged: a page-less PDF has nothing to stamp.
+    expect(createHash('sha256').update(dl.body as Buffer).digest('hex')).toBe(dl.headers['x-document-sha256']);
     for (const [name, call] of routes(doc, own.body.id).filter(([n]) => !['view', 'download', 'download v1', 'pages', 'page 1', 'offline key'].includes(n))) {
       expect((await call(V)).status, name).toBe(404);
     }
@@ -367,9 +369,12 @@ describe('uploads are scanned for malware, and the scanner fails closed', () => 
     try { await fn(); } finally { t.clamd.mode = 'normal'; }
   };
 
-  it('every accepted upload went through the scanner', async () => {
-    const before = t.clamd.scans;
+  it('every accepted upload went through the scanner (a PDF twice: as received and as rebuilt)', async () => {
+    let before = t.clamd.scans;
     await upload(A);
+    expect(t.clamd.scans).toBe(before + 2);
+    before = t.clamd.scans;
+    await upload(A, 'Notes', Buffer.from('hello\n'), 'notes.txt');
     expect(t.clamd.scans).toBe(before + 1);
   });
 

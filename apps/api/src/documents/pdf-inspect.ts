@@ -103,7 +103,52 @@ function describe(key: string): string {
   }
 }
 
-function refuse(what: string): never {
+/**
+ * What the sanitizer reports as removed for each finding (shown to the
+ * uploader and written to the audit row). Stable strings: tests and the
+ * web client match them.
+ */
+export const REMOVED = {
+  javascript: 'JavaScript',
+  openAction: 'OpenAction',
+  aa: 'Automatic actions (AA)',
+  launch: 'Launch action',
+  remoteGoTo: 'Links to other files (GoToR/GoToE)',
+  importData: 'ImportData action',
+  submitForm: 'SubmitForm action',
+  embeddedFiles: 'EmbeddedFiles',
+  fileAttachment: 'FileAttachment annotation',
+  multimedia: 'RichMedia/3D/multimedia',
+  xfa: 'XFA form',
+  acroForm: 'Form fields (AcroForm)',
+  badUri: 'Non-web link (URI)',
+} as const;
+
+/** The REMOVED label for a key, action, type or subtype the strict walk refuses. */
+export function removedLabel(what: string): string {
+  switch (what) {
+    case 'JS': case 'JavaScript': return REMOVED.javascript;
+    case 'XFA': return REMOVED.xfa;
+    case 'Launch': return REMOVED.launch;
+    case 'GoToR': case 'GoToE': return REMOVED.remoteGoTo;
+    case 'ImportData': return REMOVED.importData;
+    case 'SubmitForm': return REMOVED.submitForm;
+    case 'FileAttachment': return REMOVED.fileAttachment;
+    case 'EmbeddedFiles': case 'EmbeddedFile': case 'EF': case 'Filespec_EF': return REMOVED.embeddedFiles;
+    case 'URI': return REMOVED.badUri;
+    default: return REMOVED.multimedia;
+  }
+}
+
+/**
+ * Where findings go. Strict (the default, and always for the sanitizer's
+ * OUTPUT): the first one throws. Collect (the sanitizer's INPUT): each is
+ * noted and the walk goes on; structural problems still throw.
+ */
+type Sink = ((what: string) => void) | null;
+
+function refuse(what: string, sink: Sink): void {
+  if (sink) { sink(what); return; }
   throw new PdfRejected(`PDFs containing ${describe(what)} are not accepted`);
 }
 
@@ -113,23 +158,30 @@ function textOf(o: PDFObject | undefined): string | undefined {
 }
 
 /** Checks one dictionary's own entries (not its children). */
-function checkDict(d: PDFDict): void {
+function checkDict(d: PDFDict, sink: Sink): void {
   const own = new Map<string, PDFObject>();
   for (const [k, v] of d.entries()) own.set(decodeName(k), v);
   for (const [key, v] of own) {
-    if (BAD_KEYS.has(key)) refuse(key);
+    if (BAD_KEYS.has(key)) refuse(key, sink);
     // An embedded file stream can also be reached through /Type.
-    if (key === 'Type' && BAD_TYPES.has(nameOf(v) ?? '')) refuse(nameOf(v)!);
-    if (key === 'Subtype' && BAD_SUBTYPES.has(nameOf(v) ?? '')) refuse(nameOf(v)!);
-    if (key === 'S' && BAD_ACTIONS.has(nameOf(v) ?? '')) refuse(nameOf(v)!);
+    if (key === 'Type' && BAD_TYPES.has(nameOf(v) ?? '')) refuse(nameOf(v)!, sink);
+    if (key === 'Subtype' && BAD_SUBTYPES.has(nameOf(v) ?? '')) refuse(nameOf(v)!, sink);
+    if (key === 'S' && BAD_ACTIONS.has(nameOf(v) ?? '')) refuse(nameOf(v)!, sink);
+    // Collect mode only: things the rebuild always drops, worth telling the uploader about.
+    if (sink && key === 'OpenAction') sink('OpenAction');
+    if (sink && key === 'AA') sink('AA');
+    if (sink && key === 'AcroForm') sink('AcroForm');
   }
   if (nameOf(own.get('S')) === 'URI') {
     const uri = textOf(own.get('URI'));
-    if (uri !== undefined && !SAFE_URI.test(uri.trim())) throw new PdfRejected('PDFs with links to local files or other non-web addresses are not accepted');
+    if (uri !== undefined && !SAFE_URI.test(uri.trim())) {
+      if (sink) sink('URI');
+      else throw new PdfRejected('PDFs with links to local files or other non-web addresses are not accepted');
+    }
   }
 }
 
-function walk(roots: PDFObject[]): void {
+function walk(roots: PDFObject[], sink: Sink): void {
   // Iterative, with a visited set: no recursion for a deep or cyclic file
   // to exhaust. References are not followed: every indirect object is a
   // root already, so following them would only revisit.
@@ -143,7 +195,7 @@ function walk(roots: PDFObject[]): void {
     if (o instanceof PDFStream) {
       stack.push([o.dict, depth + 1]);
     } else if (o instanceof PDFDict) {
-      checkDict(o);
+      checkDict(o, sink);
       for (const [, v] of o.entries()) if (v instanceof PDFDict || v instanceof PDFArray || v instanceof PDFStream) stack.push([v, depth + 1]);
     } else if (o instanceof PDFArray) {
       for (const v of o.asArray()) if (v instanceof PDFDict || v instanceof PDFArray || v instanceof PDFStream) stack.push([v, depth + 1]);
@@ -159,11 +211,17 @@ function rawObjectHeaders(latin1: string): number {
 }
 
 /**
- * Throws PdfRejected if the PDF carries active content or cannot be
- * parsed. `latin1` is the raw file as latin1 text (already computed by the
- * caller for the regex first pass).
+ * Throws PdfRejected if the PDF cannot be parsed, is encrypted, hides
+ * objects or goes over a limit. Active content also throws, unless
+ * `activeContent` is given: then each kind found is added to it as a
+ * REMOVED label and the file is otherwise accepted (the sanitizer's input,
+ * pdf-sanitize.ts). `latin1` is the raw file as latin1 text (already
+ * computed by the caller for the regex first pass).
  */
-export async function inspectPdf(buf: Buffer, latin1: string): Promise<void> {
+export async function inspectPdf(buf: Buffer, latin1: string, activeContent?: Set<string>): Promise<void> {
+  const sink: Sink = activeContent ? (what) => {
+    activeContent.add(what === 'OpenAction' ? REMOVED.openAction : what === 'AA' ? REMOVED.aa : what === 'AcroForm' ? REMOVED.acroForm : removedLabel(what));
+  } : null;
   decodedTotal = 0;
   limitHit = null;
   collected = [];
@@ -203,5 +261,5 @@ export async function inspectPdf(buf: Buffer, latin1: string): Promise<void> {
     throw new PdfRejected('The PDF is damaged or malformed and cannot be checked');
   }
 
-  walk(objects);
+  walk(objects, sink);
 }

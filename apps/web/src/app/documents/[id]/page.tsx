@@ -11,6 +11,7 @@ import {
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useToast } from '@/components/toast';
+import { removedNotice, type UploadResult } from '@/lib/sanitized';
 import { SpotArt } from '@/components/art';
 import { ActionIcon, actionMeta } from '@/components/audit-ui';
 import {
@@ -225,7 +226,7 @@ export default function DocumentPage() {
               <ProtectionCard doc={doc} />
             </>
           )}
-          {tab === 'versions' && <Versions doc={doc} canDownload={canDownload} canUpload={level >= RANK.EDIT && !trashed} onUploaded={() => act(async () => undefined, 'New version uploaded')} onError={setError} />}
+          {tab === 'versions' && <Versions doc={doc} canDownload={canDownload} canUpload={level >= RANK.EDIT && !trashed} onUploaded={(note) => act(async () => undefined, note ? `New version uploaded. ${note}` : 'New version uploaded')} onError={setError} />}
           {tab === 'access' && canManage && !trashed && <AccessPanel doc={doc} onError={setError} />}
           {tab === 'history' && canManage && <History docId={doc.id} />}
         </div>
@@ -465,7 +466,7 @@ function Details({ doc, canEdit, onSave }: { doc: Doc; canEdit: boolean; onSave:
   );
 }
 
-function Versions({ doc, canDownload, canUpload, onUploaded, onError }: { doc: Doc; canDownload: boolean; canUpload: boolean; onUploaded: () => void; onError: (m: string) => void }) {
+function Versions({ doc, canDownload, canUpload, onUploaded, onError }: { doc: Doc; canDownload: boolean; canUpload: boolean; onUploaded: (removedNote: string | null) => void; onError: (m: string) => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const upload = async (e: FormEvent) => {
@@ -475,9 +476,9 @@ function Versions({ doc, canDownload, canUpload, onUploaded, onError }: { doc: D
     const form = new FormData();
     form.set('file', file);
     try {
-      await api.upload(`/documents/${doc.id}/versions`, form);
+      const r = await api.upload<UploadResult>(`/documents/${doc.id}/versions`, form);
       setFile(null);
-      onUploaded();
+      onUploaded(removedNotice(r?.sanitized?.removed));
     } catch (err) {
       onError(errorText(err));
     } finally {
@@ -799,7 +800,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
   );
 }
 
-interface HistoryEvent { seq: string; occurredAt: string; actorEmail: string | null; action: string; outcome: 'ALLOWED' | 'DENIED' | 'FAILED'; reason: string | null }
+interface HistoryEvent { seq: string; occurredAt: string; actorEmail: string | null; action: string; outcome: 'ALLOWED' | 'DENIED' | 'FAILED'; reason: string | null; details?: { sanitized?: { removed?: string[] } } | null }
 
 /** A capture attempt names its method: "Tried to take a screenshot (Print Screen)" (THREATS.md V11). */
 function historyLabel(e: HistoryEvent): string {
@@ -834,6 +835,7 @@ function History({ docId }: { docId: string }) {
                   {e.actorEmail ?? 'system'} · <span title={formatDate(e.occurredAt)}>{relativeTime(e.occurredAt)}</span>
                   {e.reason && e.action !== 'document.capture_attempt' && <> · {e.reason.replace(/_/g, ' ')}</>}
                 </p>
+                {removedNotice(e.details?.sanitized?.removed) && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{removedNotice(e.details?.sanitized?.removed)}</p>}
               </div>
               <span className="hidden pt-1 font-mono text-[11px] text-slate-400 sm:block">#{e.seq}</span>
             </li>

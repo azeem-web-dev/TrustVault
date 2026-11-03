@@ -10,6 +10,7 @@ import {
 import { Shell } from '@/components/shell';
 import { useSession } from '@/components/session';
 import { useToast } from '@/components/toast';
+import { removedNotice, type UploadResult } from '@/lib/sanitized';
 import { SpotArt } from '@/components/art';
 import {
   ACCESS_LABEL, ACCESS_TONE, Alert, Avatar, Badge, Button, EmptyState, FileIcon, IconButton, Input, Label, Modal, PageTitle, Segmented, Select,
@@ -285,7 +286,13 @@ export default function DocumentsPage() {
         folders={folders}
         categories={categories}
         onClose={() => setUploading(false)}
-        onUploaded={(title) => { setUploading(false); setScope('mine'); setPage(1); toast(`“${title}” uploaded. Nobody else can see it until you share it.`); void load(); }}
+        onUploaded={(title, removed) => {
+          setUploading(false); setScope('mine'); setPage(1);
+          const note = removedNotice(removed);
+          if (note) toast(`“${title}” uploaded. ${note} The rest of the document is unchanged.`, 'info');
+          else toast(`“${title}” uploaded. Nobody else can see it until you share it.`);
+          void load();
+        }}
       />
       <FolderModal open={foldersOpen} folders={folders} onClose={() => setFoldersOpen(false)} onChange={() => void loadFolders()} />
     </Shell>
@@ -374,7 +381,7 @@ function DocGrid({ docs, trash }: { docs: DocItem[]; trash: boolean }) {
 
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.txt,.csv,.md';
 
-function UploadModal({ open, folders, categories, onClose, onUploaded }: { open: boolean; folders: Folder[]; categories: string[]; onClose: () => void; onUploaded: (title: string) => void }) {
+function UploadModal({ open, folders, categories, onClose, onUploaded }: { open: boolean; folders: Folder[]; categories: string[]; onClose: () => void; onUploaded: (title: string, removed: string[]) => void }) {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
@@ -411,8 +418,8 @@ function UploadModal({ open, folders, categories, onClose, onUploaded }: { open:
     if (folderId) form.set('folderId', folderId);
     form.set('file', file);
     try {
-      await api.upload('/documents', form);
-      onUploaded(title);
+      const r = await api.upload<UploadResult>('/documents', form);
+      onUploaded(title, r?.sanitized?.removed ?? []);
     } catch (err) {
       setError(errorText(err));
     } finally {

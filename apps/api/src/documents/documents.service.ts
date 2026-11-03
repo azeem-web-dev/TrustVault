@@ -5,12 +5,14 @@ import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { blobAad, openFile, sealFile, sha256 } from '../crypto/file-crypto.js';
 import { issueUnwrapTicket, isTicketRefusal, keyServiceRefusal, ticketRefusalReason } from '../crypto/tickets.js';
-import type { Actor } from '../common/request-context.js';
+import { currentContext, markRefusalAudited, type Actor } from '../common/request-context.js';
+import { logger } from '../common/logger.js';
+import { RedisService } from '../redis/redis.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { remainingLevel } from './sharing.service.js';
-import { RejectedFile, safeFileName } from './content-check.js';
+import { RejectedFile, safeFileName, type DetectedType } from './content-check.js';
 import { inspectUpload } from './content-inspector.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
 import { pageKind, stampDownload, traceCode } from './pages.js';
@@ -21,6 +23,34 @@ export interface UploadedFile {
   originalname: string;
   size: number;
 }
+
+/** A file that passed the upload check: what will be stored, and what was received. */
+export interface CheckedFile {
+  /** The bytes to encrypt and store: the upload itself, or for a PDF the rebuilt copy. */
+  buffer: Buffer;
+  type: DetectedType;
+  fileName: string;
+  /** SHA-256 of `buffer` (the stored version's integrity anchor). */
+  hash: Buffer;
+  /** What the uploader sent. */
+  original: { buffer: Buffer; hash: Buffer };
+  /** PDFs only: what the rebuild left out (THREATS.md C9). */
+  removed: string[] | null;
+}
+
+export type UploadAction = 'document.upload' | 'document.upload_version';
+
+/**
+ * Refused-upload audit rows per person per 10 minutes. Uploads that reach
+ * the content check are already limited to 60 per 10 minutes, so these
+ * never hit this bound; it caps what a client can write by sending
+ * oversized or malformed requests in a loop, which are refused before the
+ * upload limit is counted (THREATS.md A-row on refused uploads).
+ */
+export const UPLOAD_REFUSAL_AUDIT_LIMIT = 200;
+
+/** One line, no control characters, bounded: safe to keep in the audit log. */
+const clip = (s: string, n: number) => s.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n);
 
 export interface SearchFilters {
   q?: string | undefined;
@@ -95,6 +125,7 @@ export class DocumentsService {
     @Inject(MALWARE_SCANNER) private readonly scanner: MalwareScanner,
     @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
     @Inject(DownloadLimitsService) private readonly limits: DownloadLimitsService,
+    @Inject(RedisService) private readonly redis: RedisService,
   ) {}
 
   // ------------------------------------------------------------------ search
@@ -166,7 +197,7 @@ export class DocumentsService {
   // ----------------------------------------------------------------- upload
 
   async create(actor: Actor, file: UploadedFile | undefined, meta: { title: string; category: string; description?: string | undefined; folderId?: string | undefined }) {
-    const checked = await this.checkFile(file);
+    const checked = await this.checkFile('document.upload', file);
     const documentId = randomUUID();
     const versionId = randomUUID();
     await this.scanForMalware('document.upload', checked);
@@ -178,14 +209,18 @@ export class DocumentsService {
       await this.storeVersion(tx, actor, documentId, versionId, 1, checked);
       await this.audit.record({
         action: 'document.upload', outcome: 'ALLOWED', targetType: 'document', targetId: documentId, documentId,
-        details: { title: meta.title, category: meta.category, versionNo: 1, fileName: checked.fileName, mimeType: checked.type.mime, sizeBytes: checked.buffer.length, sha256: checked.hash.toString('hex') },
+        details: { title: meta.title, category: meta.category, versionNo: 1, ...this.storedDetails(checked) },
       }, tx);
-      return { id: documentId };
+      return { id: documentId, sanitized: checked.removed ? { removed: checked.removed } : null };
     });
   }
 
   async addVersion(actor: Actor, id: string, file: UploadedFile | undefined) {
-    const checked = await this.checkFile(file);
+    // Permission first (refused and audited by AccessService), so someone
+    // with no access cannot use the checker, or write refused-upload rows
+    // into this document's history. Checked again below under the lock.
+    await this.prisma.asUser(actor.userId, (tx) => this.access.require(tx, actor, id, 'upload_version'));
+    const checked = await this.checkFile('document.upload_version', file, id);
     return this.prisma.asUser(actor.userId, async (tx) => {
       await this.access.require(tx, actor, id, 'upload_version');
       // Scanned only after the permission check, so the scanner is not an
@@ -199,9 +234,9 @@ export class DocumentsService {
       await tx.document.update({ where: { id }, data: { currentVersionNo: versionNo } });
       await this.audit.record({
         action: 'document.upload_version', outcome: 'ALLOWED', targetType: 'document', targetId: id, documentId: id,
-        details: { versionNo, fileName: checked.fileName, mimeType: checked.type.mime, sizeBytes: checked.buffer.length, sha256: checked.hash.toString('hex') },
+        details: { versionNo, ...this.storedDetails(checked) },
       }, tx);
-      return { versionNo };
+      return { versionNo, sanitized: checked.removed ? { removed: checked.removed } : null };
     });
   }
 
@@ -422,41 +457,128 @@ export class DocumentsService {
 
   // ---------------------------------------------------------------- helpers
 
-  /** The content check runs in a worker thread with heap and time limits (content-inspector.ts). */
-  private async checkFile(file: UploadedFile | undefined) {
-    if (!file || !file.buffer?.length) throw new BadRequestException('Choose a file to upload');
+  /**
+   * Audit row for a refused upload or new-version attempt (THREATS.md A-row
+   * on refused uploads). Written outside any transaction, so it is kept
+   * although the request fails, and marks the request as audited so the
+   * error filter and the upload interceptor do not write a second row.
+   * Bounded: details are clipped, and at most UPLOAD_REFUSAL_AUDIT_LIMIT
+   * rows per person per 10 minutes (one 'refusal_audit_suppressed' row
+   * marks where the bound cut in). Never throws.
+   */
+  async recordUploadRefusal(input: {
+    action: UploadAction; reason: string; message: string; outcome?: 'DENIED' | 'FAILED';
+    file?: { buffer?: Buffer; originalname?: string; size?: number } | undefined; sizeBytes?: number | undefined;
+    documentId?: string | undefined; extra?: Record<string, string | number | null>;
+  }): Promise<void> {
     try {
-      const type = await inspectUpload(file.buffer, file.originalname);
-      return { buffer: file.buffer, type, fileName: safeFileName(file.originalname, type), hash: sha256(file.buffer) };
+      const userId = currentContext()?.actor?.userId;
+      let reason = input.reason;
+      if (userId) {
+        let count = 0;
+        try {
+          count = (await this.redis.consume(`auditrefusal:upload:${userId}`, 600)).count;
+        } catch (err) {
+          logger.error({ err }, 'refused-upload audit bound unavailable; recording anyway');
+        }
+        if (count > UPLOAD_REFUSAL_AUDIT_LIMIT + 1) { markRefusalAudited(); return; }
+        if (count === UPLOAD_REFUSAL_AUDIT_LIMIT + 1) reason = 'refusal_audit_suppressed';
+      }
+      const buf = input.file?.buffer;
+      await this.audit.record({
+        action: input.action, outcome: input.outcome ?? 'DENIED', reason, targetType: 'document',
+        ...(input.documentId ? { targetId: input.documentId, documentId: input.documentId } : {}),
+        details: {
+          fileName: input.file?.originalname ? clip(input.file.originalname, 200) : null,
+          sizeBytes: buf?.length ?? input.file?.size ?? input.sizeBytes ?? null,
+          sha256: buf?.length ? sha256(buf).toString('hex') : null,
+          message: clip(input.message, 300),
+          ...(reason === 'refusal_audit_suppressed' ? { refusedReason: input.reason, limitPer10Minutes: UPLOAD_REFUSAL_AUDIT_LIMIT } : {}),
+          ...(input.extra ?? {}),
+        },
+      });
+      markRefusalAudited();
     } catch (err) {
-      if (err instanceof RejectedFile) throw new BadRequestException(err.message);
+      logger.error({ err }, 'failed to audit a refused upload');
+    }
+  }
+
+  /**
+   * The content check (and for PDFs the rebuild) runs in a worker thread
+   * with heap and time limits (content-inspector.ts). Every refusal is
+   * audited here, with what was received.
+   */
+  private async checkFile(action: UploadAction, file: UploadedFile | undefined, documentId?: string): Promise<CheckedFile> {
+    if (!file || !file.buffer?.length) {
+      const message = 'Choose a file to upload';
+      await this.recordUploadRefusal({ action, reason: file ? 'empty_file' : 'no_file', message, file, documentId });
+      throw new BadRequestException({ message, code: file ? 'empty_file' : 'no_file' });
+    }
+    try {
+      const result = await inspectUpload(file.buffer, file.originalname);
+      const stored = result.sanitized?.data ?? file.buffer;
+      return {
+        buffer: stored, type: result.type, fileName: safeFileName(file.originalname, result.type), hash: sha256(stored),
+        original: { buffer: file.buffer, hash: sha256(file.buffer) },
+        removed: result.sanitized ? result.sanitized.removed : null,
+      };
+    } catch (err) {
+      if (err instanceof RejectedFile) {
+        await this.recordUploadRefusal({ action, reason: err.code, message: err.message, file, documentId });
+        throw new BadRequestException({ message: err.message, code: err.code });
+      }
+      if (err instanceof ServiceUnavailableException) {
+        await this.recordUploadRefusal({ action, outcome: 'FAILED', reason: 'checker_busy', message: err.message, file, documentId });
+      }
       throw err;
     }
+  }
+
+  /** Audit details of a stored upload: the stored file, and for a rebuilt PDF what was received and what was removed. */
+  private storedDetails(f: CheckedFile) {
+    return {
+      fileName: f.fileName, mimeType: f.type.mime, sizeBytes: f.buffer.length, sha256: f.hash.toString('hex'),
+      ...(f.removed ? {
+        sanitized: {
+          originalSha256: f.original.hash.toString('hex'), originalSizeBytes: f.original.buffer.length,
+          sanitizedSha256: f.hash.toString('hex'), sanitizedSizeBytes: f.buffer.length, removed: f.removed,
+        },
+      } : {}),
+    };
   }
 
   /**
    * Refuses infected files (422) and refuses everything when the scanner
    * cannot answer (503). Both are audited outside any transaction, so the
-   * record survives the failed request.
+   * record survives the failed request. A rebuilt PDF is scanned twice:
+   * as received, and as it will be stored (THREATS.md C11).
    */
-  private async scanForMalware(action: string, f: Awaited<ReturnType<DocumentsService['checkFile']>>, documentId?: string) {
-    const base = { action, targetType: 'document', ...(documentId ? { targetId: documentId, documentId } : {}) };
-    const details = { fileName: f.fileName, sha256: f.hash.toString('hex'), sizeBytes: f.buffer.length, scanner: this.scanner.name };
-    let result;
-    try {
-      result = await this.scanner.scan(f.buffer);
-    } catch (err) {
-      const why = err instanceof ScannerUnavailable ? err.message : 'scanner error';
-      await this.audit.record({ ...base, outcome: 'FAILED', reason: 'malware_scanner_unavailable', details: { ...details, error: why } });
-      throw new ServiceUnavailableException('Uploads are paused: the malware scanner is not available. Try again shortly.');
-    }
-    if (!result.clean) {
-      await this.audit.record({ ...base, outcome: 'DENIED', reason: 'malware_detected', details: { ...details, signature: result.signature } });
-      throw new UnprocessableEntityException('This file was rejected by the malware scanner');
+  private async scanForMalware(action: UploadAction, f: CheckedFile, documentId?: string) {
+    const targets = f.removed ? [{ buffer: f.original.buffer, which: 'original' }, { buffer: f.buffer, which: 'sanitized' }] : [{ buffer: f.buffer, which: 'stored' }];
+    for (const t of targets) {
+      let result;
+      try {
+        result = await this.scanner.scan(t.buffer);
+      } catch (err) {
+        const why = err instanceof ScannerUnavailable ? err.message : 'scanner error';
+        await this.recordUploadRefusal({
+          action, outcome: 'FAILED', reason: 'malware_scanner_unavailable', message: 'The malware scanner is not available',
+          file: { buffer: f.original.buffer, originalname: f.fileName }, documentId, extra: { scanner: this.scanner.name, scanned: t.which, error: why },
+        });
+        throw new ServiceUnavailableException('Uploads are paused: the malware scanner is not available. Try again shortly.');
+      }
+      if (!result.clean) {
+        await this.recordUploadRefusal({
+          action, reason: 'malware_detected', message: 'Rejected by the malware scanner',
+          file: { buffer: f.original.buffer, originalname: f.fileName }, documentId,
+          extra: { scanner: this.scanner.name, scanned: t.which, signature: result.signature ?? null, storedSha256: f.hash.toString('hex') },
+        });
+        throw new UnprocessableEntityException('This file was rejected by the malware scanner');
+      }
     }
   }
 
-  private async storeVersion(tx: Tx, actor: Actor, documentId: string, versionId: string, versionNo: number, f: Awaited<ReturnType<DocumentsService['checkFile']>>) {
+  private async storeVersion(tx: Tx, actor: Actor, documentId: string, versionId: string, versionNo: number, f: CheckedFile) {
     const sealed = await sealFile(this.keys, f.buffer, blobAad(documentId, versionId, versionNo));
     await tx.documentVersion.create({
       data: { id: versionId, documentId, versionNo, fileName: f.fileName, mimeType: f.type.mime, sizeBytes: f.buffer.length, sha256: new Uint8Array(f.hash), uploadedById: actor.userId },

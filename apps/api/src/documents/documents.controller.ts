@@ -19,6 +19,7 @@ import { DownloadApprovalsService } from './download-approvals.service.js';
 import { AccessPolicyService } from './access-policy.service.js';
 import { SharePolicySchema } from './policy-input.js';
 import { DownloadLifecycleService } from '../risk/download-lifecycle.service.js';
+import { UploadRefusalInterceptor } from './upload-refusal.interceptor.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
 
@@ -126,10 +127,14 @@ export class DocumentsController {
     return { categories: await this.docs.categories(actor) };
   }
 
-  /** OWNER role only: upload a new document. */
+  /**
+   * OWNER role only: upload a new document. A PDF is stored as a rebuilt
+   * copy without active content; `sanitized.removed` says what was taken out.
+   */
   @Post()
   @Roles('OWNER')
-  @UseInterceptors(upload)
+  // Outermost first: every refusal, multer's included, is audited (UploadRefusalInterceptor).
+  @UseInterceptors(UploadRefusalInterceptor, upload)
   async create(@CurrentActor() actor: Actor, @UploadedFile() file: File | undefined, @Body(new ZodPipe(CreateSchema)) body: z.infer<typeof CreateSchema>) {
     await this.limits.hit(`upload:${actor.userId}`, 60, 600, 'Too many uploads. Try again in a few minutes.');
     return this.docs.create(actor, file, body);
@@ -149,7 +154,8 @@ export class DocumentsController {
 
   /** EDIT or better: upload a new version. */
   @Post(':id/versions')
-  @UseInterceptors(upload)
+  // Outermost first: every refusal, multer's included, is audited (UploadRefusalInterceptor).
+  @UseInterceptors(UploadRefusalInterceptor, upload)
   async addVersion(@CurrentActor() actor: Actor, @Param('id') id: string, @UploadedFile() file: File | undefined) {
     await this.limits.hit(`upload:${actor.userId}`, 60, 600, 'Too many uploads. Try again in a few minutes.');
     return this.docs.addVersion(actor, docId(id), file);

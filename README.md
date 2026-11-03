@@ -87,7 +87,8 @@ Grants are per document, to named people or to groups. A group share covers the 
 - **The key service decides too**: keyd releases a file key only against a single-use ticket the database issues for that person, version and audit event, and keeps its own signed ledger, reconciled with the audit log every hour (K5-K14).
 - **Insider detection and hard limits**: persistent, reviewable alerts (bulk downloads and page views, unusual hours or networks, coverage of what someone can open), download limits per day and per session, and a recorded download lifecycle (L15-L19, U9-U10).
 - **Sign-in abuse**: nobody can lock someone else out; stuffing and distributed guessing are detected; new devices confirm by email under attack (S27-S29).
-- **Hostile files**: PDFs and Office files checked structurally in a resource-limited worker; CSV formulas neutralised on request; a strict production CSP with browser tests (C1-C8, W1-W8).
+- **Hostile files**: PDFs and Office files checked structurally in a resource-limited worker; every PDF stored as a sanitized copy rebuilt without JavaScript, actions, attachments, multimedia and forms (the uploader is told what was removed; the copy must pass the full check again and is scanned again); CSV formulas neutralised on request; a strict production CSP with browser tests (C1-C11, W1-W8).
+- **Refused uploads are evidence too**: every refused upload or new version (wrong type, too large, polyglot, macros, PDF that could not be made safe, malware, scanner down, rate limit, bad form) leaves a `DENIED`/`FAILED` audit row with the file name, size and SHA-256 of what was received (L22).
 
 ## How it works
 
@@ -168,7 +169,7 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `keyd-tickets.test.ts`, `key-rotation.test.ts` | a file key is released only against a database ticket for that person, version and audit row; the ledger and its reconciliation catch a release without a record; rotation and verification |
 | `insider-detect.test.ts` | persistent alerts and their review history, hard download limits and overrides, the download lifecycle |
 | `auth-abuse.test.ts` | strangers cannot lock an account; credential stuffing and distributed guessing detected; sign-in links; trusted devices |
-| `content-*.test.ts`, `web-security.test.ts`, `e2e/web-security.e2e.ts` | hostile PDFs, Office files, ZIP tricks and polyglots refused in a worker; CSV formulas; headers, CSP and stored XSS in real Chrome |
+| `content-*.test.ts`, `pdf-sanitize.unit.test.ts`, `upload-sanitize.test.ts`, `web-security.test.ts`, `e2e/web-security.e2e.ts` | hostile Office files, ZIP tricks and polyglots refused in a worker; PDFs with active content rebuilt (text, pages and rotation kept; the copy passes the strict check; downloads, stamping and page views work), broken PDFs refused; one audit row per refused upload, per refusal class; CSV formulas; headers, CSP and stored XSS in real Chrome |
 | `timezone.test.ts` | every connection runs in UTC, whatever the database default (a non-UTC default used to end every session) |
 | `integration-attacks.test.ts` | the merged features against each other: View only vs approvals and the Android key, group View vs a direct share's approval, revoke vs approvals/keys/pages, windows on pages, break-glass vs downloads, limits vs approval uses |
 | `tools/verify-audit.test.mjs` | the offline verifier (19 cases): pinned key, no checkpoints, recomputed forged chains, cut-off tails caught through Sigstore or the witness |

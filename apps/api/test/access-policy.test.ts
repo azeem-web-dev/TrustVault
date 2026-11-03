@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MailService } from '../src/mail/mail.service.js';
 import { as, auditRows, createUser, login, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
@@ -74,7 +75,8 @@ describe('downloads that need approval', () => {
     expect(sentTo('vic@ap.io').map((m) => m.subject)).toEqual(['Download approved: “Payroll”']);
 
     const got = await as(t, V).get(`/api/documents/${doc}/download`).expect(200);
-    expect(Buffer.from(got.body).equals(PDF)).toBe(true);
+    // The stored copy (a PDF is stored rebuilt, THREATS.md C9), sent unchanged: a page-less PDF has nothing to stamp.
+    expect(createHash('sha256').update(Buffer.from(got.body)).digest('hex')).toBe(got.headers['x-document-sha256']);
     expect((await as(t, V).get(`/api/documents/${doc}/download`).expect(403)).body.code).toBe('approval_required');
 
     const rows = await auditRows(`document_id = $1 AND occurred_at >= $2 AND (action LIKE 'download_approval.%' OR action = 'document.download')`, [doc, since]);

