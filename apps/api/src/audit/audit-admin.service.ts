@@ -230,12 +230,17 @@ export class AuditAdminService {
            AND r.action IN ('user.password_reset', 'user.mfa_reset') AND r.outcome = 'ALLOWED'
          ORDER BY l.seq DESC LIMIT 20`,
     ]);
+    // keyd's ledger disagrees with the audit log, or does not verify (THREATS.md K5-K8).
+    const keyLedger = await this.prisma.$queryRaw<{ occurred_at: Date; action: string; reason: string | null; details: { critical?: number; problems?: string[]; findings?: { message: string }[] } | null }[]>`
+      SELECT occurred_at, action, reason, details FROM audit_events
+       WHERE occurred_at >= ${since} AND action IN ('keyd.reconcile', 'keyd.ledger') AND outcome = 'FAILED' ORDER BY seq DESC LIMIT 20`;
     const titles = await this.titles([...afterRevoke, ...externalGrants, ...breakGlass, ...integrity, ...malware].map((r) => r.document_id).filter((x): x is string => Boolean(x)));
     const num = (v: bigint) => Number(v);
     const t = (id: string | null) => (id ? (titles.get(id) ?? null) : null);
     return {
       windowHours: hours,
       alerts: [
+        ...keyLedger.map((r) => ({ severity: 'critical', kind: 'key_ledger_mismatch', at: r.occurred_at, message: r.action === 'keyd.ledger' ? `The key service ledger did not verify: ${(r.details?.problems ?? []).join('; ')}` : `${r.details?.critical ?? '?'} key release(s) do not match the audit log: ${(r.details?.findings ?? []).slice(0, 3).map((f) => f.message).join('; ')}`, details: r.details })),
         ...verifyFailures.map((r) => ({ severity: 'critical', kind: 'audit_verification_failed', at: r.occurred_at, message: 'Audit chain verification failed', details: r.details })),
         ...integrity.map((r) => ({ severity: 'critical', kind: 'file_integrity', at: r.occurred_at, message: `A stored file failed its integrity check (${r.reason})`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...malware.map((r) => ({ severity: 'critical', kind: 'malware_found', at: r.occurred_at, message: `Malware (${r.signature ?? '?'}) found in a stored file, version ${r.version_no ?? '?'}; that version is quarantined`, documentId: r.document_id, documentTitle: t(r.document_id) })),
