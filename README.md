@@ -8,7 +8,7 @@ A document platform where the wrong person can never read the file, and you can 
 
 | Role | Email | Password | What to try |
 |---|---|---|---|
-| Admin | `admin@demo.com` | `admin1234567` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity, break-glass. |
+| Admin | `admin@demo.com` | `admin1234567` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity. Break-glass and clearing an owner's second factor need a second admin's approval; the demo has one admin, so they say so (THREATS.md S19). |
 | Owner | `olivia@demo.com` | `owner1234567` | Owns five documents shared in different ways. Share, revoke, see history. |
 | Owner | `oscar@demo.com` | `owner1234567` | Owns *Architecture review* (Engineering group can edit, Olivia can manage). |
 | Viewer | `victor@demo.com` | `viewer123456` | Sees 3 documents (one direct, two through groups). Try to reach *Salary bands 2026*. |
@@ -24,7 +24,7 @@ Demo accounts cannot reset their password and never receive email: their address
 
 | Role | Can | Cannot |
 |---|---|---|
-| Admin | Manage users and groups. See the audit log and alerts, verify integrity, export evidence. Break-glass: a written reason of at least 20 characters gives one hour of READ on one document; it is alerted and shown in that document's history. | Open, download or upload documents (except READ through break-glass). Be given access to a document. Join a group. Change the protected demo accounts. |
+| Admin | Manage users and groups. See the audit log and alerts, verify integrity, export evidence. Send a password reset link (never set a password). Break-glass: ask with a written reason of at least 20 characters; once a **second** admin approves, one hour of READ on one document, alerted, emailed to the owner and shown in that document's history. Clearing an owner's or admin's second factor also needs a second admin (Approvals page). | Open, download or upload documents (except READ through approved break-glass). Set anyone's password. Approve their own request. Be given access to a document. Join a group. Change the protected demo accounts. |
 | Owner | Upload documents. On their own documents: share (READ, EDIT or MANAGE), revoke, edit, upload new versions, move to folders, trash, restore, delete permanently, transfer ownership. | Be moved to another role while they own documents. |
 | Viewer | Use what they are granted. READ: view and download. EDIT: also rename, describe and upload new versions. MANAGE: also share READ or EDIT, revoke, and see who has access and the history. | Upload new documents. Give MANAGE. |
 | External | READ only, and only on grants with an expiry, until their account's end date. | Get access through a group. Anything above READ. |
@@ -112,6 +112,7 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `revocation-holes.test.ts` | admins never read through groups or grants; a group share reaches people added later only after the owner confirms; revoke and transfer say when a group still gives access; role changes, break-glass limits and ended sessions are enforced and recorded |
 | `refusal-audit.test.ts` | refusals before the access check (bad body, bad version number, malformed id) and the guard's second-factor and foreign-Origin refusals are recorded, and no refusal is recorded twice |
 | `download-order.test.ts` | a download and a revoke (or share change, group removal, role change, deactivation, ended session, expiry) never interleave: real requests paused on the real locks, the log always in decision order, downloads still parallel, no deadlock under a burst |
+| `approvals.test.ts` | two admins for break-glass and for clearing an owner's or admin's second factor: one admin alone cannot, nobody approves their own request (API and direct SQL), an approval works once, for its own target, within 24 hours; rejected and expired requests recorded; owners emailed |
 | `email.test.ts` | password reset links reveal nothing, work once, expire, are built from the configured site and end every session; admins send links and never see passwords; notices for sign-ins, password and second-factor changes, and shares; demo accounts never get mail |
 | `invite.test.ts` | accounts by invitation: no admin-chosen password, invited accounts can do nothing, links work once, expire, are built from the configured site and never work as reset links (or the reverse); resend and cancel; reactivating a never-accepted account keeps it invited |
 | `checkpoint-guard.test.ts` | the database accepts an audit checkpoint only for a real event with the same hash, and only moving forward |
