@@ -25,14 +25,21 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [linkSent, setLinkSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setLinkSent(null);
     try {
-      const { mfaRequired } = await signIn(email, password);
+      const { mfaRequired, linkSent: sent } = await signIn(email, password);
+      if (sent) {
+        setLinkSent(sent);
+        setPassword('');
+        return;
+      }
       router.replace(mfaRequired ? '/login/mfa' : '/');
     } catch (err) {
       setError(errorText(err, 'Could not reach the server'));
@@ -74,6 +81,7 @@ export default function LoginPage() {
           </button>
         </div>
         {error && <Alert>{error}</Alert>}
+        {linkSent && <Alert tone="blue" title="Check your email">{linkSent}</Alert>}
         <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
           {busy ? 'Signing in…' : <>Sign in <ArrowRight size={16} weight="bold" /></>}
         </Button>
@@ -88,7 +96,7 @@ export default function LoginPage() {
               <button
                 key={d.email}
                 type="button"
-                onClick={() => { setEmail(d.email); setPassword(d.password); setError(null); }}
+                onClick={() => { setEmail(d.email); setPassword(d.password); setError(null); setLinkSent(null); }}
                 className={cx(
                   'group flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition',
                   picked ? 'border-brand-400 bg-brand-50 ring-4 ring-brand-500/10 dark:border-brand-400/60 dark:bg-brand-500/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-soft dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20',

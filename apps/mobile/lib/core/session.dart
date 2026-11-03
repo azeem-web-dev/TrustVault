@@ -65,6 +65,9 @@ class Session extends ChangeNotifier {
 
   Future<void> signIn(String email, String password) async {
     final r = await Api.I.post('/auth/login', {'email': email, 'password': password}) as Map;
+    // The account has had many failed sign-ins and this phone is new to it:
+    // the person finishes from the emailed link instead (THREATS.md S19).
+    if (r['signInLinkSent'] == true) throw ApiError(202, r['message'] is String ? r['message'] as String : 'Check your email to finish signing in.');
     user = User.fromJson(r['user'] as Map);
     mfaPending = r['mfaRequired'] == true;
     mfaEnrolled = r['mfaEnrolled'] == true;

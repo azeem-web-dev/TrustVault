@@ -35,11 +35,16 @@ class Api {
   static const origin = String.fromEnvironment('TV_ORIGIN', defaultValue: 'https://vault.rayyanazeem.cloud');
   static const base = '$origin/api';
   static const _cookieName = '__Host-tv_session';
+  /// "This phone signed in to this account before": lets the owner past the
+  /// per-account throttle a stranger can trigger by guessing (THREATS.md
+  /// S19). Not a credential; kept across sign-outs, like a browser cookie.
+  static const _deviceCookieName = '__Host-tv_device';
   static const _userAgent = 'TrustVault Android app';
 
   final _store = const FlutterSecureStorage();
   final _client = http.Client();
   String? _session;
+  String? _device;
   String? csrfToken;
 
   /// Set by the session layer.
@@ -49,6 +54,7 @@ class Api {
   Future<void> init() async {
     try {
       _session = await _store.read(key: 'session');
+      _device = await _store.read(key: 'device');
     } catch (_) {
       _session = null;
     }
@@ -68,13 +74,21 @@ class Api {
     'Accept': 'application/json',
     'User-Agent': _userAgent,
     if (json) 'Content-Type': 'application/json',
-    if (_session != null) 'Cookie': '$_cookieName=$_session',
+    if (_session != null || _device != null)
+      'Cookie': [if (_session != null) '$_cookieName=$_session', if (_device != null) '$_deviceCookieName=$_device'].join('; '),
     if (method != 'GET' && csrfToken != null) 'X-CSRF-Token': csrfToken!,
   };
 
   Future<void> _captureCookie(http.BaseResponse res) async {
     final raw = res.headers['set-cookie'];
     if (raw == null) return;
+    final d = RegExp('$_deviceCookieName=([^;,]*)').firstMatch(raw);
+    if (d != null && (d.group(1) ?? '').isNotEmpty && d.group(1) != _device) {
+      _device = d.group(1);
+      try {
+        await _store.write(key: 'device', value: _device!);
+      } catch (_) {}
+    }
     final m = RegExp('$_cookieName=([^;,]*)').firstMatch(raw);
     if (m == null) return;
     final value = m.group(1) ?? '';
