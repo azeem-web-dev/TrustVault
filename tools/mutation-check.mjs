@@ -76,7 +76,7 @@ const MUTATIONS = [
   code('mfa: a TOTP code works only once', 'src/auth/mfa.service.ts',
     'AND (totp_last_step IS NULL OR totp_last_step < ${step})', '', ['test/admin-mfa.test.ts']),
   code('uploads: PDFs with JavaScript refused', 'src/documents/content-check.ts',
-    'if (/\\/(JavaScript|JS|Launch|EmbeddedFile|RichMedia)\\b/.test(text)) {', 'if (false) {', ['test/documents.test.ts']),
+    'if (/\\/(JavaScript|JS|Launch|EmbeddedFile|RichMedia)\\b/.test(text)) {', 'if (false) {', ['test/documents.test.ts', 'test/content-check.unit.test.ts']),
   code('users: protected demo accounts cannot be changed', 'src/users/users.service.ts',
     "if (u.isProtected) throw new ForbiddenException('This is a protected demo account and cannot be changed');", '',
     ['test/admin-mfa.test.ts']),
