@@ -1,0 +1,98 @@
+name: Android release build
+
+# Builds a ready-to-install APK and a Play-ready AAB for the TrustVault
+# Android app (apps/mobile) and keeps them as downloadable workflow artifacts.
+#
+# Signing: if the four ANDROID_* repository secrets are set, the release is
+# signed with the owner's upload key; otherwise it is debug-signed (installable
+# for testing). The keystore and passwords never live in git. Play Console
+# upload and app signing stay the owner's step. See docs/ANDROID_RELEASE.md.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/android-release.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed APK + AAB
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.47.9
+          channel: stable
+          cache: true
+
+      # Wire up real signing only when the secrets exist. Writing key.properties
+      # makes android/app/build.gradle.kts use the release signingConfig; without
+      # it, the build falls back to the debug key (still installable).
+      - name: Configure release signing (only if secrets are set)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Signing secrets present: configuring release keystore."
+            keystore="$GITHUB_WORKSPACE/apps/mobile/android/app/upload-keystore.jks"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
+            {
+              echo "storeFile=$keystore"
+              echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+              echo "keyAlias=$ANDROID_KEY_ALIAS"
+              echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            } > android/key.properties
+          else
+            echo "No signing secrets: the release build will be debug-signed."
+          fi
+
+      - name: Dependencies (exactly as locked)
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Unit and widget tests (fake API, no network)
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Build release App Bundle (AAB)
+        run: flutter build appbundle --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustvault-apk
+          path: apps/mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustvault-aab
+          path: apps/mobile/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 90
+
+      # Never let a signing keystore or its passwords linger in the workspace.
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/key.properties android/app/upload-keystore.jks
