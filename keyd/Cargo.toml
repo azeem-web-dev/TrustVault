@@ -2,13 +2,14 @@
 name = "tvkeyd"
 version = "0.1.0"
 edition = "2021"
-description = "TrustVault key service: holds the master key, wraps data keys and signs audit checkpoints over a Unix socket"
+description = "TrustVault key service: holds the master keys, unwraps data keys only against database-issued tickets, keeps a signed key-use ledger and signs audit checkpoints over a Unix socket"
 license = "MIT"
 publish = false
 
 [dependencies]
 aes-gcm = "0.10"
 hkdf = "0.12"
+hmac = "0.12"
 sha2 = "0.10"
 ed25519-dalek = "2"
 rand_core = { version = "0.6", features = ["getrandom"] }
