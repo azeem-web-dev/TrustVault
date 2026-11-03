@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
 import { detectType } from '../src/documents/content-check.js';
-import { INSPECTOR_LIMITS, inspectUpload, stopInspector } from '../src/documents/content-inspector.js';
+import { INSPECTOR_LIMITS, inspectUpload, stallForTest, stopInspector } from '../src/documents/content-inspector.js';
 import { looksLikeZip, ZIP_LIMITS } from '../src/documents/zip-inspect.js';
 import * as B from './fixtures/hostile/build.js';
 import { PDF } from './helpers.js';
@@ -133,7 +133,7 @@ describe('PDF: structural inspection (pdf-lib, inside compressed object streams)
     const many = Array.from({ length: 200_001 }, (_, i) => ({ num: 10 + i, body: 'null' }));
     const p = B.pdf({ extra: [B.objStm(4, many)] });
     expect(await refused(p, 'x.pdf')).toBe('The PDF has too many objects to check');
-  }, 60_000);
+  }, 180_000);
 
   it('accepts ordinary PDFs: links to web pages, internal go-to, compressed object and xref streams', async () => {
     expect(await accepted(PDF, 'a.pdf')).toBe('pdf');
@@ -290,24 +290,43 @@ describe('Office active content', () => {
 });
 
 describe('the worker pool: isolation and limits', () => {
-  it('checks files off the main thread; the API thread keeps running during a heavy check', async () => {
-    const many = Array.from({ length: 150_000 }, (_, i) => ({ num: 10 + i, body: '<</A[1 2 3]/B(x)>>' }));
-    const heavy = B.pdf({ extra: [B.objStm(4, many)] });
-    let ticks = 0;
-    const timer = setInterval(() => { ticks++; }, 5);
-    const t0 = Date.now();
-    expect((await inspectUpload(heavy, 'heavy.pdf')).ext).toBe('pdf');
-    const elapsed = Date.now() - t0;
-    clearInterval(timer);
-    // The main thread was free: the timer fired at a steady rate throughout.
-    expect(ticks).toBeGreaterThan(elapsed / 5 / 4);
-  }, 60_000);
+  it('checks files off the main thread: the API thread keeps running while a worker is stuck', async () => {
+    // Deterministic: the worker spins forever. Were the check on this
+    // thread, the timer below could never fire before the deadline.
+    const saved = INSPECTOR_LIMITS.timeoutMs;
+    INSPECTOR_LIMITS.timeoutMs = 3000;
+    try {
+      const events: string[] = [];
+      const stuck = stallForTest().catch((e: Error) => { events.push('deadline'); return e; });
+      await new Promise((r) => setTimeout(r, 100));
+      events.push('timer');
+      expect(((await stuck) as Error).message).toBe('The file took too long to check and was not accepted');
+      expect(events).toEqual(['timer', 'deadline']);
+    } finally {
+      INSPECTOR_LIMITS.timeoutMs = saved;
+    }
+  });
+
+  it('a large but ordinary file passes through the worker', async () => {
+    const saved = INSPECTOR_LIMITS.timeoutMs;
+    INSPECTOR_LIMITS.timeoutMs = 120_000; // a loaded CI machine must not turn this into a time-out
+    try {
+      const many = Array.from({ length: 150_000 }, (_, i) => ({ num: 10 + i, body: '<</A[1 2 3]/B(x)>>' }));
+      expect((await inspectUpload(B.pdf({ extra: [B.objStm(4, many)] }), 'heavy.pdf')).ext).toBe('pdf');
+    } finally {
+      INSPECTOR_LIMITS.timeoutMs = saved;
+    }
+  }, 180_000);
 
   it('a file that takes too long is refused and its worker replaced', async () => {
+    // The worker spins forever (deterministic, unlike a slow input on a
+    // loaded machine); a short deadline keeps the test quick.
     const saved = INSPECTOR_LIMITS.timeoutMs;
-    INSPECTOR_LIMITS.timeoutMs = 1;
+    INSPECTOR_LIMITS.timeoutMs = 300;
     try {
-      await expect(inspectUpload(B.pdf(), 'slow.pdf')).rejects.toThrow('The file took too long to check and was not accepted');
+      const t0 = Date.now();
+      await expect(stallForTest()).rejects.toThrow('The file took too long to check and was not accepted');
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
     } finally {
       INSPECTOR_LIMITS.timeoutMs = saved;
     }
@@ -318,15 +337,18 @@ describe('the worker pool: isolation and limits', () => {
     const saved = INSPECTOR_LIMITS.heapMb;
     await stopInspector();
     INSPECTOR_LIMITS.heapMb = 24;
+    const savedTimeout = INSPECTOR_LIMITS.timeoutMs;
+    INSPECTOR_LIMITS.timeoutMs = 120_000; // out of memory, not out of time, even on a loaded machine
     try {
       const many = Array.from({ length: 190_000 }, (_, i) => ({ num: 10 + i, body: '<</A[1 2 3 4 5 6 7 8]/B(xxxxxxxxxxxxxxxx)/C<</D 1>>>>' }));
       await expect(inspectUpload(B.pdf({ extra: [B.objStm(4, many)] }), 'big.pdf')).rejects.toThrow('The file needs too much memory to check and was not accepted');
     } finally {
       INSPECTOR_LIMITS.heapMb = saved;
+      INSPECTOR_LIMITS.timeoutMs = savedTimeout;
       await stopInspector();
     }
     expect((await inspectUpload(B.pdf(), 'next.pdf')).ext).toBe('pdf');
-  }, 60_000);
+  }, 180_000);
 
   it('refusals inside the worker come back as refusals, not crashes', async () => {
     await expect(inspectUpload(compressed(JS_ACTION, { catalogExtra: '/OpenAction 5 0 R' }), 'x.pdf')).rejects.toThrow('PDFs containing JavaScript are not accepted');

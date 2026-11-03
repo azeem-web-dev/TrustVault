@@ -22,6 +22,8 @@ interface Pending {
   id: number;
   data: Buffer;
   name: string;
+  /** Tests only (stallForTest): the worker spins instead of checking. */
+  stall?: boolean;
   resolve: (t: DetectedType) => void;
   reject: (e: Error) => void;
 }
@@ -99,7 +101,7 @@ function pump(): void {
       job.reject(new RejectedFile('The file took too long to check and was not accepted'));
       pump();
     }, INSPECTOR_LIMITS.timeoutMs);
-    slot.worker.postMessage({ id: job.id, data: job.data, name: job.name });
+    slot.worker.postMessage({ id: job.id, data: job.data, name: job.name, stall: job.stall === true });
   }
 }
 
@@ -110,6 +112,18 @@ export function inspectUpload(data: Buffer, name: string): Promise<DetectedType>
   }
   return new Promise((resolve, reject) => {
     queue.push({ id: nextId++, data, name, resolve, reject });
+    pump();
+  });
+}
+
+/**
+ * For tests: a job whose worker busy-loops forever, so the deadline path
+ * (terminate, refuse, replace the worker) is exercised deterministically
+ * whatever the machine load. Not reachable through inspectUpload().
+ */
+export function stallForTest(): Promise<DetectedType> {
+  return new Promise((resolve, reject) => {
+    queue.push({ id: nextId++, data: Buffer.alloc(0), name: 'stall', stall: true, resolve, reject });
     pump();
   });
 }

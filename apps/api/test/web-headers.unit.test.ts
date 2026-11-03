@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Loaded by path at run time: the web app is a separate TypeScript project.
 const WEB_PROXY: string = new URL('../../web/src/proxy.ts', import.meta.url).href;
 const NEXT_SERVER: string = 'next/server';
@@ -11,6 +11,13 @@ const { config, proxy } = (await import(WEB_PROXY)) as { config: { matcher: unkn
 // checks the same headers on the real production build. THREATS.md W2, W3.
 
 const run = (path = '/') => proxy(new NextRequest(`https://vault.test${path}`));
+
+// The proxy reads NODE_ENV on every request. Pin production here: a
+// developer's .env (NODE_ENV=development, loaded by tools/mutation-check.mjs)
+// must not turn this into a test of the development policy.
+const savedNodeEnv = process.env.NODE_ENV;
+beforeAll(() => { (process.env as Record<string, string>).NODE_ENV = 'production'; });
+afterAll(() => { (process.env as Record<string, string | undefined>).NODE_ENV = savedNodeEnv; });
 const directives = (csp: string) => new Map(csp.split(';').map((d) => d.trim()).filter(Boolean).map((d) => [d.split(' ')[0]!, d.split(' ').slice(1)]));
 
 describe('page headers from the Next.js proxy (production mode)', () => {

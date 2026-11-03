@@ -6,9 +6,11 @@
 import { parentPort } from 'node:worker_threads';
 import { detectType, RejectedFile } from './content-check.js';
 
-interface Job { id: number; data: Uint8Array; name: string }
+interface Job { id: number; data: Uint8Array; name: string; stall?: boolean }
 
 parentPort!.on('message', async (job: Job) => {
+  // Tests only (stallForTest): spin until the parent's deadline terminates us.
+  if (job.stall) for (;;) { /* busy */ }
   try {
     const type = await detectType(Buffer.from(job.data.buffer, job.data.byteOffset, job.data.byteLength), job.name);
     parentPort!.postMessage({ id: job.id, ok: true, type });
