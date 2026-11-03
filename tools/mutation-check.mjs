@@ -569,8 +569,11 @@ async function runSql(statement) {
 function runTests(files) {
   const r = spawnSync('npx', ['vitest', 'run', ...files], { cwd: API, shell: process.platform === 'win32', encoding: 'utf8', env: process.env });
   // Strip colour codes first: vitest colours the "Tests N passed" line.
-  const summary = (r.stdout + r.stderr).replace(/\u001b\[[0-9;]*m/g, '').split('\n').find((l) => /Tests\s+\d/.test(l))?.trim().replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ') ?? '(no summary)';
-  return { failed: r.status !== 0, summary };
+  const lines = (r.stdout + r.stderr).replace(/\u001b\[[0-9;]*m/g, '').split('\n');
+  const summary = lines.find((l) => /Tests\s+\d/.test(l))?.trim().replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ') ?? '(no summary)';
+  // Which tests failed, and the first lines of why (shown when the baseline is not green).
+  const failures = lines.filter((l) => /^\s*(FAIL|AssertionError|Error:)/.test(l)).slice(0, 20).map((l) => l.trim());
+  return { failed: r.status !== 0, summary, failures };
 }
 
 const restore = new Map();
@@ -598,6 +601,7 @@ async function main() {
   const baseline = runTests([]);
   if (baseline.failed) {
     console.error(`baseline is not green (${baseline.summary}); fix the tests first`);
+    for (const l of baseline.failures) console.error(`  ${l}`);
     process.exit(2);
   }
   console.log(`baseline green: ${baseline.summary}\n`);
