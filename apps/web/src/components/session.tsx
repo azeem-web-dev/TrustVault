@@ -26,7 +26,7 @@ interface SessionState {
 }
 
 const SessionContext = createContext<SessionState | null>(null);
-const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite', '/signin-link'];
+const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite', '/signin-link', '/privacy', '/delete-account'];
 
 /**
  * Knows who is signed in, for display only. Hiding a link here is a
