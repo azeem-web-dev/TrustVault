@@ -29,7 +29,7 @@ concurrency:
 jobs:
   witness:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - name: Check out the witness tool (main)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -44,7 +44,24 @@ jobs:
           path: log
 
       - name: Witness
-        run: node main/tools/witness.mjs --url https://vault.rayyanazeem.cloud --dir log
+        # Retry only transient GitHub->server network errors (timeout, 5xx, DNS).
+        # A real integrity failure prints "WITNESS ALARM" and must fail at once,
+        # loud, so a transient timeout is never mistaken for an audit alarm.
+        run: |
+          for attempt in 1 2 3; do
+            if out=$(node main/tools/witness.mjs --url https://vault.rayyanazeem.cloud --dir log 2>&1); then
+              echo "$out"; exit 0
+            fi
+            echo "$out"
+            if echo "$out" | grep -q 'WITNESS ALARM'; then
+              echo "integrity alarm — failing immediately, not retrying."; exit 1
+            fi
+            if echo "$out" | grep -qiE 'aborted|time(d)? ?out|fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket hang|answered 5[0-9][0-9]'; then
+              echo "transient network error (attempt $attempt/3); retrying in 20s..."; sleep 20; continue
+            fi
+            echo "non-transient failure — not retrying."; exit 1
+          done
+          echo "still failing after 3 attempts."; exit 1
 
       - name: Commit new checkpoints
         working-directory: log
