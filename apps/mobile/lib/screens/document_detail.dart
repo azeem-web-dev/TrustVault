@@ -25,6 +25,8 @@ class DocumentDetailScreen extends StatefulWidget {
 class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   Map? _doc;
   bool _notFound = false;
+  // A share that exists but does not apply right now (time window, network).
+  String? _policyBlock;
   String? _error;
   String _tab = 'overview';
 
@@ -42,6 +44,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       if (!mounted) return;
       if (e.status == 404) {
         setState(() => _notFound = true);
+      } else if (e.status == 403 && (e.code == 'outside_time_window' || e.code == 'network_not_allowed')) {
+        setState(() => _policyBlock = e.message);
       } else {
         setState(() => _error = e.message);
       }
@@ -102,6 +106,23 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   }
 
   Widget _body(BuildContext context, Pal p) {
+    if (_policyBlock != null) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          TvCard(
+            padded: false,
+            child: EmptyState(
+              icon: PhosphorIconsDuotone.lockKey,
+              tone: Tone.amber,
+              title: 'Not available right now',
+              body: '$_policyBlock. The owner set this condition on your share; if you need it now, ask them for a temporary exception.',
+              action: Btn('Back to documents', icon: PhosphorIconsBold.arrowLeft, onPressed: () => Navigator.pop(context)),
+            ),
+          ),
+        ],
+      );
+    }
     if (_notFound) {
       return ListView(
         padding: const EdgeInsets.all(16),
@@ -231,6 +252,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                       const SizedBox(height: 16),
                       current['quarantine'] != null
                           ? const Btn('Download blocked', icon: PhosphorIconsDuotone.prohibit, expand: true, onPressed: null)
+                          : doc['downloadNeedsApproval'] == true
+                          ? _ApprovalDownload(docId: doc['id'] as String, versionNo: current['versionNo'] as int, fileName: current['fileName'] as String)
                           : Btn(
                               'Download  ·  ${current['fileName']}',
                               variant: BtnVariant.primary,
@@ -688,7 +711,7 @@ class _VersionsState extends State<_Versions> {
                       'Download',
                       size: BtnSize.sm,
                       icon: PhosphorIconsDuotone.downloadSimple,
-                      onPressed: () => downloadAndOpen(context, '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download', fallbackName: v['fileName'] as String),
+                      onPressed: widget.doc['downloadNeedsApproval'] == true ? null : () => downloadAndOpen(context, '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download', fallbackName: v['fileName'] as String),
                     ),
             ],
           ),
@@ -743,6 +766,10 @@ class _AccessPanelState extends State<_AccessPanel> {
   ({String type, String id, String label, bool external})? _target;
   String _level = 'READ';
   String _expires = '';
+  // Conditions on the share (THREATS.md P1-P12). The web app also offers networks.
+  bool _needsApproval = false;
+  bool _workHours = false;
+  final _zone = TextEditingController(text: 'UTC');
 
   String get _docId => widget.doc['id'] as String;
 
@@ -793,7 +820,13 @@ class _AccessPanelState extends State<_AccessPanel> {
   Future<void> _share(Map<String, String> subject, String lvl, String? expiresAt, {bool fromSuggestion = false, String label = ''}) async {
     widget.onError(null);
     try {
-      await Api.I.put('/documents/$_docId/access', {...subject, 'level': lvl, 'expiresAt': expiresAt, 'fromSuggestion': fromSuggestion});
+      final policy = (_needsApproval || _workHours) && !fromSuggestion
+          ? {
+              'downloadApproval': _needsApproval,
+              if (_workHours) 'window': {'days': [1, 2, 3, 4, 5], 'start': '09:00', 'end': '18:00', 'timeZone': _zone.text.trim()},
+            }
+          : null;
+      await Api.I.put('/documents/$_docId/access', {...subject, 'level': lvl, 'expiresAt': expiresAt, 'fromSuggestion': fromSuggestion, 'policy': ?policy});
       if (!mounted) return;
       toast(
         context,
@@ -807,6 +840,8 @@ class _AccessPanelState extends State<_AccessPanel> {
         _target = null;
         _query.clear();
         _expires = '';
+        _needsApproval = false;
+        _workHours = false;
         _users = [];
         _groups = [];
         final id = subject['userId'] ?? subject['groupId'];
@@ -976,6 +1011,22 @@ class _AccessPanelState extends State<_AccessPanel> {
                   ),
                 ),
               ),
+              gap8,
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _needsApproval,
+                onChanged: (v) => setState(() => _needsApproval = v ?? false),
+                title: Text('Downloads need my approval', style: ts(context, size: 14, w: FontWeight.w500)),
+                subtitle: Text('They can read the details; each download waits for you.', style: ts(context, size: 12, color: p.muted)),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _workHours,
+                onChanged: (v) => setState(() => _workHours = v ?? false),
+                title: Text('Only Mon–Fri 09:00–18:00', style: ts(context, size: 14, w: FontWeight.w500)),
+                subtitle: Text('Local time in the zone below, daylight saving included.', style: ts(context, size: 12, color: p.muted)),
+              ),
+              if (_workHours) TextField(controller: _zone, decoration: fieldDeco(hint: 'Time zone, e.g. Europe/London')),
               gap16,
               Btn(
                 'Share',
@@ -1123,6 +1174,7 @@ class _AccessPanelState extends State<_AccessPanel> {
             child: TvBadge('${s['pending']} waiting · tap to confirm', tone: Tone.amber, icon: PhosphorIconsDuotone.userPlus),
           ),
         if (!isGroup && s['active'] == false) const TvBadge('Inactive', tone: Tone.red),
+        ..._conditionBadges(g['policy'] as Map?),
       ],
     );
   }
@@ -1436,3 +1488,100 @@ class _OwnerActionsState extends State<_OwnerActions> {
 }
 
 String _levelWord(String level) => const {'READ': 'read', 'EDIT': 'edit', 'MANAGE': 'manage', 'OWNER': 'own'}[level] ?? 'open';
+
+/* ------------------------------------------------------ access policies */
+
+List<Widget> _conditionBadges(Map? policy) {
+  if (policy == null) return const [];
+  final w = policy['window'] as Map?;
+  final nets = policy['networks'] as List?;
+  return [
+    if (policy['downloadApproval'] == true) const TvBadge('Downloads need approval', tone: Tone.amber),
+    if (w != null) TvBadge('${w['start']}–${w['end']} ${w['timeZone']}', tone: Tone.blue),
+    if (nets != null) TvBadge(nets.length == 1 ? nets.first as String : '${nets.length} networks', tone: Tone.violet),
+  ];
+}
+
+/// For a share whose downloads need approval: ask with a reason, or download
+/// with an approval the owner gave (THREATS.md P8). The server checks both.
+class _ApprovalDownload extends StatefulWidget {
+  const _ApprovalDownload({required this.docId, required this.versionNo, required this.fileName});
+  final String docId;
+  final int versionNo;
+  final String fileName;
+  @override
+  State<_ApprovalDownload> createState() => _ApprovalDownloadState();
+}
+
+class _ApprovalDownloadState extends State<_ApprovalDownload> {
+  List<Map>? _mine;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await Api.I.get('/documents/${widget.docId}/download-requests') as Map;
+      if (mounted) setState(() => _mine = (r['requests'] as List).cast<Map>().where((x) => x['mine'] == true).toList());
+    } catch (_) {
+      if (mounted) setState(() => _mine = const []);
+    }
+  }
+
+  Future<void> _ask() async {
+    final reason = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ask to download'),
+        content: TextField(controller: reason, maxLines: 3, maxLength: 500, decoration: fieldDeco(hint: 'Why do you need a copy? (10+ characters)')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await Api.I.post('/documents/${widget.docId}/download-requests', {'reason': reason.text.trim(), 'versionNo': widget.versionNo});
+      if (mounted) toast(context, 'Asked. The owner was emailed.');
+      await _load();
+    } catch (e) {
+      if (mounted) toast(context, errorText(e), tone: Tone.red);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final live = (_mine ?? const <Map>[]).where((r) =>
+        r['status'] == 'APPROVED' && r['versionNo'] == widget.versionNo && r['validUntil'] != null &&
+        DateTime.parse(r['validUntil'] as String).isAfter(now) && ((r['maxUses'] as int?) ?? 0) > (r['uses'] as int)).toList();
+    final pending = (_mine ?? const <Map>[]).any((r) => r['status'] == 'PENDING' && r['versionNo'] == widget.versionNo);
+    if (live.isNotEmpty) {
+      final left = (live.first['maxUses'] as int) - (live.first['uses'] as int);
+      return Btn(
+        'Download (approved, $left left)',
+        variant: BtnVariant.primary,
+        size: BtnSize.lg,
+        expand: true,
+        icon: PhosphorIconsDuotone.downloadSimple,
+        onPressed: () async {
+          await downloadAndOpen(context, '/documents/${widget.docId}/versions/${widget.versionNo}/download', fallbackName: widget.fileName);
+          await _load();
+        },
+      );
+    }
+    return Btn(
+      pending ? 'Waiting for the owner…' : 'Ask to download',
+      variant: BtnVariant.primary,
+      size: BtnSize.lg,
+      expand: true,
+      icon: PhosphorIconsDuotone.sealCheck,
+      onPressed: _mine == null || pending ? null : _ask,
+    );
+  }
+}
