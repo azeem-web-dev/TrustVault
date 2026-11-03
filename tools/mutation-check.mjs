@@ -117,6 +117,13 @@ const MUTATIONS = [
   // --- the database's own locks ---------------------------------------------
   sql('database: row-level security on documents',
     'ALTER TABLE documents DISABLE ROW LEVEL SECURITY', 'ALTER TABLE documents ENABLE ROW LEVEL SECURITY', ['test/rls.test.ts']),
+  // documents_update RLS is USING tv_doc_level >= 3 with CHECK true, so the
+  // owner-only columns (owner_id, status, folder_id) are guarded by this
+  // trigger, not by the RLS CHECK. Without it an EDIT holder could seize
+  // ownership or untrash a document by direct SQL (THREATS.md A1/A20).
+  sql('database: only the owner changes owner, status or folder (documents guard)',
+    'ALTER TABLE documents DISABLE TRIGGER documents_guard_update', 'ALTER TABLE documents ENABLE TRIGGER documents_guard_update',
+    ['test/hunt/probe.test.ts']),
   sql('database: grant rules trigger (no MANAGE from managers, external limits)',
     'ALTER TABLE grants DISABLE TRIGGER grants_guard', 'ALTER TABLE grants ENABLE TRIGGER grants_guard', ['test/rls.test.ts']),
   sql('database: audit log append-only trigger',
