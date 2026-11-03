@@ -66,9 +66,28 @@ Grants are per document, to named people or to groups. A group share covers the 
 | [docs/DEMO.md](docs/DEMO.md) | The five-minute demo script |
 | [docs/LOGIN_TIMING.md](docs/LOGIN_TIMING.md) | Measured: login response time does not reveal which emails have accounts |
 | [docs/RESTORE.md](docs/RESTORE.md) | Backups and how to restore from one |
+| [docs/ACCESS_POLICIES.md](docs/ACCESS_POLICIES.md) | Conditions on a share: download approval, working hours, networks; role rules; emergency exceptions |
+| [docs/KEYS.md](docs/KEYS.md) | The key hierarchy; keyd releases a file key only against a ticket the database issues; its signed key-use ledger; rotation and recovery |
+| [docs/ANDROID_SECURITY.md](docs/ANDROID_SECURITY.md) | The Android app's own security tests (unit, widget, static manifest check, on-device) and what they cover |
+| [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) | Pinned actions, lockfiles, dependency audit, SBOMs, reproducible keyd, signed releases |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The components and trust boundaries in one place |
+| [docs/VERIFY.md](docs/VERIFY.md) | How anyone can check an audit export without our code (format, and an independent Python verifier) |
+| [docs/BACKUP_DR.md](docs/BACKUP_DR.md) | Backup, off-site copy, restore drill, recovery targets |
+| [docs/INCIDENT.md](docs/INCIDENT.md), [docs/TABLETOP.md](docs/TABLETOP.md) | Incident response runbook and a tabletop exercise |
+| [docs/COMPLIANCE.md](docs/COMPLIANCE.md), [docs/GOVERNANCE.md](docs/GOVERNANCE.md), [docs/PENTEST_SCOPE.md](docs/PENTEST_SCOPE.md), [docs/E2E_DESIGN.md](docs/E2E_DESIGN.md), [SECURITY.md](SECURITY.md) | Control mapping, who decides what, the scope for an outside test, a design for end-to-end encryption (not built), how to report a vulnerability |
 | [apps/mobile/README.md](apps/mobile/README.md) | The Android app: same screens and rules, how it signs in, how to build the APK |
 | [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
 | [Sigstore public log](https://search.sigstore.dev/?logIndex=3633615638) | Every signed audit checkpoint, published within about a minute; nobody can remove an entry |
+
+## What it protects beyond the brief
+
+- **View only** (a level below Read): the document's pages drawn by the server with the viewer's email, the time and a trace code; never the original file, in either lock. Downloads are stamped the same way. The Android app keeps files only encrypted, with a key the server releases on every open and destroys on revoke (THREATS.md V1-V10).
+- **Access policies on a share**: downloads only with the owner's approval, working hours in a named time zone, network allowlists; role-wide rules set by admins; time-boxed emergency exceptions (P1-P15).
+- **Two administrators** for break-glass (which shows pages only) and for clearing an owner's or admin's second factor; **step-up** (a fresh second factor) before risky actions; a per-role **MFA policy**; signed-in devices; Android passkeys and app lock (S19-S24).
+- **The key service decides too**: keyd releases a file key only against a single-use ticket the database issues for that person, version and audit event, and keeps its own signed ledger, reconciled with the audit log every hour (K5-K14).
+- **Insider detection and hard limits**: persistent, reviewable alerts (bulk downloads and page views, unusual hours or networks, coverage of what someone can open), download limits per day and per session, and a recorded download lifecycle (L15-L19, U9-U10).
+- **Sign-in abuse**: nobody can lock someone else out; stuffing and distributed guessing are detected; new devices confirm by email under attack (S27-S29).
+- **Hostile files**: PDFs and Office files checked structurally in a resource-limited worker; CSV formulas neutralised on request; a strict production CSP with browser tests (C1-C8, W1-W8).
 
 ## How it works
 
@@ -105,12 +124,13 @@ GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (
 ## Tests
 
 ```bash
-cd apps/api && npx vitest run            # over 230 tests against a real Postgres and Redis
-cd apps/api && npm run test:e2e          # passkeys in real Chrome through the real pages (needs Chrome)
+cd apps/api && npx vitest run            # over 750 tests against a real Postgres and Redis
+cd apps/api && npm run test:e2e          # real Chrome: passkeys, and stored XSS / CSP / framing on the production build
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (59 of them), one at a time; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (204 of them), one at a time; every removal must fail a test
 node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
-cd keyd && cargo test                    # key service
+cd keyd && cargo test --locked           # key service (tickets, ledger, rate limits)
+cd apps/mobile && flutter test           # the Android app: session storage, wipe on sign-out and 401, local copies, transport policy
 node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML5CtjdH+VE= --witness checkpoints.jsonl --rekor   # verify an audit export: pinned key, witness, Sigstore
 ```
 
@@ -143,6 +163,13 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `identity-guards.test.ts` | the database on its own, as the app's real role: no self-promotion, no role or status change without an admin, never the last admin, no password or second factor set for someone else, groups only by admins, hashes and TOTP secrets unreadable; malformed `app.user_id` fails closed |
 | `invite.test.ts` | accounts by invitation: no admin-chosen password, invited accounts can do nothing, links work once, expire, are built from the configured site and never work as reset links (or the reverse); resend and cancel; reactivating a never-accepted account keeps it invited |
 | `checkpoint-guard.test.ts` | the database accepts an audit checkpoint only for a real event with the same hash, and only moving forward |
+| `access-policy*.test.ts` | download approvals (never by the requester, once per use, cancelled by a revoke), time windows across daylight saving, network allowlists and spoofed X-Forwarded-For, role rules, exceptions: in decide() and in the database on its own |
+| `keyd-tickets.test.ts`, `key-rotation.test.ts` | a file key is released only against a database ticket for that person, version and audit row; the ledger and its reconciliation catch a release without a record; rotation and verification |
+| `insider-detect.test.ts` | persistent alerts and their review history, hard download limits and overrides, the download lifecycle |
+| `auth-abuse.test.ts` | strangers cannot lock an account; credential stuffing and distributed guessing detected; sign-in links; trusted devices |
+| `content-*.test.ts`, `web-security.test.ts`, `e2e/web-security.e2e.ts` | hostile PDFs, Office files, ZIP tricks and polyglots refused in a worker; CSV formulas; headers, CSP and stored XSS in real Chrome |
+| `timezone.test.ts` | every connection runs in UTC, whatever the database default (a non-UTC default used to end every session) |
+| `integration-attacks.test.ts` | the merged features against each other: View only vs approvals and the Android key, group View vs a direct share's approval, revoke vs approvals/keys/pages, windows on pages, break-glass vs downloads, limits vs approval uses |
 | `tools/verify-audit.test.mjs` | the offline verifier (19 cases): pinned key, no checkpoints, recomputed forged chains, cut-off tails caught through Sigstore or the witness |
 
 ## Run it locally

@@ -163,6 +163,7 @@ Mail is sent after the change it reports is committed. It never delays or fails 
 ## Passkeys from the Android app
 
 The app uses Android's Credential Manager. Android reports the origin as `android:apk-key-hash:<base64url SHA-256 of the app's signing certificate>`, so the API accepts the origins listed in `PASSKEY_ANDROID_ORIGINS` (comma separated, checked at startup) as well as `PUBLIC_ORIGIN`. The RP id is always the website's host name, so one passkey works in both. Android only offers it to the app after reading `https://vault.rayyanazeem.cloud/.well-known/assetlinks.json` (served by the web app from `apps/web/public/.well-known/`), which names the package and the release certificate's fingerprint.
+
 ## Access policies: download approval, working hours, networks
 
 Conditions an owner can put on a share, and rules administrators can set per role (THREATS.md P1-P15, design in `docs/ACCESS_POLICIES.md`). Both locks enforce them: `decide()` in the API and `tv_doc_level()` / the `blobs_release` row-level security policy in Postgres.
@@ -187,18 +188,18 @@ Outside its window or network a share gives nothing. If that leaves the caller w
 
 | Method | Path | Who may call | Notes |
 |---|---|---|---|
-| GET | `/documents/:id` | READ or better | Now also returns `downloadNeedsApproval`. |
+| GET | `/documents/:id` | VIEW or better | Now also returns `downloadNeedsApproval` (only meaningful for READ and up: View only never downloads). |
 | GET | `/documents/:id/download`, `/documents/:id/versions/:n/download` | READ or better | When downloads need approval: uses one approved download **of that exact version** (oldest-expiring approval first), in the same transaction that reads the bytes. None: `403 {"code":"approval_required","versionNo":n}`, audited `document.download` DENIED `approval_required`. |
 | POST | `/documents/:id/download-requests` | READ or better, on a share that needs approval | `{reason (10-500 chars), versionNo?}` (default: current version). `201 {id, status:"PENDING", versionNo}`. `400` if no approval is needed; `409` if you already have a pending request for that version. The owner and any nominated approver are emailed (never demo accounts). 30 per hour per user. |
-| GET | `/documents/:id/download-requests` | READ or better | Your own requests on the document (`mine: true`); all of them for the owner or the nominated approver. Expired ones are marked first. |
+| GET | `/documents/:id/download-requests` | READ or better (View only cannot ask: it never downloads) | Your own requests on the document (`mine: true`); all of them for the owner or the nominated approver. Expired ones are marked first. |
 | GET | `/download-requests` | signed in | Pending requests you may decide: on documents you own, or shares where the owner nominated you (and you still have MANAGE). |
 | POST | `/download-requests/:rid/approve` | the owner, or the nominated approver; **never the requester** | `{hours 1-72 (default 24), uses 1-10 (default 1), note?}`. The requester is emailed. `403` for your own request (audited `self_approval`); `404` for a request you cannot see (audited `no_such_request`); `409` if already decided or older than 7 days (then marked expired). |
 | POST | `/download-requests/:rid/reject` | same | `{note?}`. Recorded and the requester is told. |
-| POST | `/documents/:id/overrides` | owner only | Emergency exception: `{userId, reason (10-500), hours 1-24 (default 4)}`. Lifts the time window, network and download-approval conditions of that person's share on this document until it ends; never raises the level, never lifts role rules. The person is emailed, and the owner gets a receipt. |
+| POST | `/documents/:id/overrides` | owner only, **step-up** | Emergency exception: `{userId, reason (10-500), hours 1-24 (default 4)}`. Lifts the time window, network and download-approval conditions of that person's share on this document until it ends; never raises the level, never lifts role rules. The person is emailed, and the owner gets a receipt. |
 | DELETE | `/documents/:id/overrides/:overrideId` | owner only | Ends an exception early. |
 | GET | `/admin/access-policies` | ADMIN | Role rules in force. |
-| PUT | `/admin/access-policies/:role` | ADMIN | `role` = `OWNER`, `VIEWER` or `EXTERNAL`. `{window?, networks?}` (at least one). Applies on top of every share held by people with that role; an owner's exception does not lift it; owners' own documents are not affected. |
-| DELETE | `/admin/access-policies/:role` | ADMIN | Removes the role's rules. |
+| PUT | `/admin/access-policies/:role` | ADMIN, **step-up** | `role` = `OWNER`, `VIEWER` or `EXTERNAL`. `{window?, networks?}` (at least one). Applies on top of every share held by people with that role; an owner's exception does not lift it; owners' own documents are not affected. |
+| DELETE | `/admin/access-policies/:role` | ADMIN, **step-up** | Removes the role's rules. |
 
 **Emails.** Download requested → the owner and any nominated approver. Approved / not approved → the requester. Emergency exception → the person, plus a receipt to the owner. Demo accounts never get mail.
 
@@ -216,6 +217,7 @@ Outside its window or network a share gives nothing. If that leaves the caller w
 | `access.revoke` | `details.approvalsCancelled`: open requests and approvals of that person cancelled with the share |
 | `access.override` / `access.override_end` | `ALLOWED`, with the person, reason and end time |
 | `policy.role_set` / `policy.role_clear` | `ALLOWED`, with the new and previous rules |
+
 ## Key service: tickets, key-use ledger, reconciliation
 
 See [KEYS.md](KEYS.md). Downloads now obtain a database-issued unwrap ticket inside their audit transaction; nothing changes for clients except two new answers on `GET /api/documents/:id/download` (and `/versions/:n/download`): **429** when keyd's per-user unwrap limit is reached, **503** when keyd refuses or is unreachable. Both are audited as `document.download` with reason `key_service_refused` (`details.refusal`), not as an integrity failure.
@@ -237,6 +239,7 @@ See [KEYS.md](KEYS.md). Downloads now obtain a database-issued unwrap ticket ins
 | `keys.reencrypt_version` | `ALLOWED`: one version re-encrypted in a run (backs the maintenance ticket) |
 
 Alerts: `GET /api/admin/alerts` adds `key_ledger_mismatch` (critical) for failed reconciliations and ledger problems.
+
 ## Alerts, detection thresholds and download limits (role ADMIN, second factor passed)
 
 Alerts are **persistent** (THREATS.md L15-L19): a job evaluates the rules every minute and inserts alerts that are never updated or deleted. Review is a separate, append-only history. `GET /admin/alerts` (above) is kept as the old live view.
@@ -254,10 +257,10 @@ Alerts are **persistent** (THREATS.md L15-L19): a job evaluates the rules every 
 | POST | `/admin/alert-queue/:id/reopen` | `{note}`. Only a resolved alert. |
 | POST | `/admin/alert-queue/:id/comment` | `{note}`. Status unchanged. |
 | GET | `/admin/risk-settings` | Every threshold and hard limit: value, default, allowed range, who changed it last. |
-| PUT | `/admin/risk-settings` | `{values: {key: number}, reason}` (reason 10+ chars). Out-of-range values are `400`. Audited as `alert.policy_change` with before and after; raises an `alert_policy_changed` alert. |
+| PUT | `/admin/risk-settings` | **Step-up.** `{values: {key: number}, reason}` (reason 10+ chars). Out-of-range values are `400`. Audited as `alert.policy_change` with before and after; raises an `alert_policy_changed` alert. |
 | GET | `/admin/download-limits/overrides` | `userId?`. Newest first, with `active`. |
-| POST | `/admin/download-limits/overrides` | `{userId, dailyLimit, sessionLimit, reason, expiresAt}`: raises one person's limits until `expiresAt` (at most 14 days; reason 20+ chars; not yourself, not an admin). Audited as `download.limit_override`; raises a `download_limit_override` alert. |
-| POST | `/admin/download-limits/overrides/:id/revoke` | `204`. Once. Audited as `download.limit_override_revoke`. |
+| POST | `/admin/download-limits/overrides` | **Step-up.** `{userId, dailyLimit, sessionLimit, reason, expiresAt}`: raises one person's limits until `expiresAt` (at most 14 days; reason 20+ chars; not yourself, not an admin). Audited as `download.limit_override`; raises a `download_limit_override` alert. |
+| POST | `/admin/download-limits/overrides/:id/revoke` | **Step-up.** `204`. Once. Audited as `download.limit_override_revoke`. |
 | GET | `/admin/download-limits/usage/:userId` | Effective limits (with any override) and downloads in the last 24 hours and 7 days. |
 
 A review step that does not fit the current status is `409`; an alert about yourself cannot be resolved or assigned by you (`403`). Every step is audited as `alert.acknowledge`, `alert.assign`, `alert.resolve`, `alert.reopen` or `alert.comment`.
@@ -299,6 +302,7 @@ Every download has a `downloadId` in its audit details:
 | failed | `document.integrity` `FAILED` | Decryption or the hash check failed after authorization; nothing was sent. |
 
 Completion and interruption are written after the response and never delay it. An authorized download with neither (for example the server restarted mid-transfer) should be read as "may have been received". The web app and the Android app use the same routes, so the events are the same.
+
 ## Sign-in abuse resilience (THREATS.md S27-S29)
 
 | Method | Path | Who | Notes |
