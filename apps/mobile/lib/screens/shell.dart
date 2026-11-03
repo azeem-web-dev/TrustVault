@@ -49,7 +49,9 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<Session>();
-    final user = session.user!;
+    final user = session.user;
+    // Signed out: this page is fading out; draw nothing from the old session.
+    if (user == null) return const SizedBox.shrink();
     final p = Pal.of(context);
     final tabs = _tabs(user);
     if (_index >= tabs.length) _index = 0;

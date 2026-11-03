@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'local_copies.dart';
 
 class User {
   User(this.id, this.email, this.displayName, this.role);
@@ -81,10 +79,7 @@ class Session extends ChangeNotifier {
   Future<void> _reset() async {
     await Api.I.clearSession();
     // Downloaded copies are decrypted files: they leave with the session.
-    try {
-      final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/downloads');
-      if (await dir.exists()) await dir.delete(recursive: true);
-    } catch (_) {}
+    await LocalCopies.wipeAll();
     user = null;
     mfaPending = false;
     notifyListeners();

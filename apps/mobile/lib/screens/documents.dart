@@ -37,8 +37,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   String? _error;
   bool _grid = false;
 
-  User get _user => context.read<Session>().user!;
-  bool get _isOwner => _user.isOwner;
+  // Null once signed out (a refresh can still finish after that).
+  bool get _isOwner => mounted && (context.read<Session>().user?.isOwner ?? false);
 
   @override
   void initState() {
@@ -139,7 +139,9 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
-    final user = context.watch<Session>().user!;
+    final user = context.watch<Session>().user;
+    // Signed out: this page is fading out; draw nothing from the old session.
+    if (user == null) return const SizedBox.shrink();
     final data = _data;
     final docs = (data?['documents'] as List?)?.cast<Map>() ?? const [];
     final total = (data?['total'] as int?) ?? 0;

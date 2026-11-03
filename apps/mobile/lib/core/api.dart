@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+
+import 'transport_policy.dart';
 
 /// Thin client for the TrustVault API, mirroring apps/web/src/lib/api.ts.
 ///
@@ -38,7 +41,25 @@ class Api {
   static const _userAgent = 'TrustVault Android app';
 
   final _store = const FlutterSecureStorage();
-  final _client = http.Client();
+  http.Client _client = http.Client();
+
+  /// Test seam: route every request through [client] (a fake API in tests).
+  @visibleForTesting
+  set client(http.Client client) => _client = client;
+
+  /// Test seam: the base URL and build mode the transport policy sees.
+  @visibleForTesting
+  String baseUrl = base;
+  @visibleForTesting
+  bool releaseMode = kReleaseMode;
+
+  /// Builds a request URL, refusing plain HTTP in a release build even if
+  /// TV_ORIGIN was set to one (the manifest also blocks cleartext).
+  Uri _uri(String path) {
+    final problem = insecureOriginReason(baseUrl, release: releaseMode);
+    if (problem != null) throw ApiError(0, problem, code: 'insecure_origin');
+    return Uri.parse('$baseUrl$path');
+  }
   String? _session;
   String? csrfToken;
 
@@ -121,8 +142,7 @@ class Api {
   }
 
   Future<dynamic> _send(String method, String path, [Object? body]) async {
-    final uri = Uri.parse('$base$path');
-    final req = http.Request(method, uri)..headers.addAll(_headers(method, json: body != null));
+    final req = http.Request(method, _uri(path))..headers.addAll(_headers(method, json: body != null));
     if (body != null) req.body = jsonEncode(body);
     try {
       final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 30)));
@@ -144,7 +164,7 @@ class Api {
 
   /// Multipart upload (new document or new version).
   Future<dynamic> upload(String path, {required List<int> bytes, required String fileName, Map<String, String> fields = const {}}) async {
-    final req = http.MultipartRequest('POST', Uri.parse('$base$path'))
+    final req = http.MultipartRequest('POST', _uri(path))
       ..headers.addAll(_headers('POST', json: false))
       ..fields.addAll(fields)
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
@@ -158,7 +178,7 @@ class Api {
 
   /// Fetches a file the API streams as an attachment.
   Future<Download> download(String path, {String fallbackName = 'download'}) async {
-    final req = http.Request('GET', Uri.parse('$base$path'))..headers.addAll(_headers('GET', json: false)..remove('Accept'));
+    final req = http.Request('GET', _uri(path))..headers.addAll(_headers('GET', json: false)..remove('Accept'));
     final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3)));
     if (res.statusCode != 200) {
       await _finish(res);

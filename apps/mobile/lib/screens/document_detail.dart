@@ -7,6 +7,7 @@ import '../widgets/phosphor.dart';
 
 import '../core/api.dart';
 import '../core/format.dart';
+import '../core/local_copies.dart';
 import '../core/theme.dart';
 import '../widgets/audit_ui.dart';
 import '../widgets/files.dart';
@@ -41,6 +42,9 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     } on ApiError catch (e) {
       if (!mounted) return;
       if (e.status == 404) {
+        // Revoked, expired or deleted: no copy of it stays on the phone.
+        await LocalCopies.removeFor(widget.id);
+        if (!mounted) return;
         setState(() => _notFound = true);
       } else {
         setState(() => _error = e.message);
