@@ -29,10 +29,12 @@ export interface AuditInput {
 export class AuditService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  async record(input: AuditInput, tx?: Tx): Promise<void> {
+  /** Returns the new event's id and seq (an unwrap ticket names the event that backs it). */
+  async record(input: AuditInput, tx?: Tx): Promise<{ id: string; seq: bigint }> {
     const ctx = currentContext();
     const db = tx ?? this.prisma;
-    await db.auditEvent.create({
+    return db.auditEvent.create({
+      select: { id: true, seq: true },
       data: {
         action: input.action,
         outcome: input.outcome,

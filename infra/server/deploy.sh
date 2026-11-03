@@ -30,6 +30,8 @@ as_tv install -d -m 0750 apps/web/.next/cache
 OWNER_URL=$(sed -n 's/^DATABASE_OWNER_URL=//p' /etc/trustvault/migrate.env)
 as_tv env DATABASE_OWNER_URL="$OWNER_URL" bash -c 'cd apps/api && npx prisma migrate deploy'
 unset OWNER_URL
+# keyd's ticket key into the owner-only table (idempotent; docs/KEYS.md).
+if [ -f /etc/tvkeyd/ticket.key ]; then bash "$APP/infra/server/ticket-key.sh"; else echo "deploy: no /etc/tvkeyd/ticket.key yet; run install-keyd.sh" >&2; fi
 
 # Units live in the repo; install them on every deploy so a release that
 # changes the sandbox or environment takes effect with it.

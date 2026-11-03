@@ -216,3 +216,24 @@ Outside its window or network a share gives nothing. If that leaves the caller w
 | `access.revoke` | `details.approvalsCancelled`: open requests and approvals of that person cancelled with the share |
 | `access.override` / `access.override_end` | `ALLOWED`, with the person, reason and end time |
 | `policy.role_set` / `policy.role_clear` | `ALLOWED`, with the new and previous rules |
+## Key service: tickets, key-use ledger, reconciliation
+
+See [KEYS.md](KEYS.md). Downloads now obtain a database-issued unwrap ticket inside their audit transaction; nothing changes for clients except two new answers on `GET /api/documents/:id/download` (and `/versions/:n/download`): **429** when keyd's per-user unwrap limit is reached, **503** when keyd refuses or is unreachable. Both are audited as `document.download` with reason `key_service_refused` (`details.refusal`), not as an integrity failure.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/admin/keyd/status` | ADMIN | Current key generation, loaded generations, retired ones, current wrap key ids, ticket key ids keyd holds, ledger head seq, and how many document keys / TOTP secrets use each key id (`wrappedValues`) |
+| `GET /api/admin/keyd/ledger?before=&limit=` | ADMIN | keyd's key-use ledger as mirrored by the API, newest first (`n`, `epoch`, `seq`, `at`, `event`, `action`, `tid`, `user_id`, `document_id`, `version_id`, `audit_event_id`, `audit_seq`, `key_id`, `result`, `detail`, `hash`) |
+| `POST /api/admin/keyd/reconcile` | ADMIN | Mirror keyd's ledger now and reconcile it with the audit log; returns `{ ok, epoch, ledgerFrom, ledgerTo, auditFrom, auditTo, counts, critical, warnings, findings[], findingsTotal }`. Also runs hourly |
+| `GET /api/witness/keyd-ledger?since=&limit=` | anyone (rate-limited per IP) | Signed heads of keyd's ledger: `{ format: 'trustvault-keyd-ledger-v1', signingKey, checkpoints: [{ n, epoch, seq, headHash, signature, keyId, createdAt }], hasMore }`. Signature: Ed25519 over `tv-unwrap-ledger-v1|<seq>|<headHash>`. Anchored to Rekor by `tools/anchor.mjs` |
+
+| Audit action | Outcome and reason |
+|---|---|
+| `document.rescan_decrypt` | `ALLOWED`, system actor: the nightly re-scan obtained a ticket for one version (`details.versionNo`) |
+| `keyd.reconcile` | `ALLOWED` (`clean` or `warnings`) or `FAILED` (`unmatched_key_use`), with counts and the first findings |
+| `keyd.ledger` | `FAILED` (`ledger_problem`): the mirrored ledger did not verify, its signing key changed, or keyd started a new ledger |
+| `keys.rotate` | `ALLOWED` or `FAILED` (`some_values_failed`), actor `key-rotation`: a `keys.js rotate` run, with counts |
+| `keys.reencrypt` | `started`, `finished` or `finished_with_failures` for an emergency re-encryption run (`details.run`) |
+| `keys.reencrypt_version` | `ALLOWED`: one version re-encrypted in a run (backs the maintenance ticket) |
+
+Alerts: `GET /api/admin/alerts` adds `key_ledger_mismatch` (critical) for failed reconciliations and ledger problems.

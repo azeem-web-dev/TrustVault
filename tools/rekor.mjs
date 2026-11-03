@@ -30,7 +30,13 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
 
-export const checkpointMessage = (c) => Buffer.from(`tv-checkpoint-v1|${c.seq}|${c.headHash}`, 'utf8');
+/**
+ * The signed message. Audit checkpoints by default; `kind: 'keyd-ledger'`
+ * marks a signed head of keyd's key-use ledger (anchored the same way,
+ * with its own key: docs/KEYS.md).
+ */
+export const checkpointMessage = (c) =>
+  Buffer.from(`${c.kind === 'keyd-ledger' ? 'tv-unwrap-ledger-v1' : 'tv-checkpoint-v1'}|${c.seq}|${c.headHash}`, 'utf8');
 /** The fingerprint Rekor stores for a checkpoint. */
 export const checkpointDigest = (c) => sha256(checkpointMessage(c));
 

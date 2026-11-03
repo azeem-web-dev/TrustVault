@@ -42,6 +42,8 @@ import { InviteService } from './auth/invite.service.js';
 import { RescanService } from './scanning/rescan.service.js';
 import { ClamdScanner, MALWARE_SCANNER, NoScanner, type MalwareScanner } from './scanning/malware-scanner.js';
 import { HealthController } from './health.controller.js';
+import { KeyLedgerService } from './keys/key-ledger.service.js';
+import { KeydAdminController, KeydWitnessController } from './keys/key-ledger.controller.js';
 
 export function createKeyProvider(env: Env): KeyProvider {
   return env.KEY_PROVIDER === 'keyd'
@@ -63,6 +65,7 @@ export class AppModule {
         DocumentsController, FoldersController, AuditAdminController, WitnessController,
         SessionsController, SettingsController,
         DownloadRequestsController, RolePoliciesController,
+        KeydAdminController, KeydWitnessController,
       ],
       providers: [
         { provide: ENV, useValue: env },
@@ -73,6 +76,7 @@ export class AppModule {
         RateLimitService,
         AuditService,
         AuditAdminService,
+        KeyLedgerService,
         PasswordService,
         SessionService,
         MfaPolicyService,

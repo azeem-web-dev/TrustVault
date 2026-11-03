@@ -1,5 +1,5 @@
 [Unit]
-Description=TrustVault key service (master key, data-key wrapping, checkpoint signing)
+Description=TrustVault key service (master keys, ticket-checked data-key unwrapping, key-use ledger, checkpoint signing)
 Before=trustvault-api.service
 
 [Service]
@@ -13,10 +13,17 @@ Environment=KEYD_SOCKET=/run/tvkeyd/keyd.sock
 # systemd reads the root-only key file and hands this process a private copy
 # in $CREDENTIALS_DIRECTORY. The tvkeyd user cannot read /etc/tvkeyd itself.
 LoadCredential=master.key:/etc/tvkeyd/master.key
+# MAC key of the database-issued unwrap tickets (docs/KEYS.md). The same 32
+# bytes are in the database table only the schema owner can read.
+LoadCredential=ticket.key:/etc/tvkeyd/ticket.key
+# Optional extra keys, each file loaded as extra_<name>: master-N.key (later
+# master key generations, for rotation) and ticket-prev.key (ticket-key rotation).
+LoadCredential=extra:/etc/tvkeyd/extra
 RuntimeDirectory=tvkeyd
 RuntimeDirectoryMode=0750
 # Remembers the last audit checkpoint it signed, so it never signs an older
-# or equal one again (THREATS.md L12). Survives restarts; readable by tvkeyd only.
+# or equal one again (THREATS.md L12), and holds keyd's own key-use ledger
+# (unwrap-ledger.jsonl, THREATS.md K5). Survives restarts; readable by tvkeyd only.
 StateDirectory=tvkeyd
 StateDirectoryMode=0700
 ExecStart=/usr/local/bin/tvkeyd

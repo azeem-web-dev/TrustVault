@@ -7,7 +7,7 @@
 // to FAIL. A mutation that leaves the tests green is a check nothing tests.
 //
 //   node tools/mutation-check.mjs            (from the repo root; needs the test DB)
-//   node tools/mutation-check.mjs --only 7   (one mutation)
+//   node tools/mutation-check.mjs --only 7   (one mutation; --only 56-69 for a range)
 //
 // Source files are always restored, even on Ctrl-C. Database mutations are
 // applied to the TEST database only and reverted afterwards.
@@ -259,7 +259,7 @@ const MUTATIONS = [
     "return { level: Level.VIEW, reason: 'break_glass' };", "return { level: Level.READ, reason: 'break_glass' };",
     ['test/access.unit.test.ts', 'test/view-only.test.ts']),
   code('pages: the access check before a file is decrypted for drawing', 'src/documents/viewing.service.ts',
-    "await this.access.require(tx, actor, id, 'view_pages');\n      return this.loadSource(tx, id);", 'return this.loadSource(tx, id);',
+    "const decision = await this.access.require(tx, actor, id, 'view_pages');\n      const row = await this.loadSource(tx, id);", "const decision = { reason: 'grant' };\n      const row = await this.loadSource(tx, id);",
     ['test/documents.test.ts']),
   code('pages: the trace code is in the page view audit row', 'src/documents/viewing.service.ts',
     'details: { page: n, pages: total, versionNo: src.versionNo, trace, at: at.toISOString() },', 'details: { page: n, pages: total, versionNo: src.versionNo, at: at.toISOString() },',
@@ -324,6 +324,40 @@ const MUTATIONS = [
   sql('database: exceptions only from the owner, at most 24 hours',
     'ALTER TABLE access_overrides DISABLE TRIGGER access_overrides_guard', 'ALTER TABLE access_overrides ENABLE TRIGGER access_overrides_guard',
     ['test/access-policy-db.test.ts']),
+  // --- keyd authorises decryption itself; key-use ledger (THREATS.md K1-K8) --
+  code('keys: a document key needs a ticket', 'src/crypto/key-provider.ts',
+    "if (ticket === undefined) this.refuse(bare, 'ticket required');", '', ['test/keyd-tickets.test.ts']),
+  code('keys: the ticket MAC must verify', 'src/crypto/key-ledger.ts',
+    "if (!timingSafeEqual(want, Buffer.from(mac, 'hex'))) throw new TicketError('bad ticket mac');", '', ['test/keyd-tickets.test.ts', 'test/key-ledger.unit.test.ts']),
+  code('keys: a ticket opens only its own document version', 'src/crypto/key-ledger.ts',
+    'if (!ownAad || sha256hex(aad) !== t.aadSha256) {', 'if (false) {', ['test/keyd-tickets.test.ts']),
+  code('keys: a ticket opens only its own wrapped key', 'src/crypto/key-ledger.ts',
+    "if (sha256hex(wrapped) !== t.wkSha256) throw new TicketError('ticket is for another wrapped key');", '', ['test/keyd-tickets.test.ts']),
+  code('keys: an expired ticket is refused', 'src/crypto/key-ledger.ts',
+    "if (nowSec >= t.exp) throw new TicketError('ticket expired');", '', ['test/keyd-tickets.test.ts']),
+  code('keys: a ticket works once', 'src/crypto/key-provider.ts',
+    "if (this.seen.has(t.tid)) this.refuse(entry, 'ticket already used');", '', ['test/keyd-tickets.test.ts']),
+  code('keys: per-user unwrap rate limit', 'src/crypto/key-provider.ts',
+    "if (!allowed) this.refuse(entry, 'rate limited');", "if (!allowed && false) this.refuse(entry, 'rate limited');", ['test/keyd-tickets.test.ts']),
+  code('reconcile: key release without a matching audit event', 'src/keys/key-ledger.service.ts',
+    'for (const r of noAudit) findings.push(', 'for (const r of noAudit.slice(0, 0)) findings.push(', ['test/keyd-tickets.test.ts']),
+  code('reconcile: key release on a ticket the database never issued', 'src/keys/key-ledger.service.ts',
+    'for (const r of noTicket) findings.push(', 'for (const r of noTicket.slice(0, 0)) findings.push(', ['test/keyd-tickets.test.ts']),
+  code('reconcile: ALLOWED download without a ticket', 'src/keys/key-ledger.service.ts',
+    'if (!r.has_ticket) findings.push(', 'if (false) findings.push(', ['test/keyd-tickets.test.ts']),
+  code('reconcile: mirrored ledger entries are re-verified', 'src/keys/key-ledger.service.ts',
+    'const bad = verifyLedgerRun(seq, hash, page);', 'const bad = null;', ['test/keyd-tickets.test.ts']),
+  code('rotation: a row is replaced only if unchanged (compare-and-swap)', 'src/keys/rotation.ts',
+    "'UPDATE document_blobs SET wrapped_key = $1, key_id = $2 WHERE version_id = $3 AND key_id = $4 AND wrapped_key = $5',",
+    "'UPDATE document_blobs SET wrapped_key = $1, key_id = $2 WHERE version_id = $3 AND $4::text IS NOT NULL AND $5::bytea IS NOT NULL',",
+    ['test/key-rotation.test.ts']),
+  code('pages: decryption for drawing needs a database ticket', 'src/documents/viewing.service.ts',
+    "const ticket = await issueUnwrapTicket(tx, row.version_id, 'view_page', event.id);", "const ticket = 'tv-unwrap-ticket-v1|made-up';",
+    ['test/view-only.test.ts']),
+  sql('database: the application role cannot read the ticket key',
+    'GRANT SELECT ON keyd_ticket_keys TO trustvault_app', 'REVOKE SELECT ON keyd_ticket_keys FROM trustvault_app', ['test/keyd-tickets.test.ts']),
+  sql('database: the ledger mirror only accepts rows that extend the chain',
+    'ALTER TABLE keyd_ledger_entries DISABLE TRIGGER keyd_ledger_entries_extend', 'ALTER TABLE keyd_ledger_entries ENABLE TRIGGER keyd_ledger_entries_extend', ['test/keyd-tickets.test.ts']),
 ];
 
 function loadEnv() {
@@ -351,7 +385,8 @@ process.on('SIGINT', () => { restoreAll(); process.exit(130); });
 async function main() {
   loadEnv();
   const onlyIdx = process.argv.indexOf('--only');
-  const only = onlyIdx > 0 ? Number(process.argv[onlyIdx + 1]) : null;
+  const [lo, hi = lo] = onlyIdx > 0 ? String(process.argv[onlyIdx + 1]).split('-').map(Number) : [];
+  const only = lo ? { lo, hi } : null;
 
   if (process.argv.includes('--dry-run')) {
     let missing = 0;
@@ -375,7 +410,7 @@ async function main() {
   const results = [];
   for (const [i, m] of MUTATIONS.entries()) {
     const n = i + 1;
-    if (only && only !== n) continue;
+    if (only && (n < only.lo || n > only.hi)) continue;
     process.stdout.write(`#${String(n).padStart(2)} ${m.name} ... `);
     let applied = true;
     try {

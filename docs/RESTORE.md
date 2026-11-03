@@ -15,7 +15,7 @@ Inside the archive:
 | Path | What |
 |---|---|
 | `trustvault.dump` | `pg_dump --format=custom` of the whole database, taken as the postgres superuser so row-level security hides nothing. Checked with `pg_restore --list` before it is kept |
-| `etc/tvkeyd/` | the key service's master key. **Without it, no stored file can be decrypted** |
+| `etc/tvkeyd/` | the key service's keys: `master.key`, later generations in `extra/master-N.key`, and `ticket.key`. **Without the master keys, no stored file can be decrypted** |
 | `etc/trustvault/` | the app's configuration and database passwords |
 | `MANIFEST` | creation time, the git commit that was running, the audit chain head (seq and hash), and a SHA-256 of every file |
 
@@ -38,6 +38,8 @@ On the server (a fresh one: run `provision.sh` and `install-app.sh` first):
 ```bash
 systemctl stop trustvault-api trustvault-web
 install -d -o root -g root -m 0700 /etc/tvkeyd && install -o root -g root -m 0400 etc/tvkeyd/master.key /etc/tvkeyd/master.key   # the original master key (keyd reads it via LoadCredential)
+install -d -o root -g root -m 0700 /etc/tvkeyd/extra && cp -a etc/tvkeyd/extra/. /etc/tvkeyd/extra/   # later key generations, if any (docs/KEYS.md)
+install -o root -g root -m 0400 etc/tvkeyd/ticket.key /etc/tvkeyd/ticket.key   # or generate a new one: it is not needed for recovery
 systemctl restart tvkeyd
 # fed on stdin: the postgres user cannot read files under /root
 runuser -u postgres -- pg_restore --clean --if-exists --no-owner --role=tv_owner --dbname=trustvault < trustvault.dump

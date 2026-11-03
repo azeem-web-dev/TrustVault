@@ -3,6 +3,7 @@ import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { blobAad, openFile, sha256 } from '../crypto/file-crypto.js';
+import { issueUnwrapTicket, keyServiceRefusal } from '../crypto/tickets.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from './malware-scanner.js';
 import { logger } from '../common/logger.js';
 
@@ -20,6 +21,9 @@ export interface RescanResult {
 }
 
 const SYSTEM = { actorId: null, actorEmail: 'system' } as const;
+
+/** keyd would not release a key (cap reached, ledger unwritable, unreachable). */
+class KeyServiceRefused extends Error {}
 
 /**
  * Re-scans every stored file with the scanner's current signatures.
@@ -77,14 +81,19 @@ export class RescanService {
         if (result.stoppedBecause) break;
       }
     } catch (err) {
-      if (!(err instanceof ScannerUnavailable)) throw err;
-      result.stoppedBecause = 'malware_scanner_unavailable';
-      logger.error({ err }, 'rescan stopped: scanner unavailable');
+      if (err instanceof KeyServiceRefused) {
+        result.stoppedBecause = `key_service_${err.message}`;
+        logger.error({ err }, 'rescan stopped: the key service refused');
+      } else {
+        if (!(err instanceof ScannerUnavailable)) throw err;
+        result.stoppedBecause = 'malware_scanner_unavailable';
+        logger.error({ err }, 'rescan stopped: scanner unavailable');
+      }
     }
     result.cursor = cursor;
     await this.audit.record({
       ...SYSTEM, action: 'malware.rescan',
-      outcome: result.stoppedBecause === 'malware_scanner_unavailable' ? 'FAILED' : 'ALLOWED',
+      outcome: result.stoppedBecause && result.stoppedBecause !== 'time_budget' ? 'FAILED' : 'ALLOWED',
       reason: result.stoppedBecause ?? (result.infected ? 'malware_detected' : 'clean'),
       details: { ...result, scanner: this.scanner.name, seconds: Math.round((Date.now() - started) / 1000) },
     });
@@ -102,13 +111,23 @@ export class RescanService {
     if (!blob) return; // purged since it was listed
 
     const where = { targetType: 'document', targetId: v.document_id, documentId: v.document_id } as const;
+    // Every decryption by the re-scan is an audited, ticketed key release
+    // like a download (system actor, action 'rescan'); keyd caps how many
+    // it allows per hour (docs/KEYS.md).
+    const ticket = await this.prisma.$transaction(async (tx) => {
+      const event = await this.audit.record({ ...SYSTEM, ...where, action: 'document.rescan_decrypt', outcome: 'ALLOWED', reason: 'malware_rescan', details: { versionNo: v.version_no } }, tx);
+      return issueUnwrapTicket(tx, v.version_id, 'rescan', event.id);
+    });
     let plaintext: Buffer;
     try {
       plaintext = await openFile(this.keys, {
         wrappedKey: Buffer.from(blob.wrapped_key), keyId: blob.key_id, nonce: Buffer.from(blob.nonce),
         authTag: Buffer.from(blob.auth_tag), ciphertext: Buffer.from(blob.ciphertext),
-      }, blobAad(v.document_id, v.version_id, v.version_no));
-    } catch {
+      }, blobAad(v.document_id, v.version_id, v.version_no), ticket);
+    } catch (err) {
+      const refusal = keyServiceRefusal(err);
+      // keyd refused (hourly cap reached) or is down: stop; the next run continues here.
+      if (refusal) throw new KeyServiceRefused(refusal);
       result.integrityFailures++;
       await this.audit.record({ ...SYSTEM, ...where, action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', details: { versionNo: v.version_no, during: 'rescan' } });
       return;

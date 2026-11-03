@@ -221,6 +221,31 @@ describe('revocation stops pages and the Android key at once (THREATS.md V6)', (
   });
 });
 
+describe('keyd releases keys for viewing only against database tickets (docs/KEYS.md section 8)', () => {
+  it('paging through a document is one key release per person and version, each page still decided and audited', async () => {
+    const doc = await upload(A, await twoPagePdf(), 'minutes.pdf');
+    await grant(A, doc, { userId: victor.id, level: 'VIEW' }).expect(200);
+    for (const n of [1, 2, 1, 2]) await as(t, V).get(`/api/documents/${doc}/pages/${n}`).expect(200);
+    const renders = await auditRows(`action = 'document.render' AND document_id = $1 AND actor_id = $2`, [doc, victor.id]);
+    expect(renders.map((r) => r.outcome)).toEqual(['ALLOWED']);
+    const tickets = await withDb(ownerDb(), (db) => db.query(`SELECT action, user_id FROM unwrap_tickets WHERE document_id = $1`, [doc]));
+    expect(tickets.rows).toEqual([{ action: 'view_page', user_id: victor.id }]);
+    const views = await auditRows(`action = 'document.page_view' AND document_id = $1 AND actor_id = $2`, [doc, victor.id]);
+    expect(views).toHaveLength(4);
+  });
+
+  it('the Android key is released only against an offline_key ticket; a VIEW grantee gets neither key nor ticket', async () => {
+    const doc = await upload(A, await twoPagePdf(), 'minutes.pdf');
+    await grant(A, doc, { userId: rita.id, level: 'READ' }).expect(200);
+    await grant(A, doc, { userId: victor.id, level: 'VIEW' }).expect(200);
+    await as(t, R).post(`/api/documents/${doc}/offline-key`).expect(200); // created: handed over without an unwrap
+    await as(t, R).post(`/api/documents/${doc}/offline-key`).expect(200); // existing: one ticket
+    await as(t, V).post(`/api/documents/${doc}/offline-key`).expect(404);
+    const tickets = await withDb(ownerDb(), (db) => db.query(`SELECT action, user_id FROM unwrap_tickets WHERE document_id = $1 ORDER BY issued_at`, [doc]));
+    expect(tickets.rows).toEqual([{ action: 'offline_key', user_id: rita.id }]);
+  });
+});
+
 describe('externals and break-glass (THREATS.md V9, V10)', () => {
   it('an external can be given VIEW or READ (with an expiry), nothing more', async () => {
     const doc = await upload(A, await twoPagePdf(), 'minutes.pdf');

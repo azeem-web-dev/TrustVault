@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, ForbiddenException, Inject, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { blobAad, openFile, sealFile, sha256 } from '../crypto/file-crypto.js';
+import { issueUnwrapTicket, isTicketRefusal, keyServiceRefusal, ticketRefusalReason } from '../crypto/tickets.js';
 import type { Actor } from '../common/request-context.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
@@ -259,7 +260,7 @@ export class DocumentsService {
       // Audited and committed BEFORE any byte leaves the server: if the
       // audit write fails, nothing is sent. The database refuses this row if
       // the grant or account expired since the check (R11).
-      await this.audit.record({
+      const event = await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
         details: {
           versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), level: Level[decision.level],
@@ -268,10 +269,20 @@ export class DocumentsService {
           trace, stamp: ['pdf', 'image'].includes(pageKind(version.mimeType) ?? '') ? pageKind(version.mimeType) : 'none',
         },
       }, tx);
-      return { ...version, blob };
+      // The key service's own authorisation: a ticket the database mints
+      // only for this user, version and audit event (docs/KEYS.md). Same
+      // transaction, so a refusal here also rolls back the ALLOWED event.
+      const ticket = await issueUnwrapTicket(tx, version.id, 'download', event.id);
+      return { ...version, blob, ticket };
     }).catch(async (err: unknown) => {
-      if (!String((err as Error)?.message).includes('access ended during the request')) throw err;
-      await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'access_ended_during_request', targetType: 'document', targetId: id, documentId: id });
+      if (String((err as Error)?.message).includes('access ended during the request')) {
+        await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'access_ended_during_request', targetType: 'document', targetId: id, documentId: id });
+        throw new NotFoundException('Document not found');
+      }
+      if (!isTicketRefusal(err)) throw err;
+      // The application lock said yes and the database said no (e.g. access
+      // was revoked in between). The database wins.
+      await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'key_ticket_refused', targetType: 'document', targetId: id, documentId: id, details: { versionNo: versionNo ?? null, refusal: ticketRefusalReason(err) } });
       throw new NotFoundException('Document not found');
     });
 
@@ -281,8 +292,15 @@ export class DocumentsService {
       plaintext = await openFile(this.keys, {
         wrappedKey: Buffer.from(blob.wrappedKey), keyId: blob.keyId, nonce: Buffer.from(blob.nonce),
         authTag: Buffer.from(blob.authTag), ciphertext: Buffer.from(blob.ciphertext),
-      }, blobAad(id, found.id, found.versionNo));
-    } catch {
+      }, blobAad(id, found.id, found.versionNo), found.ticket);
+    } catch (err) {
+      const refusal = keyServiceRefusal(err);
+      if (refusal) {
+        // keyd said no (rate limit, ledger write failure...) or is down: not an integrity problem.
+        await this.audit.record({ action: 'document.download', outcome: refusal === 'key_service_unavailable' ? 'FAILED' : 'DENIED', reason: 'key_service_refused', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo, refusal } });
+        if (refusal === 'rate_limited') throw new HttpException('Too many files opened in a short time. Try again in a minute.', HttpStatus.TOO_MANY_REQUESTS);
+        throw new ServiceUnavailableException('The key service did not release this file. Try again shortly.');
+      }
       await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
