@@ -57,15 +57,16 @@ jobs:
         run: node tools/verify-audit.test.mjs
       - name: Offline key-ledger reconciliation (forged, rewritten and truncated ledgers)
         run: node tools/reconcile-ledger.test.mjs
-      - name: Passkeys in a real browser (Chrome's virtual authenticator, real pages and API)
+      - name: Build web
+        run: cd apps/web && npx next build
+      - name: Browser tests (passkeys; stored XSS, CSP, framing and headers on the production build)
         env:
           CHROME_PATH: /usr/bin/google-chrome
+          E2E_SKIP_BUILD: '1'
         run: cd apps/api && npm run test:e2e
       - name: Mutation check (remove each authorisation rule; tests must fail)
         if: github.event_name == 'push'
         run: node tools/mutation-check.mjs
-      - name: Build web
-        run: cd apps/web && npx next build
 
   keyd:
     name: keyd (Rust) tests

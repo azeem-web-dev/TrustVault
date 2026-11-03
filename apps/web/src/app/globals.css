@@ -34,6 +34,12 @@
   --animate-drawer: drawer 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-float: float 7s ease-in-out infinite;
+  /* Staggered copies: classes, not style attributes, so the CSP needs no 'unsafe-inline' for styles. */
+  --animate-float-1: float 7s ease-in-out -1s infinite;
+  --animate-float-2: float 7s ease-in-out -3.5s infinite;
+  --animate-float-3: float 7s ease-in-out -5s infinite;
+  --animate-float-4: float 7s ease-in-out -2s infinite;
+  --animate-float-5: float 7s ease-in-out -4s infinite;
   --animate-pulse-ring: pulse-ring 2.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
   --animate-dash: dash 3s linear infinite;
 

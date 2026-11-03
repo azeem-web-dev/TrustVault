@@ -187,6 +187,16 @@ export default function DocumentPage() {
                 <Button variant="soft" size="lg" icon={<Eye size={18} />} onClick={() => setTab('pages')}>View only</Button>
               ) : doc.downloadNeedsApproval ? (
                 <ButtonLink href="#download-request" variant="primary" size="lg" icon={<DownloadSimple size={18} />} onClick={() => setTab('overview')}>Ask to download</ButtonLink>
+              ) : current.mimeType.startsWith('text/csv') ? (
+                // CSV: by default a copy with spreadsheet formulas disabled
+                // (cells starting = + - @ get a leading '), so opening it in
+                // Excel cannot run anything. The original bytes stay available.
+                <>
+                  <ButtonLink href={`/api/documents/${doc.id}/download?variant=formulas-disabled`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
+                    Download (formulas disabled)
+                  </ButtonLink>
+                  <ButtonLink href={`/api/documents/${doc.id}/download`} size="lg" icon={<DownloadSimple size={18} />}>Original file</ButtonLink>
+                </>
               ) : (
                 <ButtonLink href={`/api/documents/${doc.id}/download`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
                   Download <span className="hidden max-w-[12rem] truncate font-normal opacity-80 md:inline">{current.fileName}</span>

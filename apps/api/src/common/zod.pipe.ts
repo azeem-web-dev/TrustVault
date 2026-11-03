@@ -14,7 +14,9 @@ export class ZodPipe<T> implements PipeTransform<unknown, T> {
     if (!result.success) {
       throw new BadRequestException({
         message: 'Invalid request',
-        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        // Unknown-key messages would repeat the caller's key names back: a
+        // generic message instead, so no error echoes input (THREATS.md W6).
+        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.code === 'unrecognized_keys' ? 'Unrecognized field' : i.message })),
       });
     }
     return result.data;

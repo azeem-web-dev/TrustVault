@@ -1,7 +1,7 @@
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appDb, as, createUser, login, ownerDb, PDF, resetState, startApp, testEnv, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
+import { appDb, as, createUser, login, ownerDb, resetState, startApp, testEnv, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
 import { aesGcmOpen, aesGcmSeal, LocalKeyProvider, type KeyProvider } from '../src/crypto/key-provider.js';
 import { blobAad } from '../src/crypto/file-crypto.js';
 import { reencryptAll, rotateKeys, verifyKeys } from '../src/keys/rotation.js';
@@ -55,7 +55,9 @@ beforeAll(async () => {
   owner = await createUser({ email: 'rot-owner@t.io', role: 'OWNER', mfa: true });
   ownerS = await login(t, owner);
   for (let i = 0; i < 5; i++) {
-    await as(t, ownerS).upload('/api/documents', Buffer.concat([PDF, Buffer.from(`%${i}\n`)]), `r${i}.pdf`, { title: `Rotate ${i}`, category: 'Keys' }).expect(201);
+    // Distinct plain-text files: bytes after a PDF's %%EOF are refused by the upload check (THREATS.md C3).
+    await as(t, ownerS).upload('/api/documents', Buffer.from(`Rotation test file ${i}
+`), `r${i}.txt`, { title: `Rotate ${i}`, category: 'Keys' }).expect(201);
   }
   // One version as written before key generations existed (key id local-v1),
   // to prove legacy values migrate too.

@@ -10,7 +10,8 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { remainingLevel } from './sharing.service.js';
-import { detectType, RejectedFile, safeFileName } from './content-check.js';
+import { RejectedFile, safeFileName } from './content-check.js';
+import { inspectUpload } from './content-inspector.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
 import { pageKind, stampDownload, traceCode } from './pages.js';
 import { DownloadLimitsService } from '../risk/download-limits.service.js';
@@ -165,7 +166,7 @@ export class DocumentsService {
   // ----------------------------------------------------------------- upload
 
   async create(actor: Actor, file: UploadedFile | undefined, meta: { title: string; category: string; description?: string | undefined; folderId?: string | undefined }) {
-    const checked = this.checkFile(file);
+    const checked = await this.checkFile(file);
     const documentId = randomUUID();
     const versionId = randomUUID();
     await this.scanForMalware('document.upload', checked);
@@ -184,7 +185,7 @@ export class DocumentsService {
   }
 
   async addVersion(actor: Actor, id: string, file: UploadedFile | undefined) {
-    const checked = this.checkFile(file);
+    const checked = await this.checkFile(file);
     return this.prisma.asUser(actor.userId, async (tx) => {
       await this.access.require(tx, actor, id, 'upload_version');
       // Scanned only after the permission check, so the scanner is not an
@@ -217,7 +218,7 @@ export class DocumentsService {
    * is stamped with who, when and a trace code where the type allows
    * (THREATS.md V5); the trace code is in the download's audit row.
    */
-  async download(actor: Actor, id: string, versionNo?: number) {
+  async download(actor: Actor, id: string, versionNo?: number, variant?: 'formulas-disabled') {
     // The decision, the version fetch and the ALLOWED row happen under the
     // shared locks require() takes; the commit releases them, and only then
     // is anything decrypted, stamped or sent (THREATS.md R11).
@@ -241,6 +242,9 @@ export class DocumentsService {
           details: { versionNo: version.versionNo, signature: version.quarantine.signature },
         });
         throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
+      }
+      if (variant === 'formulas-disabled' && !version.mimeType.startsWith('text/csv')) {
+        throw new BadRequestException('Only CSV files have a formulas-disabled copy');
       }
       // Hard download limits (THREATS.md U9): counted and enforced here,
       // after the access decision and before an approval is used or
@@ -274,7 +278,7 @@ export class DocumentsService {
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
         details: {
           versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), level: Level[decision.level],
-          ...(approvalId ? { approvalId } : {}), downloadId,
+          ...(approvalId ? { approvalId } : {}), downloadId, ...(variant ? { variant } : {}),
           // What the copy carries: 'pdf' or 'image' stamp, or 'none' (sent unchanged).
           trace, stamp: ['pdf', 'image'].includes(pageKind(version.mimeType) ?? '') ? pageKind(version.mimeType) : 'none',
         },
@@ -418,10 +422,11 @@ export class DocumentsService {
 
   // ---------------------------------------------------------------- helpers
 
-  private checkFile(file: UploadedFile | undefined) {
+  /** The content check runs in a worker thread with heap and time limits (content-inspector.ts). */
+  private async checkFile(file: UploadedFile | undefined) {
     if (!file || !file.buffer?.length) throw new BadRequestException('Choose a file to upload');
     try {
-      const type = detectType(file.buffer, file.originalname);
+      const type = await inspectUpload(file.buffer, file.originalname);
       return { buffer: file.buffer, type, fileName: safeFileName(file.originalname, type), hash: sha256(file.buffer) };
     } catch (err) {
       if (err instanceof RejectedFile) throw new BadRequestException(err.message);
@@ -434,7 +439,7 @@ export class DocumentsService {
    * cannot answer (503). Both are audited outside any transaction, so the
    * record survives the failed request.
    */
-  private async scanForMalware(action: string, f: ReturnType<DocumentsService['checkFile']>, documentId?: string) {
+  private async scanForMalware(action: string, f: Awaited<ReturnType<DocumentsService['checkFile']>>, documentId?: string) {
     const base = { action, targetType: 'document', ...(documentId ? { targetId: documentId, documentId } : {}) };
     const details = { fileName: f.fileName, sha256: f.hash.toString('hex'), sizeBytes: f.buffer.length, scanner: this.scanner.name };
     let result;
@@ -451,7 +456,7 @@ export class DocumentsService {
     }
   }
 
-  private async storeVersion(tx: Tx, actor: Actor, documentId: string, versionId: string, versionNo: number, f: ReturnType<DocumentsService['checkFile']>) {
+  private async storeVersion(tx: Tx, actor: Actor, documentId: string, versionId: string, versionNo: number, f: Awaited<ReturnType<DocumentsService['checkFile']>>) {
     const sealed = await sealFile(this.keys, f.buffer, blobAad(documentId, versionId, versionNo));
     await tx.documentVersion.create({
       data: { id: versionId, documentId, versionNo, fileName: f.fileName, mimeType: f.type.mime, sizeBytes: f.buffer.length, sha256: new Uint8Array(f.hash), uploadedById: actor.userId },
