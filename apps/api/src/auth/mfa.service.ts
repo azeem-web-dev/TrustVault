@@ -14,6 +14,7 @@ import { base32Encode, matchTotp, newTotpSecret, otpauthUri } from './totp.js';
 import { SessionService, type NewSession } from './session.service.js';
 import { MfaPolicyService } from './mfa-policy.service.js';
 import { expectedPasskeyOrigins } from './passkey-origins.js';
+import { DeviceTrustService } from './device-trust.service.js';
 
 const totpAad = (userId: string) => `tv-totp-v1|${userId}`;
 
@@ -48,6 +49,7 @@ export class MfaService {
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(MfaPolicyService) private readonly policy: MfaPolicyService,
+    @Inject(DeviceTrustService) private readonly devices: DeviceTrustService,
   ) {}
 
   /** The web origin, plus the Android app's signing-key origin(s) (THREATS.md S22). */
@@ -120,7 +122,7 @@ export class MfaService {
   }
 
   private async checkCode(actor: Actor, code: string, action: string): Promise<void> {
-    await this.limits.hit(`mfa:${actor.userId}`, 5, 300, 'Too many codes tried. Wait five minutes.');
+    await this.mfaLimit(actor, 'Too many codes tried. Wait five minutes.');
     // The sealed secret, through its function (the app role cannot select the column, A26).
     const [row] = await this.prisma.$queryRaw<{ s: Buffer }[]>`SELECT tv_totp_secret(${actor.userId}::uuid) AS s`;
     const stored = unpackWrapped(Buffer.from(row!.s));
@@ -207,7 +209,7 @@ export class MfaService {
 
   /** Checks an assertion against the challenge issued to this session, then runs `then` in the same transaction. */
   private async checkPasskey<T>(actor: Actor, response: AuthenticationResponseJSON, action: string, then: (tx: Tx) => Promise<T>): Promise<T> {
-    await this.limits.hit(`mfa:${actor.userId}`, 5, 300, 'Too many attempts. Wait five minutes.');
+    await this.mfaLimit(actor, 'Too many attempts. Wait five minutes.');
     const expectedChallenge = await this.redis.client.getdel(`webauthn:auth:${actor.sessionId}`);
     if (!expectedChallenge) throw new BadRequestException('The passkey request expired. Try again.');
     const passkey = await this.prisma.passkey.findFirst({ where: { userId: actor.userId, credentialId: response.id } });
@@ -300,6 +302,23 @@ export class MfaService {
     if (MfaPolicyService.isRequired(actor.role, false, await this.policy.requiredRoles(tx))) {
       throw new BadRequestException(actor.role === 'ADMIN' ? 'Admins must keep at least one second factor' : 'Your role must keep at least one second factor');
     }
+  }
+
+  /**
+   * Limits on second-factor attempts (THREATS.md S7, S27). Five per session
+   * per 5 minutes and ten per account per 15 minutes bound guessing. Someone
+   * who has the password could spend the account's budget to keep its owner
+   * out, so a trusted device of this account (DeviceTrustService) has its
+   * own budget instead and is never held up by a stranger's guesses.
+   */
+  private async mfaLimit(actor: Actor, message: string): Promise<void> {
+    const device = this.devices.verify(currentContext()?.deviceCookie);
+    if (device && device.userId === actor.userId) {
+      await this.limits.hit(`mfa:dev:${actor.userId}:${device.deviceId}`, 5, 300, message);
+      return;
+    }
+    await this.limits.hit(`mfa:s:${actor.sessionId}`, 5, 300, message);
+    await this.limits.hit(`mfa:${actor.userId}`, 10, 900, message);
   }
 
   /** Someone who already has a second factor must use it before adding another. */

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { Role } from '../generated/prisma/enums.js';
+import { deviceCookieFrom } from '../auth/device-trust.service.js';
 
 /** The authenticated caller, as established by the session guard. */
 export interface Actor {
@@ -32,6 +33,8 @@ export interface RequestContext {
    * same refusal a second time.
    */
   refusalAudited?: boolean;
+  /** The raw trusted-device cookie, if the browser sent one (DeviceTrustService checks it). */
+  deviceCookie?: string;
   /** The raw document id a route rejected as malformed (see docId()). */
   rejectedDocumentId?: string;
 }
@@ -56,6 +59,7 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
     ip: req.ip ?? null,
     userAgent: req.get('user-agent')?.slice(0, 512) ?? null,
     actor: null,
+    deviceCookie: deviceCookieFrom(req.get('cookie')),
   };
   res.setHeader('X-Request-Id', ctx.requestId);
   storage.run(ctx, () => next());

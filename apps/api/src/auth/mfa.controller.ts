@@ -8,6 +8,7 @@ import { CurrentActor, PartialAuth, StepUp } from './decorators.js';
 import { MfaService } from './mfa.service.js';
 import { setSessionCookie } from './auth.controller.js';
 import type { NewSession } from './session.service.js';
+import { DeviceTrustService } from './device-trust.service.js';
 
 const CodeSchema = z.strictObject({ code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code') });
 // WebAuthn responses are verified cryptographically by the library; here we
@@ -28,6 +29,7 @@ export class MfaController {
   constructor(
     @Inject(MfaService) private readonly mfa: MfaService,
     @Inject(NotifyService) private readonly notify: NotifyService,
+    @Inject(DeviceTrustService) private readonly devices: DeviceTrustService,
   ) {}
 
   @Get()
@@ -112,8 +114,10 @@ export class MfaController {
 
   private issue(res: Response, session: NewSession, actor: Actor) {
     setSessionCookie(res, session);
-    // Completing the second step is the moment of signing in.
+    // Completing the second step is the moment of signing in, and this
+    // browser becomes a trusted device for the account (DeviceTrustService).
     if (actor.authLevel !== 'mfa') {
+      this.devices.setCookie(res, actor.userId);
       const ctx = currentContext();
       this.notify.signIn(actor.userId, ctx?.ip ?? null, ctx?.userAgent ?? null);
     }

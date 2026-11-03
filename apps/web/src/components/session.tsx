@@ -18,12 +18,15 @@ interface SessionState {
   mfaPending: boolean;
   mfaEnrolled: boolean;
   refresh: () => Promise<void>;
-  signIn: (email: string, password: string) => Promise<{ mfaRequired: boolean }>;
+  /** `linkSent`: the account is under attack and this browser is new; finish from the emailed link. */
+  signIn: (email: string, password: string) => Promise<{ mfaRequired: boolean; linkSent?: string }>;
+  /** Finish a sign-in from an emailed one-time link. */
+  signInWithLink: (token: string) => Promise<{ mfaRequired: boolean }>;
   signOut: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
-const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite'];
+const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite', '/signin-link'];
 
 /**
  * Knows who is signed in, for display only. Hiding a link here is a
@@ -59,7 +62,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const r = await api.post<Me & { mfaRequired: boolean }>('/auth/login', { email, password });
+    const r = await api.post<Me | { signInLinkSent: true; message: string }>('/auth/login', { email, password });
+    if ('signInLinkSent' in r) return { mfaRequired: false, linkSent: r.message };
+    setCsrfToken(r.csrfToken);
+    setMe({ ...r, mfaSatisfied: false });
+    return { mfaRequired: r.mfaRequired };
+  }, []);
+
+  const signInWithLink = useCallback(async (token: string) => {
+    const r = await api.post<Me>('/auth/login/link', { token });
     setCsrfToken(r.csrfToken);
     setMe({ ...r, mfaSatisfied: false });
     return { mfaRequired: r.mfaRequired };
@@ -84,6 +95,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         mfaEnrolled: me?.mfaEnrolled ?? false,
         refresh,
         signIn,
+        signInWithLink,
         signOut,
       }}
     >

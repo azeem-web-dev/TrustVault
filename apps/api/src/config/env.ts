@@ -44,6 +44,17 @@ const EnvSchema = z.object({
   TRASH_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
   /** Minimum response time of a failed login, so timing does not reveal which emails have accounts. */
   LOGIN_FAILURE_FLOOR_MS: z.coerce.number().int().min(0).max(5000).default(450),
+  /**
+   * Key (32 bytes, base64) that signs the trusted-device cookie. Without it
+   * a random key is made at startup: every trusted device is forgotten on a
+   * restart, which only means people may be asked to confirm a sign-in by
+   * email while their account is under attack. Never a reason to fail.
+   */
+  DEVICE_TRUST_KEY: z.string().optional(),
+  /** Days a device stays trusted after a full sign-in (renewed at every sign-in). */
+  DEVICE_TRUST_DAYS: z.coerce.number().int().min(1).max(365).default(90),
+  /** Minutes a sign-in confirmation link works. */
+  SIGNIN_LINK_MINUTES: z.coerce.number().int().min(5).max(60).default(15),
   /** Background jobs (audit checkpoints, retention, session cleanup). */
   JOBS_ENABLED: bool.default(true),
   /** Email: 'off' sends nothing, 'smtp' sends, 'memory' keeps messages for tests. */
@@ -91,6 +102,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (env.KEY_PROVIDER === 'local') {
     const key = env.LOCAL_MASTER_KEY ? Buffer.from(env.LOCAL_MASTER_KEY, 'base64') : null;
     if (!key || key.length !== 32) throw new Error('Invalid configuration: LOCAL_MASTER_KEY must be 32 bytes of base64');
+  }
+  if (env.DEVICE_TRUST_KEY !== undefined && Buffer.from(env.DEVICE_TRUST_KEY, 'base64').length !== 32) {
+    throw new Error('Invalid configuration: DEVICE_TRUST_KEY must be 32 bytes of base64');
   }
   return env;
 }

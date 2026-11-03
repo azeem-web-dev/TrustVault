@@ -188,6 +188,14 @@ export class AlertGeneratorService {
         return { alerts: [{ ...base, rule: 'alert_policy_changed', category: 'policy', severity: 'medium', subjectUserId: e.actor_id, subjectEmail: e.actor_email, dedupKey: `alert_policy_changed|${seq}`, message: `${by} changed detection thresholds or download limits`, details: e.details ?? {} }] };
       case 'download.limit_override':
         return { alerts: [{ ...base, rule: 'download_limit_override', category: 'policy', severity: 'medium', subjectUserId: e.actor_id, subjectEmail: e.actor_email, dedupKey: `download_limit_override|${seq}`, message: `${by} raised the download limit of ${String(e.details?.userEmail ?? '?')} to ${String(e.details?.dailyLimit ?? '?')} a day until ${String(e.details?.expiresAt ?? '?')}: "${String(e.details?.reason ?? '')}"`, details: { ...(e.details ?? {}), userEmail: e.details?.userEmail ?? null } }] };
+      // Sign-in abuse detectors (THREATS.md S27, S28): one persistent alert per
+      // detection, so they outlive Redis and are reviewed like the rest.
+      case 'auth.credential_stuffing':
+      case 'auth.distributed_guessing':
+      case 'auth.account_under_attack': {
+        const who = e.actor_email ?? String(e.details?.ip ?? e.details?.network ?? 'unknown');
+        return { alerts: [{ ...base, rule: 'auth_abuse_detected', category: 'auth', severity: 'high', subjectUserId: e.actor_id, subjectEmail: e.actor_email, dedupKey: `auth_abuse_detected|${seq}`, message: `${who}: ${(e.reason ?? e.action).replace(/_/g, ' ')} (${e.action})`, details: e.details ?? {} }] };
+      }
       case 'auth.login':
         if (e.outcome === 'DENIED' && e.reason && (e.reason.startsWith('wrong_password_locked') || e.reason.startsWith('rate_limited'))) {
           // Aggregated: one alert per account per hour, however many attempts.
