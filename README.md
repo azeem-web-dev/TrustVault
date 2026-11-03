@@ -129,7 +129,7 @@ GitHub Actions, every 15 min ──HTTPS──► GET /api/witness/checkpoints (
 cd apps/api && npx vitest run            # over 750 tests against a real Postgres and Redis
 cd apps/api && npm run test:e2e          # real Chrome: passkeys, and stored XSS / CSP / framing on the production build
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (204 of them), one at a time; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (235 of them), one at a time; every removal must fail a test
 node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
 cd keyd && cargo test --locked           # key service (tickets, ledger, rate limits)
 cd apps/mobile && flutter test           # the Android app: session storage, wipe on sign-out and 401, local copies, transport policy
