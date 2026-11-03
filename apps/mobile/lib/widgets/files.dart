@@ -1,17 +1,22 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../core/api.dart';
+import '../core/local_copies.dart';
 import '../core/offline_copies.dart';
 import '../core/theme.dart';
 import 'ui.dart';
 
+/// Test seam: how a saved copy is handed to the system viewer. Tests replace
+/// it so no real viewer app is launched.
+@visibleForTesting
+Future<OpenResult> Function(String path) openFileWith = OpenFilex.open;
+
 /// Downloads through the API (so the read is audited exactly like the web,
-/// and the copy is stamped with who and when), keeps it only encrypted
-/// (THREATS.md V6) and opens it with the system viewer.
+/// and the copy is stamped with who and when), keeps it only encrypted in
+/// this document's private folder (THREATS.md V6) and opens it with the
+/// system viewer. A 404 (revoked, expired, deleted) removes every copy of
+/// the document kept on this phone.
 Future<void> downloadAndOpen(BuildContext context, {required String documentId, required int versionNo, required String apiPath, String fallbackName = 'document'}) async {
   toast(context, 'Downloading…', tone: Tone.blue);
   try {
@@ -20,6 +25,8 @@ Future<void> downloadAndOpen(BuildContext context, {required String documentId, 
     if (!context.mounted) return;
     await openSavedCopy(context, documentId: documentId, versionNo: versionNo);
   } catch (e) {
+    // No longer ours (revoked, expired, deleted): drop any copy saved earlier.
+    if (e is ApiError && e.status == 404) await LocalCopies.removeFor(documentId);
     if (context.mounted) toast(context, errorText(e, 'Download failed'), tone: Tone.red);
   }
 }
@@ -31,7 +38,7 @@ Future<void> openSavedCopy(BuildContext context, {required String documentId, re
     final file = await OfflineCopies.openPlain(documentId, versionNo);
     final name = file.uri.pathSegments.last;
     if (!context.mounted) return;
-    final r = await OpenFilex.open(file.path);
+    final r = await openFileWith(file.path);
     if (!context.mounted) return;
     if (r.type == ResultType.done) {
       toast(context, 'Opened $name');
@@ -50,18 +57,16 @@ Future<void> openSavedCopy(BuildContext context, {required String documentId, re
 }
 
 /// Not a document (the audit evidence bundle): saved as it is in the app's
-/// private storage, wiped at sign-out, and opened with the system viewer.
+/// private storage (`downloads/_other`), wiped at sign-out, and opened with
+/// the system viewer.
 Future<void> downloadExportAndOpen(BuildContext context, String apiPath, {String fallbackName = 'export'}) async {
   toast(context, 'Downloading…', tone: Tone.blue);
   try {
     final d = await Api.I.download(apiPath, fallbackName: fallbackName);
-    final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/downloads');
-    await dir.create(recursive: true);
-    final safe = d.fileName.replaceAll(RegExp(r'[\/:*?"<>|]'), '_');
-    final file = File('${dir.path}/$safe');
-    await file.writeAsBytes(d.bytes, flush: true);
+    final file = await LocalCopies.save(apiPath, d.fileName, d.bytes);
+    final safe = LocalCopies.safeName(d.fileName);
     if (!context.mounted) return;
-    final r = await OpenFilex.open(file.path);
+    final r = await openFileWith(file.path);
     if (context.mounted && r.type != ResultType.done) toast(context, 'Saved $safe', tone: Tone.blue);
   } catch (e) {
     if (context.mounted) toast(context, errorText(e, 'Download failed'), tone: Tone.red);

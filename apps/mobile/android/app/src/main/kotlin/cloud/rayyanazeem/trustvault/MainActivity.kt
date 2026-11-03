@@ -15,6 +15,8 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 "on" -> { window.addFlags(WindowManager.LayoutParams.FLAG_SECURE); result.success(null) }
                 "off" -> { window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE); result.success(null) }
+                // For the on-device test (integration_test/pending_features_test.dart).
+                "isSecure" -> result.success((window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE) != 0)
                 else -> result.notImplemented()
             }
         }

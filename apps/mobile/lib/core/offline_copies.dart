@@ -3,9 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
+import 'local_copies.dart';
 
 /// Files the app keeps, encrypted (THREATS.md V6).
 ///
@@ -25,13 +25,15 @@ class OfflineCopies {
   static final _aes = AesGcm.with256bits();
   static const _magic = 'TVC1';
 
-  static Future<Directory> _dir(String name) async {
-    final d = Directory('${(await getApplicationDocumentsDirectory()).path}/$name');
+  /// `downloads/<document>/`: one folder per document (LocalCopies), so a
+  /// 404 or sign-out removes the encrypted copy and any plain one together.
+  static Future<Directory> _docDir(String documentId) async {
+    final d = Directory('${(await LocalCopies.root()).path}/${LocalCopies.folderFor('/documents/$documentId/')}');
     await d.create(recursive: true);
     return d;
   }
 
-  static Future<File> _file(String documentId, int versionNo) async => File('${(await _dir('downloads')).path}/$documentId-v$versionNo.tvc');
+  static Future<File> _file(String documentId, int versionNo) async => File('${(await _docDir(documentId)).path}/v$versionNo.tvc');
 
   static Future<SecretKey> _key(String documentId) async {
     final r = await Api.I.post('/documents/$documentId/offline-key') as Map;
@@ -76,25 +78,27 @@ class OfflineCopies {
     final mac = Mac(data.sublist(at, at += 16));
     final plain = await _aes.decrypt(SecretBox(data.sublist(at), nonce: nonce, mac: mac), secretKey: key, aad: header);
     final name = (jsonDecode(utf8.decode(header)) as Map)['fileName'] as String;
-    final safe = name.replaceAll(RegExp(r'[\/:*?"<>|]'), '_');
-    final out = File('${(await _dir('opened')).path}/$safe');
+    final opened = Directory('${(await _docDir(documentId)).path}/opened');
+    await opened.create(recursive: true);
+    final out = File('${opened.path}/${LocalCopies.safeName(name)}');
     await out.writeAsBytes(plain, flush: true);
     return out;
   }
 
   /// Every stored copy of one document (access ended).
-  static Future<void> forget(String documentId) async {
-    final dir = await _dir('downloads');
-    await for (final f in dir.list()) {
-      if (f is File && f.uri.pathSegments.last.startsWith('$documentId-')) await f.delete();
-    }
-  }
+  static Future<void> forget(String documentId) => LocalCopies.removeFor(documentId);
 
   /// Plain copies handed to other apps.
   static Future<void> wipeOpened() async {
     try {
-      final d = Directory('${(await getApplicationDocumentsDirectory()).path}/opened');
-      if (await d.exists()) await d.delete(recursive: true);
+      final root = await LocalCopies.root();
+      if (!await root.exists()) return;
+      await for (final d in root.list()) {
+        if (d is Directory) {
+          final opened = Directory('${d.path}/opened');
+          if (await opened.exists()) await opened.delete(recursive: true);
+        }
+      }
     } catch (_) {}
   }
 }

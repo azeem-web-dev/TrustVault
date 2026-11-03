@@ -1,5 +1,20 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The app lock (local_auth adds it too; declared here so it is reviewed). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!-- open_filex asks for these, but the app only opens files from its own private
+         storage, which needs no permission. Keep shared storage out of reach. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/>
+    <!-- The passkeys plugin pulls in play-services-auth (Google Sign-In), which
+         asks for these. Passkeys through Credential Manager need neither:
+         USE_CREDENTIALS is the old AccountManager permission, and
+         CREDENTIAL_MANAGER_SET_ORIGIN is for browsers acting for websites. -->
+    <uses-permission android:name="android.permission.USE_CREDENTIALS" tools:node="remove"/>
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" tools:node="remove"/>
     <application
         android:label="TrustVault"
         android:allowBackup="false"
@@ -8,6 +23,10 @@
         android:usesCleartextTraffic="false"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Google Sign-In's exported revocation service (play-services-auth, via the
+             passkeys plugin). The app does not use Google Sign-In; keep nothing exported
+             that it does not need (tool/android_security_check.dart). -->
+        <service android:name="com.google.android.gms.auth.api.signin.RevocationBoundService" tools:node="remove"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

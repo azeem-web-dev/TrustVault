@@ -8,6 +8,7 @@ import '../widgets/phosphor.dart';
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/secure_screen.dart';
+import '../core/local_copies.dart';
 import '../core/theme.dart';
 import '../widgets/audit_ui.dart';
 import '../widgets/files.dart';
@@ -57,6 +58,9 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     } on ApiError catch (e) {
       if (!mounted) return;
       if (e.status == 404) {
+        // Revoked, expired or deleted: no copy of it stays on the phone.
+        await LocalCopies.removeFor(widget.id);
+        if (!mounted) return;
         setState(() => _notFound = true);
       } else if (e.status == 403 && (e.code == 'outside_time_window' || e.code == 'network_not_allowed')) {
         setState(() => _policyBlock = e.message);

@@ -68,6 +68,33 @@ jobs:
         if: github.event_name == 'push'
         run: node tools/mutation-check.mjs
 
+  mobile:
+    name: Android app (analyze, unit/widget tests, static security check)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.47.9
+          channel: stable
+          cache: true
+      - name: Dependencies (exactly as locked)
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze
+        run: flutter analyze
+      - name: Unit and widget tests (fake API, no network)
+        run: flutter test
+      - name: Static Android security check (manifests, backup rules, Gradle)
+        run: dart run tool/android_security_check.dart
+      - name: Release build and merged-manifest check
+        if: github.event_name == 'push'
+        run: |
+          flutter build apk --release
+          dart run tool/android_security_check.dart --merged
+
   keyd:
     name: keyd (Rust) tests
     runs-on: ubuntu-24.04

@@ -90,7 +90,9 @@ class _AccountScreenState extends State<AccountScreen> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     final session = context.watch<Session>();
-    final user = session.user!;
+    final user = session.user;
+    // Signed out: this page is fading out; draw nothing from the old session.
+    if (user == null) return const SizedBox.shrink();
     final mfa = _mfa;
     final passkeys = (mfa?['passkeys'] as List?)?.cast<Map>() ?? const [];
     final hasPasskey = passkeys.isNotEmpty;

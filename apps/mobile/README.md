@@ -80,6 +80,19 @@ the build falls back to the debug key, which is fine for side-loading tests.
 
 `flutter analyze` must report no issues.
 
+## Tests
+
+```sh
+flutter test                                   # unit + widget tests against a fake API, static checks
+dart run tool/android_security_check.dart      # manifests, backup rules, Gradle (add --merged after a release build)
+flutter test integration_test/app_security_test.dart -d emulator-5554   # on an emulator
+tool/android-device-checks.sh -s emulator-5554                          # adb checks on the installed app
+```
+
+What each test proves, the Android threat model and the release checklist are
+in [`docs/ANDROID_SECURITY.md`](../../docs/ANDROID_SECURITY.md). No test talks
+to a real server.
+
 ## Regenerating icons and artwork
 
 Icons (`lib/widgets/phosphor.dart`) and the illustrations in `assets/art`
