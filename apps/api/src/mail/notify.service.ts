@@ -47,6 +47,21 @@ export class NotifyService {
     });
   }
 
+  /**
+   * Tells a document's owner, as soon as a second admin approves it, that an
+   * administrator may now open their document for an hour (THREATS.md S19).
+   */
+  breakGlassApproved(documentId: string, requester: string, approver: string, reason: string): void {
+    this.fire(async () => {
+      const [doc] = await this.prisma.$queryRaw<{ title: string; owner_id: string }[]>`SELECT title, owner_id FROM tv_document_brief(${documentId}::uuid)`;
+      if (!doc) return;
+      const u = await this.person(doc.owner_id);
+      if (u && u.status === 'ACTIVE') {
+        this.mail.send(u, mailTemplates.breakGlassApproved(u.displayName, doc.title, requester, approver, reason, `${this.env.PUBLIC_ORIGIN}/documents/${documentId}`));
+      }
+    });
+  }
+
   /** Tells the person a document was shared with them (named people only, not groups). */
   sharedWithYou(granteeId: string, sharerName: string, documentId: string, title: string, level: string, expiresAt: Date | null): void {
     this.fire(async () => {

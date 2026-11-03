@@ -34,6 +34,12 @@ enum LinkPurpose {
   INVITE
 }
 
+/// Actions that need a second administrator's approval (THREATS.md S19).
+enum ApprovalAction {
+  MFA_RESET
+  BREAK_GLASS
+}
+
 enum AuditOutcome {
   ALLOWED
   DENIED
@@ -79,6 +85,10 @@ model User {
   versionsUploaded DocumentVersion[]
   breakGlass       BreakGlass[]
   passkeys         Passkey[]
+  approvalsAsked    AdminApproval[] @relation("ApprovalRequester")
+  approvalsGiven    AdminApproval[] @relation("ApprovalApprover")
+  approvalsRefused  AdminApproval[] @relation("ApprovalRejecter")
+  approvalsAboutMe  AdminApproval[] @relation("ApprovalTargetUser")
 
   @@map("users")
 }
@@ -190,6 +200,7 @@ model Document {
   versions   DocumentVersion[]
   grants     Grant[]
   breakGlass BreakGlass[]
+  approvals  AdminApproval[]
 
   @@index([ownerId])
   @@index([category])
@@ -323,9 +334,12 @@ model BreakGlass {
   reason     String
   expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// The second admin's approval this window used (required since 20261103310000).
+  approvalId String?  @unique @map("approval_id") @db.Uuid
 
   admin    User     @relation(fields: [adminId], references: [id])
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  approval AdminApproval? @relation(fields: [approvalId], references: [id])
 
   @@index([documentId, adminId])
   @@map("break_glass")
@@ -376,4 +390,36 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+/// A request for an action that needs two administrators (THREATS.md S19).
+/// One asks; a different active admin approves or rejects; the one who asked
+/// uses it once, for exactly this target, within 24 hours. The database
+/// enforces every rule (see the migration). Never deleted.
+model AdminApproval {
+  id               String         @id @default(uuid()) @db.Uuid
+  action           ApprovalAction
+  targetUserId     String?        @map("target_user_id") @db.Uuid
+  targetDocumentId String?        @map("target_document_id") @db.Uuid
+  reason           String
+  requestedById    String         @map("requested_by") @db.Uuid
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt        DateTime       @map("expires_at") @db.Timestamptz(6)
+  approvedById     String?        @map("approved_by") @db.Uuid
+  approvedAt       DateTime?      @map("approved_at") @db.Timestamptz(6)
+  rejectedById     String?        @map("rejected_by") @db.Uuid
+  rejectedAt       DateTime?      @map("rejected_at") @db.Timestamptz(6)
+  consumedAt       DateTime?      @map("consumed_at") @db.Timestamptz(6)
+  expiryRecordedAt DateTime?      @map("expiry_recorded_at") @db.Timestamptz(6)
+
+  targetUser     User?       @relation("ApprovalTargetUser", fields: [targetUserId], references: [id], onDelete: Cascade)
+  targetDocument Document?   @relation(fields: [targetDocumentId], references: [id], onDelete: Cascade)
+  requestedBy    User        @relation("ApprovalRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  approvedBy     User?       @relation("ApprovalApprover", fields: [approvedById], references: [id], onDelete: Cascade)
+  rejectedBy     User?       @relation("ApprovalRejecter", fields: [rejectedById], references: [id], onDelete: Cascade)
+  breakGlass     BreakGlass?
+
+  @@index([createdAt])
+  @@index([targetUserId], map: "admin_approvals_target_user_idx")
+  @@map("admin_approvals")
 }

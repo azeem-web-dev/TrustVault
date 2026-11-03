@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MailService } from '../src/mail/mail.service.js';
-import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
+import { appDb, approved, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
 
 // Holes found on 2026-11-02 by an adversarial review and confirmed live
 // against a local copy before they were fixed (THREATS.md A17, R7, A15, L10).
@@ -198,7 +198,8 @@ describe('roles and ownership stay consistent (A20, A21)', () => {
     const doc = await upload(A);
     const other = await createUser({ email: 'admin2@t.io', role: 'ADMIN' });
     const ADM2 = await login(t, other);
-    await as(t, ADM2).post('/api/admin/break-glass', { documentId: doc, reason: 'Incident response ticket IR-2207 needs this' }).expect(201);
+    const ok = await approved(t, ADM2, ADM, { action: 'BREAK_GLASS', documentId: doc, reason: 'Incident response ticket IR-2207 needs this' });
+    await as(t, ADM2).post('/api/admin/break-glass', { documentId: doc, approvalId: ok }).expect(201);
     await as(t, ADM).post(`/api/admin/users/${ADM2.userId}/deactivate`).expect(200);
     const open = await withDb(ownerDb(), async (db) => (await db.query('SELECT count(*)::int AS n FROM break_glass WHERE admin_id = $1 AND expires_at > now()', [ADM2.userId])).rows[0].n);
     expect(open).toBe(0);
@@ -206,11 +207,15 @@ describe('roles and ownership stay consistent (A20, A21)', () => {
 
   it('a break-glass row cannot be made to last longer than an hour, even straight in the database', async () => {
     const doc = await upload(A);
+    const ADM2 = await login(t, await createUser({ email: 'admin2@t.io', role: 'ADMIN' }));
+    const ok = await approved(t, ADM, ADM2, { action: 'BREAK_GLASS', documentId: doc });
     const err = await withDb(appDb(), async (db) => {
       await db.query('BEGIN');
       await db.query(`SELECT set_config('app.user_id', $1, true)`, [ADM.userId]);
       try {
-        await db.query(`INSERT INTO break_glass (id, admin_id, document_id, reason, expires_at, created_at) VALUES (gen_random_uuid(), $1, $2, 'a long enough reason here', now() + interval '30 days', now() + interval '29 days 23 hours')`, [ADM.userId, doc]);
+        // A genuinely approved request, used in this transaction: only the hour is wrong.
+        await db.query('UPDATE admin_approvals SET consumed_at = now() WHERE id = $1', [ok]);
+        await db.query(`INSERT INTO break_glass (id, admin_id, document_id, reason, expires_at, created_at, approval_id) VALUES (gen_random_uuid(), $1, $2, 'a long enough reason here', now() + interval '30 days', now() + interval '29 days 23 hours', $3)`, [ADM.userId, doc, ok]);
         return null;
       } catch (e) {
         return (e as Error).message;
@@ -250,12 +255,11 @@ describe('attempts after access ended are in the record (L10)', () => {
     expect(alerts.find((a) => a.kind === 'ended_session_used')?.message).toMatch(/victor@t\.io.*deactivated/);
   });
 
-  it('an admin resetting a password and that account then signing in raises an alert (S15)', async () => {
-    const pw = 'a-brand-new-password-for-victor';
-    await as(t, ADM).post(`/api/admin/users/${V.userId}/password`, { password: pw }).expect(204);
-    await login(t, { email: victor.email, password: pw });
+  it('an admin resetting a second factor and that account then signing in raises an alert (S15)', async () => {
+    await as(t, ADM).post(`/api/admin/users/${V.userId}/mfa/reset`).expect(204);
+    await login(t, victor);
     const alerts = (await as(t, ADM).get('/api/admin/alerts').expect(200)).body.alerts as { kind: string; message: string }[];
-    expect(alerts.find((a) => a.kind === 'reset_then_sign_in')?.message).toMatch(/victor@t\.io signed in after admin@t\.io reset their password/);
+    expect(alerts.find((a) => a.kind === 'reset_then_sign_in')?.message).toMatch(/victor@t\.io signed in after admin@t\.io reset their second factor/);
   });
 
   it('a cookie used after logout is refused and recorded as such', async () => {

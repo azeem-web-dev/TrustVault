@@ -1,9 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
-import { PasswordService } from '../auth/password.service.js';
 import { SessionService } from '../auth/session.service.js';
 import { InviteService } from '../auth/invite.service.js';
+import { ApprovalsService } from './approvals.service.js';
 import { normaliseEmail } from '../auth/auth.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { Role } from '../generated/prisma/enums.js';
@@ -38,9 +38,9 @@ export class UsersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuditService) private readonly audit: AuditService,
-    @Inject(PasswordService) private readonly passwords: PasswordService,
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(InviteService) private readonly invites: InviteService,
+    @Inject(ApprovalsService) private readonly approvals: ApprovalsService,
   ) {}
 
   list(): Promise<AdminUserView[]> {
@@ -157,29 +157,30 @@ export class UsersService {
     });
   }
 
-  async resetPassword(actor: Actor, id: string, password: string): Promise<void> {
-    if (id === actor.userId) throw new BadRequestException('Use the change-password page for your own account');
-    const passwordHash = await this.passwords.hash(password);
-    await this.prisma.$transaction(async (tx) => {
+  // There is no "admin sets a password" (THREATS.md S15): an admin can only
+  // email the person a reset link (PasswordResetService.adminSend).
+
+  /**
+   * Clears a user's TOTP and passkeys (lost phone). They must enrol again;
+   * their sessions end. For an OWNER or ADMIN this is how an admin could take
+   * over the account, so it needs a second admin's approval, used here once
+   * (THREATS.md S19); a VIEWER's or EXTERNAL's needs one admin.
+   */
+  async resetMfa(actor: Actor, id: string, approvalId?: string): Promise<void> {
+    if (id === actor.userId) throw new BadRequestException('Another admin must reset your second factor');
+    await this.prisma.asUser(actor.userId, async (tx) => {
       const before = await this.lockUser(tx, id);
       assertNotProtected(before);
-      // An invited person chooses their own password from their link.
-      if (!before.activatedAt) throw new BadRequestException('This person has not accepted their invitation yet');
-      await tx.user.update({ where: { id }, data: { passwordHash, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null } });
-      const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'password_reset_by_admin');
-      await this.audit.record({ action: 'user.password_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { sessionsEnded: ended } }, tx);
-    });
-  }
-
-  /** Clears a user's TOTP and passkeys (lost phone). They must enrol again; their sessions end. */
-  async resetMfa(actor: Actor, id: string): Promise<void> {
-    if (id === actor.userId) throw new BadRequestException('Another admin must reset your second factor');
-    await this.prisma.$transaction(async (tx) => {
-      assertNotProtected(await this.lockUser(tx, id));
+      const needsTwo = before.role === 'OWNER' || before.role === 'ADMIN';
+      if (needsTwo && !approvalId) {
+        await this.audit.record({ action: 'user.mfa_reset', outcome: 'DENIED', reason: 'approval_required', targetType: 'user', targetId: id, details: { role: before.role } });
+        throw new ConflictException({ message: 'Clearing an owner\u2019s or administrator\u2019s second factor needs a second administrator\u2019s approval. Ask for it on the Approvals page.', code: 'approval_required' });
+      }
+      if (needsTwo) await this.approvals.use(tx, actor, approvalId!, 'MFA_RESET', { userId: id });
       await tx.user.update({ where: { id }, data: { totpSecretEnc: null, totpEnabledAt: null, totpLastStep: null } });
       const removed = await tx.passkey.deleteMany({ where: { userId: id } });
       const ended = await this.sessions.revokeAllForUser(id, tx, undefined, 'second_factor_reset_by_admin');
-      await this.audit.record({ action: 'user.mfa_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { passkeysRemoved: removed.count, sessionsEnded: ended } }, tx);
+      await this.audit.record({ action: 'user.mfa_reset', outcome: 'ALLOWED', targetType: 'user', targetId: id, details: { passkeysRemoved: removed.count, sessionsEnded: ended, role: before.role, ...(needsTwo ? { approvalId: approvalId! } : {}) } }, tx);
     });
   }
 

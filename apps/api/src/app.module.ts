@@ -20,6 +20,8 @@ import { UsersService } from './users/users.service.js';
 import { UsersController } from './users/users.controller.js';
 import { GroupsController } from './users/groups.controller.js';
 import { DirectoryController } from './users/directory.controller.js';
+import { ApprovalsController } from './users/approvals.controller.js';
+import { ApprovalsService } from './users/approvals.service.js';
 import { AccessService } from './documents/access.js';
 import { DocumentsService } from './documents/documents.service.js';
 import { SharingService } from './documents/sharing.service.js';
@@ -50,7 +52,7 @@ export class AppModule {
     return {
       module: AppModule,
       controllers: [
-        HealthController, AuthController, MfaController, UsersController, GroupsController, DirectoryController,
+        HealthController, AuthController, MfaController, UsersController, GroupsController, DirectoryController, ApprovalsController,
         DocumentsController, FoldersController, AuditAdminController, WitnessController,
       ],
       providers: [
@@ -67,6 +69,7 @@ export class AppModule {
         AuthService,
         MfaService,
         UsersService,
+        ApprovalsService,
         AccessService,
         DocumentsService,
         SharingService,

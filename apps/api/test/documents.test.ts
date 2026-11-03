@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EICAR } from './fake-clamd.js';
-import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser } from './helpers.js';
+import { appDb, as, auditRows, createUser, login, ORIGIN, ownerDb, PDF, resetState, startApp, withDb, type Session, type TestApp, type TestUser, approved } from './helpers.js';
 
 // End-to-end: real HTTP, real Postgres with row-level security, real
 // encryption. The heart of the brief: one user cannot reach another
@@ -472,8 +472,11 @@ describe('admins cannot read documents, except through audited break-glass', () 
   it('break-glass gives one hour of READ, is audited with the reason, and shows as an alert', async () => {
     const doc = await upload(A);
     await as(t, ADM).get(`/api/documents/${doc}`).expect(404);
-    await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, reason: 'short' }).expect(400);
-    await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, reason: 'Legal hold request #4471 from counsel' }).expect(201);
+    // A second admin approves the request first (THREATS.md S19).
+    const ADM2 = await login(t, await createUser({ email: 'admin2@t.io', role: 'ADMIN' }));
+    await as(t, ADM).post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: doc, reason: 'short' }).expect(400);
+    const ok = await approved(t, ADM, ADM2, { action: 'BREAK_GLASS', documentId: doc, reason: 'Legal hold request #4471 from counsel' });
+    await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, approvalId: ok }).expect(201);
     await as(t, ADM).get(`/api/documents/${doc}/download`).expect(200);
     await as(t, ADM).patch(`/api/documents/${doc}`, { title: 'x' }).expect(404); // READ only
     const alerts = await as(t, ADM).get('/api/admin/alerts').expect(200);
@@ -484,7 +487,8 @@ describe('admins cannot read documents, except through audited break-glass', () 
 
   it('non-admins cannot use break-glass', async () => {
     const doc = await upload(A);
-    await as(t, B).post('/api/admin/break-glass', { documentId: doc, reason: 'I would like to read this one please' }).expect(403);
+    await as(t, B).post('/api/admin/break-glass', { documentId: doc, approvalId: '6f1c2c1e-6c51-4c8e-9a51-2b6f5a1d9e01' }).expect(403);
+    await as(t, B).post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: doc, reason: 'I would like to read this one please' }).expect(403);
   });
 });
 

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
 import { CurrentActor, Roles } from '../auth/decorators.js';
-import { PasswordSchema } from '../auth/password.service.js';
 import { UsersService } from './users.service.js';
 import { PasswordResetService } from '../auth/password-reset.service.js';
 import { InviteService } from '../auth/invite.service.js';
@@ -28,7 +27,8 @@ const UpdateUserSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
 
-const ResetPasswordSchema = z.strictObject({ password: PasswordSchema });
+// An owner's or admin's second factor: the approval to use (THREATS.md S19).
+const ResetMfaSchema = z.strictObject({ approvalId: z.uuid().optional() });
 
 const uuid = new ParseUUIDPipe({ version: '4' });
 
@@ -80,18 +80,12 @@ export class UsersController {
     return { user: await this.users.reactivate(id) };
   }
 
+  /** VIEWER or EXTERNAL: one admin. OWNER or ADMIN: `{approvalId}` from a second admin (THREATS.md S19). */
   @Post(':id/mfa/reset')
   @HttpCode(204)
-  async resetMfa(@CurrentActor() actor: Actor, @Param('id', uuid) id: string): Promise<void> {
-    await this.users.resetMfa(actor, id);
+  async resetMfa(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(ResetMfaSchema)) body: z.infer<typeof ResetMfaSchema>): Promise<void> {
+    await this.users.resetMfa(actor, id, body.approvalId);
     this.notify.secondFactorChanged(id, 'An administrator removed your second factor. You will be asked to set one up again when you next sign in.');
-  }
-
-  @Post(':id/password')
-  @HttpCode(204)
-  async resetPassword(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(ResetPasswordSchema)) body: z.infer<typeof ResetPasswordSchema>): Promise<void> {
-    await this.users.resetPassword(actor, id, body.password);
-    this.notify.passwordChanged(id, 'by an administrator');
   }
 
   /** Emails the person a reset link. The admin never sees or sets the new password (THREATS.md S15). */

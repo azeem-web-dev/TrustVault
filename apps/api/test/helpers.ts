@@ -185,3 +185,16 @@ export const PDF = Buffer.from(
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n',
   'latin1',
 );
+
+/**
+ * Two-admin approval (THREATS.md S19): `asker` asks, `approver` approves.
+ * Returns the approval id for the asker to use.
+ */
+export async function approved(t: TestApp, asker: Session, approver: Session, body: { action: 'MFA_RESET' | 'BREAK_GLASS'; targetUserId?: string; documentId?: string; reason?: string }): Promise<string> {
+  const r = await as(t, asker).post('/api/admin/approvals', { reason: 'Approved in a test, for a documented reason', ...body });
+  if (r.status !== 201) throw new Error(`approval request failed: ${r.status} ${JSON.stringify(r.body)}`);
+  const id = r.body.approval.id as string;
+  const a = await as(t, approver).post(`/api/admin/approvals/${id}/approve`);
+  if (a.status !== 200) throw new Error(`approval failed: ${a.status} ${JSON.stringify(a.body)}`);
+  return id;
+}

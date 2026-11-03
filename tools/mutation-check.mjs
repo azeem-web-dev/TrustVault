@@ -192,6 +192,24 @@ const MUTATIONS = [
   sql('database: membership and account writes take the person lock',
     'ALTER TABLE group_members DISABLE TRIGGER group_members_0_lock; ALTER TABLE users DISABLE TRIGGER users_0_lock',
     'ALTER TABLE group_members ENABLE TRIGGER group_members_0_lock; ALTER TABLE users ENABLE TRIGGER users_0_lock', ['test/download-order.test.ts']),
+
+  // --- two administrators (THREATS.md S15, S19) -------------------------------
+  code('approvals: an owner or admin second factor needs an approval', 'src/users/users.service.ts',
+    'if (needsTwo && !approvalId) {', 'if (false) {', ['test/approvals.test.ts']),
+  code('approvals: nobody answers their own request (API)', 'src/users/approvals.service.ts',
+    'if (row.requested_by === actor.userId) return { updated: null, refused:', 'if (false) return { updated: null, refused:', ['test/approvals.test.ts']),
+  code('approvals: an approval is used once (API)', 'src/users/approvals.service.ts',
+    ": row.consumed_at ? 'already_used'", ": false ? 'already_used'", ['test/approvals.test.ts']),
+  code('approvals: with one admin, asking is refused', 'src/users/approvals.service.ts',
+    'if (others.length === 0) {', 'if (false) {', ['test/approvals.test.ts']),
+  code('approvals: the owner is emailed when break-glass is approved', 'src/users/approvals.service.ts',
+    'this.notify.breakGlassApproved(', 'void (', ['test/approvals.test.ts']),
+  sql('database: approvals change one step at a time, by the right admin',
+    'ALTER TABLE admin_approvals DISABLE TRIGGER admin_approvals_guard_update', 'ALTER TABLE admin_approvals ENABLE TRIGGER admin_approvals_guard_update',
+    ['test/approvals.test.ts']),
+  sql('database: break-glass needs an approval used in the same transaction',
+    'ALTER TABLE break_glass DISABLE TRIGGER break_glass_needs_approval', 'ALTER TABLE break_glass ENABLE TRIGGER break_glass_needs_approval',
+    ['test/approvals.test.ts']),
 ];
 
 function loadEnv() {

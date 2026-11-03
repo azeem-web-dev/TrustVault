@@ -202,13 +202,14 @@ describe('sessions end immediately', () => {
     await login(t, { email: u.email, password: 'a-brand-new-long-password' });
   });
 
-  it('an admin password reset ends the user’s sessions', async () => {
+  it('an admin cannot set anyone’s password: the route is gone (THREATS.md S15)', async () => {
     const admin = await createUser({ email: 'adm@t.io', role: 'ADMIN' });
     const u = await createUser({ email: 'reset@t.io', role: 'VIEWER' });
     const a = await login(t, admin);
     const s = await login(t, u);
-    await as(t, a).post(`/api/admin/users/${u.id}/password`, { password: 'admin-set-long-password' }).expect(204);
-    await as(t, s).get('/api/auth/me').expect(401);
+    await as(t, a).post(`/api/admin/users/${u.id}/password`, { password: 'admin-set-long-password' }).expect(404);
+    await as(t, s).get('/api/auth/me').expect(200);
+    await login(t, u); // the old password still works
   });
 
   it('logging in again from the same browser replaces the old session', async () => {

@@ -5,6 +5,7 @@ import { KEY_PROVIDER, ed25519PublicKeyObject, type KeyProvider } from '../crypt
 import type { Prisma } from '../generated/prisma/client.js';
 import type { Actor } from '../common/request-context.js';
 import { AuditService } from './audit.service.js';
+import { ApprovalsService } from '../users/approvals.service.js';
 
 export interface AuditQuery {
   action?: string | undefined;
@@ -29,6 +30,7 @@ export class AuditAdminService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
+    @Inject(ApprovalsService) private readonly approvals: ApprovalsService,
   ) {}
 
   async list(q: AuditQuery) {
@@ -252,14 +254,22 @@ export class AuditAdminService {
     };
   }
 
-  /** Break-glass: one hour of READ access for an admin, with a written reason. Alerted and visible to the owner. */
-  async breakGlass(actor: Actor, documentId: string, reason: string) {
+  /**
+   * Break-glass: one hour of READ access for an admin, with a written reason.
+   * Needs a second admin's approval for exactly this document, asked for by
+   * this admin, used here once (THREATS.md S19); the reason is the one the
+   * approver saw. Alerted and visible to the owner, who was emailed when it
+   * was approved.
+   */
+  async breakGlass(actor: Actor, documentId: string, approvalId: string) {
     const [doc] = await this.prisma.$queryRaw<{ id: string; title: string; owner_id: string; status: string }[]>`SELECT * FROM tv_document_brief(${documentId}::uuid)`;
     if (!doc || doc.status !== 'ACTIVE') throw new NotFoundException('Document not found');
     const expiresAt = new Date(Date.now() + 60 * 60_000);
     return this.prisma.asUser(actor.userId, async (tx) => {
-      const row = await tx.breakGlass.create({ data: { adminId: actor.userId, documentId, reason, expiresAt }, select: { id: true, expiresAt: true } });
-      await this.audit.record({ action: 'admin.break_glass', outcome: 'ALLOWED', reason: 'emergency_access', targetType: 'document', targetId: documentId, documentId, details: { reason, expiresAt: expiresAt.toISOString(), title: doc.title } }, tx);
+      await this.approvals.use(tx, actor, approvalId, 'BREAK_GLASS', { documentId });
+      const { reason, approvedById } = await tx.adminApproval.findUniqueOrThrow({ where: { id: approvalId }, select: { reason: true, approvedById: true } });
+      const row = await tx.breakGlass.create({ data: { adminId: actor.userId, documentId, reason, expiresAt, approvalId }, select: { id: true, expiresAt: true } });
+      await this.audit.record({ action: 'admin.break_glass', outcome: 'ALLOWED', reason: 'emergency_access', targetType: 'document', targetId: documentId, documentId, details: { reason, expiresAt: expiresAt.toISOString(), title: doc.title, approvalId, approvedBy: approvedById } }, tx);
       return { id: row.id, documentId, title: doc.title, expiresAt: row.expiresAt };
     });
   }

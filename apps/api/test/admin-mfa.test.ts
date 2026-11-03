@@ -90,7 +90,6 @@ describe('protected demo accounts', () => {
     const a = await login(t, adm);
     await as(t, a).post(`/api/admin/users/${demo.id}/deactivate`).expect(403);
     await as(t, a).patch(`/api/admin/users/${demo.id}`, { role: 'OWNER' }).expect(403);
-    await as(t, a).post(`/api/admin/users/${demo.id}/password`, { password: 'another-long-password' }).expect(403);
     await as(t, a).post(`/api/admin/users/${demo.id}/mfa/reset`).expect(403);
     const d = await login(t, demo);
     await as(t, d).post('/api/auth/password', { currentPassword: demo.password, newPassword: 'another-long-password' }).expect(403);

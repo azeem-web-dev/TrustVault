@@ -127,7 +127,7 @@ describe('an invited account can do nothing until it is accepted', () => {
 
   it('an admin cannot set an invited person’s password or send them a reset link', async () => {
     const r = await invite({ email: 'nina@t.io', role: 'VIEWER' }).expect(201);
-    await as(t, ADM).post(`/api/admin/users/${r.body.user.id}/password`, { password: 'admin-chosen-password' }).expect(400);
+    await as(t, ADM).post(`/api/admin/users/${r.body.user.id}/password`, { password: 'admin-chosen-password' }).expect(404); // no such route at all
     await as(t, ADM).post(`/api/admin/users/${r.body.user.id}/reset-link`).expect(400);
   });
 });

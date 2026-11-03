@@ -24,9 +24,10 @@ const ExportSchema = z.strictObject({
 
 const AlertsSchema = z.strictObject({ hours: z.coerce.number().int().min(1).max(24 * 30).default(24) });
 
+// The reason was given when asking; a second admin approved it (THREATS.md S19).
 const BreakGlassSchema = z.strictObject({
   documentId: z.uuid(),
-  reason: z.string().trim().min(20, 'Explain in at least 20 characters why you need emergency access').max(500),
+  approvalId: z.uuid(),
 });
 
 /** Who may call every route here: ADMIN only, after a second factor. */
@@ -70,9 +71,9 @@ export class AuditAdminController {
     return this.svc.alerts(q.hours);
   }
 
-  /** Emergency one-hour READ access to one document, with a written reason. Alerted. */
+  /** Emergency one-hour READ access to one document, using a second admin's approval. Alerted. */
   @Post('break-glass')
   breakGlass(@CurrentActor() actor: Actor, @Body(new ZodPipe(BreakGlassSchema)) body: z.infer<typeof BreakGlassSchema>) {
-    return this.svc.breakGlass(actor, body.documentId, body.reason);
+    return this.svc.breakGlass(actor, body.documentId, body.approvalId);
   }
 }

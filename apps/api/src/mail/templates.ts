@@ -128,6 +128,19 @@ export const mailTemplates = {
     };
   },
 
+  breakGlassApproved(name: string, title: string, requester: string, approver: string, reason: string, url: string) {
+    return {
+      subject: 'Emergency access to your document was approved',
+      ...render(name, {
+        title: 'An administrator may open your document',
+        intro: `${approver} approved ${requester}'s request for one hour of emergency read access to “${title}”.`,
+        lines: [`Reason given: ${reason}`, 'The hour starts when they use it. Every open and download is in the document’s history.'],
+        button: { label: 'See the document’s history', url },
+        footer: 'If you did not expect this, tell your security contact.',
+      }),
+    };
+  },
+
   sharedWithYou(name: string, sharer: string, title: string, level: string, expiresAt: Date | null, url: string) {
     const can = level === 'READ' ? 'read' : level === 'EDIT' ? 'edit' : 'manage';
     return {
