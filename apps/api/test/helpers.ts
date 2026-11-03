@@ -90,6 +90,9 @@ export async function resetState(app: INestApplication): Promise<void> {
     await db.query('TRUNCATE sessions, users, groups CASCADE');
     // Back to the default second-factor policy (ADMIN only).
     await db.query(`UPDATE app_settings SET mfa_required_roles = '{ADMIN}', updated_by_id = NULL`);
+    // Detection thresholds and hard download limits back to their defaults:
+    // a test that tightens them must not change what later files see.
+    await db.query('DELETE FROM risk_settings');
   });
   const { RedisService } = await import('../src/redis/redis.service.js');
   const redis = app.get(RedisService).client;
