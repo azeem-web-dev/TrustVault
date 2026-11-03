@@ -7,6 +7,7 @@ import { blobAad, openFile, sealFile, sha256 } from '../crypto/file-crypto.js';
 import type { Actor } from '../common/request-context.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { AccessService, Level } from './access.js';
+import { DownloadApprovalsService } from './download-approvals.service.js';
 import { remainingLevel } from './sharing.service.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
@@ -88,6 +89,7 @@ export class DocumentsService {
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(MALWARE_SCANNER) private readonly scanner: MalwareScanner,
+    @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
   ) {}
 
   // ------------------------------------------------------------------ search
@@ -144,6 +146,8 @@ export class DocumentsService {
       await this.audit.record({ action: 'document.view', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id }, tx);
       return {
         ...this.toListItem(doc, decision.level, actor.userId),
+        // Downloads need an approval from the owner (THREATS.md P8).
+        downloadNeedsApproval: decision.approvalRequired === true,
         folder: doc.ownerId === actor.userId ? doc.folder : null,
         versions: doc.versions.map((v) => ({
           versionNo: v.versionNo, fileName: v.fileName, mimeType: v.mimeType, sizeBytes: v.sizeBytes,
@@ -210,9 +214,9 @@ export class DocumentsService {
       const doc = await tx.document.findUnique({ where: { id }, select: { currentVersionNo: true } });
       const wanted = versionNo ?? doc?.currentVersionNo;
       const version = wanted
-        ? await tx.documentVersion.findUnique({ where: { documentId_versionNo: { documentId: id, versionNo: wanted } }, include: { blob: true, quarantine: true } })
+        ? await tx.documentVersion.findUnique({ where: { documentId_versionNo: { documentId: id, versionNo: wanted } }, include: { quarantine: true } })
         : null;
-      if (!version || !version.blob) {
+      if (!version) {
         await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'no_such_version', targetType: 'document', targetId: id, documentId: id, details: { versionNo: wanted ?? null } });
         throw new NotFoundException('Version not found');
       }
@@ -224,16 +228,32 @@ export class DocumentsService {
         });
         throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
       }
+      // Downloads that need approval use one approved download of exactly
+      // this version, in this transaction. The database releases the blob
+      // row only to the transaction that used the approval (blobs_release).
+      let approvalId: string | null = null;
+      if (decision.approvalRequired) {
+        approvalId = await this.approvals.consume(tx, actor, id, version.id, version.versionNo);
+        if (!approvalId) {
+          await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'approval_required', targetType: 'document', targetId: id, documentId: id, details: { versionNo: version.versionNo } });
+          throw new ForbiddenException({ message: 'Downloading this document needs the owner’s approval. Ask for it with a reason.', code: 'approval_required', versionNo: version.versionNo });
+        }
+      }
+      const blob = await tx.documentBlob.findUnique({ where: { versionId: version.id } });
+      if (!blob) {
+        await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'no_such_version', targetType: 'document', targetId: id, documentId: id, details: { versionNo: version.versionNo } });
+        throw new NotFoundException('Version not found');
+      }
       // Audited and committed BEFORE any byte leaves the server: if the
       // audit write fails, nothing is sent.
       await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
-        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex') },
+        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), ...(approvalId ? { approvalId } : {}) },
       }, tx);
-      return version;
+      return { ...version, blob };
     });
 
-    const blob = found.blob!;
+    const blob = found.blob;
     let plaintext: Buffer;
     try {
       plaintext = await openFile(this.keys, {

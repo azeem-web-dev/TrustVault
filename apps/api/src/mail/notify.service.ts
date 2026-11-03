@@ -56,4 +56,33 @@ export class NotifyService {
       }
     });
   }
+
+  /** The owner (or a nominated approver) hears that a download waits for them. */
+  downloadRequested(approverId: string, requester: string, documentId: string, title: string, versionNo: number, reason: string): void {
+    this.fire(async () => {
+      const u = await this.person(approverId);
+      if (u && u.status === 'ACTIVE') {
+        this.mail.send(u, mailTemplates.downloadRequested(u.displayName, requester, title, versionNo, reason, `${this.env.PUBLIC_ORIGIN}/approvals`));
+      }
+    });
+  }
+
+  downloadDecided(requesterId: string, decider: string, documentId: string, title: string, versionNo: number, approved: boolean, validUntil: Date | null, uses: number | null, note: string | null): void {
+    this.fire(async () => {
+      const u = await this.person(requesterId);
+      if (u && u.status === 'ACTIVE') {
+        this.mail.send(u, mailTemplates.downloadDecided(u.displayName, decider, title, versionNo, approved, validUntil, uses, note, `${this.env.PUBLIC_ORIGIN}/documents/${documentId}`));
+      }
+    });
+  }
+
+  /** An emergency exception: the person is told, and the owner gets a receipt. */
+  overrideGiven(userId: string, ownerId: string, ownerName: string, documentId: string, title: string, until: Date, reason: string): void {
+    this.fire(async () => {
+      const [u, o] = await Promise.all([this.person(userId), this.person(ownerId)]);
+      const url = `${this.env.PUBLIC_ORIGIN}/documents/${documentId}`;
+      if (u && u.status === 'ACTIVE') this.mail.send(u, mailTemplates.overrideGiven(u.displayName, ownerName, title, until, reason, url));
+      if (o && u) this.mail.send(o, mailTemplates.overrideReceipt(o.displayName, u.displayName, title, until, reason, url));
+    });
+  }
 }

@@ -10,6 +10,9 @@ import { CurrentActor, Roles } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
 import { SharingService } from './sharing.service.js';
+import { DownloadApprovalsService } from './download-approvals.service.js';
+import { AccessPolicyService } from './access-policy.service.js';
+import { SharePolicySchema } from './policy-input.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
 
@@ -53,10 +56,16 @@ const GrantSchema = z
     level: z.enum(['READ', 'EDIT', 'MANAGE']),
     expiresAt: z.coerce.date().nullable().optional(),
     fromSuggestion: z.boolean().optional(),
+    /** Conditions on the share: time window, networks, download approval (THREATS.md P1-P12). */
+    policy: SharePolicySchema.optional(),
   })
   .refine((v) => Boolean(v.userId) !== Boolean(v.groupId), 'Share with exactly one person or one group');
 
 const TransferSchema = z.strictObject({ newOwnerId: Uuid });
+
+const Reason = z.string().trim().min(10, 'Give a reason of at least 10 characters').max(500);
+const DownloadRequestSchema = z.strictObject({ reason: Reason, versionNo: z.number().int().min(1).optional() });
+const OverrideSchema = z.strictObject({ userId: Uuid, reason: Reason, hours: z.number().int().min(1).max(24).default(4) });
 
 /** Invalid ids get the same 404 as documents you cannot see. */
 function docId(id: string): string {
@@ -80,6 +89,8 @@ export class DocumentsController {
     @Inject(DocumentsService) private readonly docs: DocumentsService,
     @Inject(SharingService) private readonly sharing: SharingService,
     @Inject(RateLimitService) private readonly limits: RateLimitService,
+    @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
+    @Inject(AccessPolicyService) private readonly policies: AccessPolicyService,
   ) {}
 
   /** Search documents I own or hold a live grant on. */
@@ -194,6 +205,33 @@ export class DocumentsController {
   @Get(':id/suggestions')
   suggestions(@CurrentActor() actor: Actor, @Param('id') id: string) {
     return this.sharing.suggestions(actor, docId(id));
+  }
+
+  /** READ or better, on a share whose downloads need approval: ask for one version. */
+  @Post(':id/download-requests')
+  async requestDownload(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(DownloadRequestSchema)) body: z.infer<typeof DownloadRequestSchema>) {
+    await this.limits.hit(`dlreq:${actor.userId}`, 30, 3600, 'Too many download requests. Try again later.');
+    return this.approvals.request(actor, docId(id), body);
+  }
+
+  /** READ or better: my requests on this document (and all of them for the owner or nominated approver). */
+  @Get(':id/download-requests')
+  async downloadRequests(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return { requests: await this.approvals.listForDocument(actor, docId(id)) };
+  }
+
+  /** Owner only: an emergency exception to one person's share conditions (at most 24 hours). */
+  @Post(':id/overrides')
+  createOverride(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(OverrideSchema)) body: z.infer<typeof OverrideSchema>) {
+    return this.policies.createOverride(actor, docId(id), body);
+  }
+
+  /** Owner only: end an exception early. */
+  @Delete(':id/overrides/:overrideId')
+  @HttpCode(204)
+  async endOverride(@CurrentActor() actor: Actor, @Param('id') id: string, @Param('overrideId') overrideId: string) {
+    if (!Uuid.safeParse(overrideId).success) throw new NotFoundException('Exception not found');
+    await this.policies.endOverride(actor, docId(id), overrideId);
   }
 
   /**

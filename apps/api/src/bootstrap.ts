@@ -18,8 +18,9 @@ export async function createApp(env: Env): Promise<NestExpressApplication> {
 
   // Only nginx on the same machine may set X-Forwarded-For; anything else
   // claiming to be a proxy is ignored, so clients cannot spoof their IP
-  // to dodge rate limits or falsify the audit log.
-  app.set('trust proxy', 'loopback');
+  // to dodge rate limits, falsify the audit log or pass a network allowlist.
+  // Express takes the right-most address not set by a trusted proxy.
+  app.set('trust proxy', env.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean));
   app.disable('x-powered-by');
 
   app.use(requestContextMiddleware);

@@ -141,4 +141,61 @@ export const mailTemplates = {
       }),
     };
   },
+
+  downloadRequested(name: string, requester: string, title: string, versionNo: number, reason: string, url: string) {
+    return {
+      subject: `${requester} asks to download “${title}”`,
+      ...render(name, {
+        title: 'A download is waiting for your approval',
+        intro: `${requester} asked to download version ${versionNo} of “${title}”.`,
+        lines: [`Their reason: ${reason.slice(0, 500)}`],
+        button: { label: 'Review the request', url },
+        footer: 'Approve only if you expected this. Nothing is downloaded until you approve, and every use is recorded.',
+      }),
+    };
+  },
+
+  downloadDecided(name: string, decider: string, title: string, versionNo: number, approved: boolean, validUntil: Date | null, uses: number | null, note: string | null, url: string) {
+    return {
+      subject: approved ? `Download approved: “${title}”` : `Download not approved: “${title}”`,
+      ...render(name, {
+        title: approved ? 'Your download was approved' : 'Your download was not approved',
+        intro: approved
+          ? `${decider} approved your request to download version ${versionNo} of “${title}”.`
+          : `${decider} did not approve your request to download version ${versionNo} of “${title}”.`,
+        lines: [
+          ...(approved && validUntil ? [`You can download it ${uses === 1 ? 'once' : `${uses} times`} until ${when(validUntil)}.`] : []),
+          ...(note ? [`Note: ${note.slice(0, 500)}`] : []),
+        ],
+        button: { label: 'Open in TrustVault', url },
+        footer: 'Every download is recorded in the document history.',
+      }),
+    };
+  },
+
+  overrideGiven(name: string, owner: string, title: string, until: Date, reason: string, url: string) {
+    return {
+      subject: `Temporary exception on “${title}”`,
+      ...render(name, {
+        title: 'You were given a temporary exception',
+        intro: `${owner} lifted the time, network and download-approval conditions of your share of “${title}” until ${when(until)}.`,
+        lines: [`Reason given: ${reason.slice(0, 500)}`],
+        button: { label: 'Open in TrustVault', url },
+        footer: 'Everything you do with it is recorded. Organisation-wide rules for your role still apply.',
+      }),
+    };
+  },
+
+  overrideReceipt(name: string, person: string, title: string, until: Date, reason: string, url: string) {
+    return {
+      subject: `You gave an exception on “${title}”`,
+      ...render(name, {
+        title: 'Receipt: emergency exception',
+        intro: `You lifted the conditions of ${person}'s share of “${title}” until ${when(until)}.`,
+        lines: [`Reason: ${reason.slice(0, 500)}`],
+        button: { label: 'Review access', url },
+        footer: "If this wasn't you, end the exception from the share sheet and change your password now.",
+      }),
+    };
+  },
 };
