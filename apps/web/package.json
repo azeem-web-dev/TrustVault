@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",
-    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "geist": "1.7.2",
     "next": "^16.4.3",
     "qrcode": "^1.5.4",
