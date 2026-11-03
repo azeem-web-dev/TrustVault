@@ -134,6 +134,13 @@ describe('downloads that need approval', () => {
     expect(rows.map((r) => `${r.outcome}:${r.reason}`)).toEqual(['DENIED:self_approval']);
   });
 
+  it('an EDIT recipient whose downloads need approval can still upload a version, and gets back only what they uploaded', async () => {
+    await share(A, vic.id, 'EDIT', { downloadApproval: true }).expect(200);
+    await as(t, V).upload(`/api/documents/${doc}/versions`, PDF2, 'payroll.pdf').expect(201);
+    await as(t, V).get(`/api/documents/${doc}/versions/2/download`).expect(200);   // their own upload
+    expect((await as(t, V).get(`/api/documents/${doc}/versions/1/download`).expect(403)).body.code).toBe('approval_required');
+  });
+
   it('a share without the condition needs no approval; asking is refused', async () => {
     await share(A, vic.id, 'READ').expect(200);
     await as(t, V).get(`/api/documents/${doc}/download`).expect(200);

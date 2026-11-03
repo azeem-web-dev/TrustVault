@@ -231,8 +231,9 @@ export class DocumentsService {
       // Downloads that need approval use one approved download of exactly
       // this version, in this transaction. The database releases the blob
       // row only to the transaction that used the approval (blobs_release).
+      // The person who uploaded a version already has its bytes (same rule as tv_blob_release_ok).
       let approvalId: string | null = null;
-      if (decision.approvalRequired) {
+      if (decision.approvalRequired && version.uploadedById !== actor.userId) {
         approvalId = await this.approvals.consume(tx, actor, id, version.id, version.versionNo);
         if (!approvalId) {
           await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'approval_required', targetType: 'document', targetId: id, documentId: id, details: { versionNo: version.versionNo } });

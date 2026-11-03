@@ -187,7 +187,7 @@ const MUTATIONS = [
   code('policy: downloads need approval unless a usable share waives it (app)', ACCESS,
     'if (!g.downloadApproval) freeDownload = true;', 'freeDownload = true;', ['test/access-policy.unit.test.ts', 'test/access-policy.test.ts']),
   code('download: an approval is used before the bytes are read (app)', 'src/documents/documents.service.ts',
-    'if (decision.approvalRequired) {', 'if (false) {', ['test/access-policy.test.ts']),
+    'if (decision.approvalRequired && version.uploadedById !== actor.userId) {', 'if (false) {', ['test/access-policy.test.ts']),
   code('approval: nobody decides their own request (app)', 'src/documents/download-approvals.service.ts',
     "if (req.requesterId === actor.userId) await refuse('self_approval', 'You cannot decide your own download request');", '',
     ['test/access-policy.test.ts']),
