@@ -357,7 +357,7 @@ function Versions({ doc, canUpload, onUploaded, onError }: { doc: Doc; canUpload
                 {v.quarantine ? (
                   <Badge tone="red" icon={<Prohibit size={11} />}>Download blocked</Badge>
                 ) : (
-                  {!doc.downloadNeedsApproval && <ButtonLink size="sm" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`} icon={<DownloadSimple size={14} />}>Download</ButtonLink>}
+                  doc.downloadNeedsApproval ? null : <ButtonLink size="sm" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`} icon={<DownloadSimple size={14} />}>Download</ButtonLink>
                 )}
               </div>
               {v.quarantine && (
