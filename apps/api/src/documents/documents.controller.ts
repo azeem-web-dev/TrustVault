@@ -9,6 +9,8 @@ import { type Actor, currentContext } from '../common/request-context.js';
 import { CurrentActor, Roles } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
+import { countFormulaCells, neutralizeCsv } from '../common/csv.js';
+import { sha256 } from '../crypto/file-crypto.js';
 import { SharingService } from './sharing.service.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
@@ -57,6 +59,14 @@ const GrantSchema = z
   .refine((v) => Boolean(v.userId) !== Boolean(v.groupId), 'Share with exactly one person or one group');
 
 const TransferSchema = z.strictObject({ newOwnerId: Uuid });
+
+/**
+ * ?variant=formulas-disabled: for CSV only, a copy in which every cell a
+ * spreadsheet would run as a formula starts with an apostrophe (THREATS.md
+ * C7). Without it the stored bytes are sent unchanged, so their SHA-256
+ * still matches the upload and the audit trail.
+ */
+const DownloadSchema = z.strictObject({ variant: z.enum(['formulas-disabled']).optional() });
 
 /** Invalid ids get the same 404 as documents you cannot see. */
 function docId(id: string): string {
@@ -125,16 +135,19 @@ export class DocumentsController {
 
   /** READ or better: current version. */
   @Get(':id/download')
-  async download(@CurrentActor() actor: Actor, @Param('id') id: string, @Res() res: Response) {
+  async download(@CurrentActor() actor: Actor, @Param('id') id: string, @Query(new ZodPipe(DownloadSchema)) q: z.infer<typeof DownloadSchema>, @Res() res: Response) {
     await this.limits.hit(`download:${actor.userId}`, 300, 600, 'Too many downloads. Try again in a few minutes.');
-    this.send(res, await this.docs.download(actor, docId(id)));
+    this.send(res, await this.docs.download(actor, docId(id), undefined, q.variant), q.variant);
   }
 
   /** READ or better: a specific version. */
   @Get(':id/versions/:versionNo/download')
-  async downloadVersion(@CurrentActor() actor: Actor, @Param('id') id: string, @Param('versionNo', new ParseIntPipe()) versionNo: number, @Res() res: Response) {
+  async downloadVersion(
+    @CurrentActor() actor: Actor, @Param('id') id: string, @Param('versionNo', new ParseIntPipe()) versionNo: number,
+    @Query(new ZodPipe(DownloadSchema)) q: z.infer<typeof DownloadSchema>, @Res() res: Response,
+  ) {
     await this.limits.hit(`download:${actor.userId}`, 300, 600, 'Too many downloads. Try again in a few minutes.');
-    this.send(res, await this.docs.download(actor, docId(id), versionNo));
+    this.send(res, await this.docs.download(actor, docId(id), versionNo, q.variant), q.variant);
   }
 
   /** Owner only. */
@@ -200,7 +213,21 @@ export class DocumentsController {
    * Files are always sent as attachments with a locked-down CSP, so even a
    * file that slipped past validation can never run as a page on our origin.
    */
-  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string }) {
+  private send(res: Response, stored: { data: Buffer; fileName: string; mimeType: string; sha256: string }, variant?: 'formulas-disabled') {
+    let file = stored;
+    if (stored.mimeType.startsWith('text/csv')) {
+      if (variant === 'formulas-disabled') {
+        const safe = neutralizeCsv(stored.data);
+        const dot = stored.fileName.lastIndexOf('.');
+        file = { ...stored, data: safe.data, fileName: `${dot > 0 ? stored.fileName.slice(0, dot) : stored.fileName} (formulas disabled).csv` };
+        res.setHeader('X-Content-Variant', 'formulas-disabled');
+        res.setHeader('X-Content-SHA256', sha256(safe.data).toString('hex'));
+        res.setHeader('X-CSV-Formula-Cells', String(safe.changed));
+      } else {
+        // The original bytes, with a count the client can warn about.
+        res.setHeader('X-CSV-Formula-Cells', String(countFormulaCells(stored.data)));
+      }
+    }
     const ascii = file.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     res.setHeader('Content-Type', file.mimeType);
     res.setHeader('Content-Length', String(file.data.length));
@@ -208,7 +235,8 @@ export class DocumentsController {
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store, private');
-    res.setHeader('X-Document-SHA256', file.sha256);
+    // Always the hash of the stored version (the integrity anchor).
+    res.setHeader('X-Document-SHA256', stored.sha256);
     res.end(file.data);
   }
 }
