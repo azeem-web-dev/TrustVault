@@ -38,8 +38,13 @@ const startsWith = (buf: Buffer, sig: number[]): boolean => sig.every((b, i) => 
 
 /** "%PDF-" anywhere a PDF reader would still accept it (the first 1 KB). */
 const PDF_MAGIC_NEAR_START = (buf: Buffer): boolean => buf.subarray(0, 1024).includes('%PDF-', 0, 'latin1');
-/** Markup a browser would render if the bytes were ever sniffed as HTML. */
-const MARKUP = /<(script|html|body|svg|iframe|object|embed|meta|link|style|img|a|form|base|\?php|!doctype)[\s>/]/i;
+/**
+ * Markup a browser would render if the bytes were ever sniffed as HTML.
+ * Only tags of three or more letters plus a delimiter: compressed image
+ * data contains random short sequences such as "<a " (a 5 MB photo has a
+ * few), while a five-byte match such as "<svg " is vanishingly unlikely.
+ */
+const MARKUP = /<(script|html|body|svg|iframe|object|embed|\?php|!doctype)[\s>/]/i;
 
 /** Decodes #xx escapes in PDF names so /J#61vaScript reads as /JavaScript. */
 const unescapePdfNames = (s: string): string => s.replace(/#([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));

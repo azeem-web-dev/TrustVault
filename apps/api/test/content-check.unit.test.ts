@@ -186,6 +186,10 @@ describe('images: structure and polyglots', () => {
     expect(await refused(B.jpeg({ comment: '<svg onload=alert(1)>' }), 'a.jpg')).toBe('Images containing HTML or script are not accepted');
   });
 
+  it('short tag-like bytes, common by chance in compressed image data, are not markup', async () => {
+    expect(await accepted(B.jpeg({ comment: 'x<a y<b/z<img w<p>' }), 'a.jpg')).toBe('jpg');
+  });
+
   it('refuses a truncated JPEG', async () => {
     const j = B.jpeg();
     expect(await refused(j.subarray(0, 30), 'a.jpg')).toBe('The JPEG image is damaged');
