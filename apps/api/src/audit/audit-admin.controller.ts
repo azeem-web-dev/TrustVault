@@ -71,7 +71,7 @@ export class AuditAdminController {
     return this.svc.alerts(q.hours);
   }
 
-  /** Emergency one-hour READ access to one document, using a second admin's approval. Alerted. */
+  /** Emergency one-hour VIEW access (pages only, no download) to one document, using a second admin's approval. Alerted (THREATS.md S19, V9). */
   @Post('break-glass')
   @StepUp()
   breakGlass(@CurrentActor() actor: Actor, @Body(new ZodPipe(BreakGlassSchema)) body: z.infer<typeof BreakGlassSchema>) {

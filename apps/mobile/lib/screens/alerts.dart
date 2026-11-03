@@ -29,6 +29,7 @@ PI _kindIcon(String kind) {
   if (kind.contains('rescan')) return PhosphorIconsDuotone.bug;
   if (kind.contains('break')) return PhosphorIconsDuotone.siren;
   if (kind.contains('integrity') || kind.contains('tamper')) return PhosphorIconsDuotone.shieldWarning;
+  if (kind.contains('page_view')) return PhosphorIconsDuotone.eye;
   if (kind.contains('download')) return PhosphorIconsDuotone.downloadSimple;
   if (kind.contains('share') || kind.contains('external')) return PhosphorIconsDuotone.shareNetwork;
   if (kind.contains('login') || kind.contains('sign') || kind.contains('locked')) return PhosphorIconsDuotone.lockKey;
@@ -313,7 +314,7 @@ class _BreakGlassState extends State<_BreakGlass> {
                 ),
                 gap12,
                 Text(
-                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of read access to a single document. A second administrator must approve; then you open it from the requests above, once, within 24 hours. The owner is emailed when it is approved, and the reason is in the audit trail, the alerts and the document's history. With only one administrator it is impossible.",
+                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of view-only access to a single document: its pages, watermarked with your name, never the original file. A second administrator must approve; then you open it from the requests above, once, within 24 hours. The owner is emailed when it is approved, and the reason is in the audit trail, the alerts and the document's history. With only one administrator it is impossible.",
                   style: ts(context, size: 13, color: p.body, height: 1.55),
                 ),
                 gap16,

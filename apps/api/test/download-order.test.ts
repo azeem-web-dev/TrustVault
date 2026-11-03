@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
+import { PDFDocument } from 'pdf-lib';
 import type { Response } from 'supertest';
 import { as, auditRows, createUser, login, ownerDb, appDb, PDF, resetState, startApp, withDb, type Session, type TestApp } from './helpers.js';
 
@@ -267,6 +268,57 @@ describe('a download and a revoke never overlap (R11)', () => {
     expect(dl[0]).toMatchObject({ outcome: 'DENIED', reason: 'access_ended_during_request' });
     // And a fresh request after the expiry is refused at the decision.
     await as(t, V).get(`/api/documents/${doc}/download`).expect(404);
+  });
+
+  it('expiry, view-only: a page view that lapses mid-request is refused and nothing is sent', async () => {
+    // A real one-page PDF, so there is a page to draw.
+    const pdf = await PDFDocument.create();
+    pdf.addPage([300, 300]);
+    const up = await as(t, A).upload('/api/documents', Buffer.from(await pdf.save()), 'one-page.pdf', { title: 'One page', category: 'Board' });
+    expect(up.status, JSON.stringify(up.body)).toBe(201);
+    const doc = up.body.id as string;
+    const expires = await withDb(ownerDb(), async (db) => (await db.query(`SELECT clock_timestamp() + interval '4 seconds' AS e`)).rows[0].e as Date);
+    await share(doc, { userId: V.userId, level: 'VIEW', expiresAt: expires.toISOString() }).expect(200);
+    const warm = await as(t, V).get(`/api/documents/${doc}/pages/1`);
+    expect(warm.status, JSON.stringify(warm.body) + JSON.stringify(await story(doc))).toBe(200); // the page is drawn and allowed
+
+    const audit = await holder();
+    await audit.query('SELECT pg_advisory_lock($1)', [AUDIT_LOCK]);
+    const page = start(as(t, V).get(`/api/documents/${doc}/pages/1`));
+    await waiters(1);
+    for (;;) {
+      const past = await withDb(ownerDb(), async (db) => (await db.query('SELECT clock_timestamp() > $1 AS p', [expires])).rows[0].p as boolean);
+      if (past) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await audit.release();
+
+    const res = await page;
+    expect(res.status).toBe(404);
+    expect(res.headers['content-type'] ?? '').not.toMatch(/image/);
+    const views = (await story(doc)).filter((r) => r.action === 'document.page_view');
+    expect(views.map((r) => r.outcome)).toEqual(['ALLOWED', 'DENIED']);
+    expect(views[1]).toMatchObject({ reason: 'access_ended_during_request' });
+  });
+
+  it('the database checks each ALLOWED row at the level its action needs: READ to download or get a key, VIEW for a page', async () => {
+    const doc = await upload(A);
+    await share(doc, { userId: V.userId, level: 'VIEW' }).expect(200);
+    const insert = (action: string) => withDb(appDb(), async (db) => {
+      await db.query('BEGIN');
+      try {
+        await db.query(`SELECT set_config('app.user_id', $1, true)`, [V.userId]);
+        await db.query(`INSERT INTO audit_events (id, action, outcome, actor_id, document_id, target_type, target_id) VALUES (gen_random_uuid(), $1, 'ALLOWED', $2::uuid, $3::uuid, 'document', $3::text)`, [action, V.userId, doc]);
+      } finally { await db.query('ROLLBACK'); }
+    });
+    await expect(insert('document.download')).rejects.toThrow(/access ended during the request/);
+    await expect(insert('document.offline_key')).rejects.toThrow(/access ended during the request/);
+    await expect(insert('document.page_view')).resolves.toBeUndefined();
+    await share(doc, { userId: V.userId, level: 'READ' }).expect(200);
+    await expect(insert('document.download')).resolves.toBeUndefined();
+    const g = await grantId(doc, V.userId);
+    await as(t, A).delete(`/api/documents/${doc}/access/${g}`).expect(200);
+    await expect(insert('document.page_view')).rejects.toThrow(/access ended during the request/);
   });
 });
 

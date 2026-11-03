@@ -3,7 +3,7 @@
 // localStorage) and sent on every state-changing request.
 
 export type Role = 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL';
-export type Level = 'READ' | 'EDIT' | 'MANAGE';
+export type Level = 'VIEW' | 'READ' | 'EDIT' | 'MANAGE';
 export type Access = Level | 'OWNER' | 'NONE';
 
 export interface User {

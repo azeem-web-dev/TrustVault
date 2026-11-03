@@ -6,6 +6,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import type { Actor } from '../common/request-context.js';
 import { AuditService } from './audit.service.js';
 import { ApprovalsService } from '../users/approvals.service.js';
+import { ENV, type Env } from '../config/env.js';
 
 export interface AuditQuery {
   action?: string | undefined;
@@ -31,6 +32,7 @@ export class AuditAdminService {
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(ApprovalsService) private readonly approvals: ApprovalsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async list(q: AuditQuery) {
@@ -173,7 +175,7 @@ export class AuditAdminService {
    */
   async alerts(hours = 24) {
     const since = new Date(Date.now() - hours * 3_600_000);
-    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures, malware, rescanFailures, deadSessions, impersonation] = await Promise.all([
+    const [deniedByUser, bulkDownloads, afterRevoke, externalGrants, breakGlass, lockouts, integrity, verifyFailures, malware, rescanFailures, deadSessions, impersonation, bulkPages] = await Promise.all([
       this.prisma.$queryRaw<{ actor_email: string | null; n: bigint; documents: bigint }[]>`
         SELECT actor_email, count(*) AS n, count(DISTINCT target_id) AS documents FROM audit_events
          WHERE occurred_at >= ${since} AND outcome = 'DENIED' AND action LIKE 'document.%'
@@ -231,6 +233,21 @@ export class AuditAdminService {
          WHERE r.occurred_at >= ${since}::timestamptz - interval '24 hours' AND l.occurred_at >= ${since}::timestamptz
            AND r.action IN ('user.password_reset', 'user.mfa_reset') AND r.outcome = 'ALLOWED'
          ORDER BY l.seq DESC LIMIT 20`,
+      // Someone paging through a lot, fast: copying before access ends?
+      // For each page view, the next 10 minutes of that person's page views;
+      // the busiest window per person is reported (THREATS.md V7).
+      this.prisma.$queryRaw<{ actor_email: string | null; started: Date; pages: bigint; documents: bigint }[]>`
+        SELECT * FROM (
+          SELECT DISTINCT ON (e.actor_id) e.actor_email, e.occurred_at AS started, w.pages, w.documents
+            FROM audit_events e
+           CROSS JOIN LATERAL (
+                 SELECT count(*) AS pages, count(DISTINCT x.document_id) AS documents FROM audit_events x
+                  WHERE x.action = 'document.page_view' AND x.outcome = 'ALLOWED' AND x.actor_id = e.actor_id
+                    AND x.occurred_at >= e.occurred_at AND x.occurred_at < e.occurred_at + interval '10 minutes') w
+           WHERE e.occurred_at >= ${since}::timestamptz AND e.action = 'document.page_view' AND e.outcome = 'ALLOWED'
+             AND (w.pages > ${this.env.PAGE_VIEW_ALERT_PAGES} OR w.documents > ${this.env.PAGE_VIEW_ALERT_DOCUMENTS})
+           ORDER BY e.actor_id, w.pages DESC, e.occurred_at) busiest
+         ORDER BY started DESC LIMIT 20`,
     ]);
     const titles = await this.titles([...afterRevoke, ...externalGrants, ...breakGlass, ...integrity, ...malware].map((r) => r.document_id).filter((x): x is string => Boolean(x)));
     const num = (v: bigint) => Number(v);
@@ -246,6 +263,7 @@ export class AuditAdminService {
         ...deadSessions.map((r) => ({ severity: 'high', kind: 'ended_session_used', at: r.occurred_at, message: `${r.actor_email ?? 'unknown'} tried to use a session that had been ended (${(r.reason ?? '').replace(/_/g, ' ')}) from ${r.ip ?? '?'}` })),
         ...afterRevoke.map((r) => ({ severity: 'high', kind: 'access_after_revoke', at: r.last_attempt, message: `${r.actor_email ?? 'unknown'} tried ${num(r.attempts)}× to reach a document after their access was revoked`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...deniedByUser.map((r) => ({ severity: 'high', kind: 'repeated_denials', message: `${r.actor_email ?? 'unknown'} was refused ${num(r.n)} times across ${num(r.documents)} documents` })),
+        ...bulkPages.map((r) => ({ severity: 'high', kind: 'bulk_page_views', at: r.started, message: `${r.actor_email ?? 'unknown'} viewed ${num(r.pages)} pages of ${num(r.documents)} document${num(r.documents) === 1 ? '' : 's'} within 10 minutes. Check this is expected; every page carries their watermark and trace code.` })),
         ...bulkDownloads.map((r) => ({ severity: 'medium', kind: 'bulk_download', message: `${r.actor_email ?? 'unknown'} downloaded ${num(r.n)} files (${num(r.documents)} documents) within one hour` })),
         ...breakGlass.map((r) => ({ severity: 'medium', kind: 'break_glass', at: r.occurred_at, message: `${r.actor_email} used break-glass access: "${r.reason ?? ''}"`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...externalGrants.map((r) => ({ severity: 'info', kind: 'external_share', at: r.occurred_at, message: `${r.actor_email} shared a document with external ${r.subject} until ${r.expires_at ?? '?'}`, documentId: r.document_id, documentTitle: t(r.document_id) })),
@@ -255,7 +273,8 @@ export class AuditAdminService {
   }
 
   /**
-   * Break-glass: one hour of READ access for an admin, with a written reason.
+   * Break-glass: one hour of VIEW access (the watermarked pages, never the
+   * original file; THREATS.md V9) for an admin, with a written reason.
    * Needs a second admin's approval for exactly this document, asked for by
    * this admin, used here once (THREATS.md S19); the reason is the one the
    * approver saw. Alerted and visible to the owner, who was emailed when it

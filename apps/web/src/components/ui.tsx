@@ -182,8 +182,8 @@ export function Badge({ tone = 'neutral', dot, icon, children, className }: { to
   );
 }
 
-export const ACCESS_TONE: Record<string, Tone> = { OWNER: 'violet', MANAGE: 'blue', EDIT: 'amber', READ: 'green', NONE: 'neutral' };
-export const ACCESS_LABEL: Record<string, string> = { OWNER: 'Owner', MANAGE: 'Manage', EDIT: 'Edit', READ: 'Read', NONE: 'None' };
+export const ACCESS_TONE: Record<string, Tone> = { OWNER: 'violet', MANAGE: 'blue', EDIT: 'amber', READ: 'green', VIEW: 'neutral', NONE: 'neutral' };
+export const ACCESS_LABEL: Record<string, string> = { OWNER: 'Owner', MANAGE: 'Manage', EDIT: 'Edit', READ: 'Download', VIEW: 'View only', NONE: 'None' };
 export const OUTCOME_TONE = { ALLOWED: 'green', DENIED: 'red', FAILED: 'amber' } as const;
 
 /* ------------------------------------------------------------------- alerts */

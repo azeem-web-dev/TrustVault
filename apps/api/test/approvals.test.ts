@@ -198,9 +198,11 @@ describe('an approval is used once, by the person who asked, for exactly what wa
     expect(new Date(g.body.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(3_600_000);
     const span = await withDb(ownerDb(), async (db) => (await db.query(`SELECT extract(epoch FROM expires_at - created_at)::int AS s, approval_id FROM break_glass WHERE document_id = $1`, [doc])).rows);
     expect(span).toEqual([{ s: 3600, approval_id: id }]);
-    await as(t, ADM).get(`/api/documents/${doc}/download`).expect(200);
-    await as(t, ADM2).get(`/api/documents/${doc}/download`).expect(404);
-    await as(t, ADM).get(`/api/documents/${other}/download`).expect(404);
+    // Break-glass is VIEW: the document and its pages, never the original file (THREATS.md V9).
+    await as(t, ADM).get(`/api/documents/${doc}`).expect(200);
+    await as(t, ADM).get(`/api/documents/${doc}/download`).expect(404);
+    await as(t, ADM2).get(`/api/documents/${doc}`).expect(404);
+    await as(t, ADM).get(`/api/documents/${other}`).expect(404);
     await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, approvalId: id }).expect(403); // once
     const bg = (await auditRows(`action = 'admin.break_glass' AND document_id = $1`, [doc]))[0]!;
     expect(bg.details).toMatchObject({ reason: 'Legal hold requested by counsel, LEG-142', approvalId: id, approvedBy: two.id });

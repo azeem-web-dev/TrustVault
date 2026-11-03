@@ -12,18 +12,23 @@ import type { Actor } from '../common/request-context.js';
  * bug here still returns nothing rather than someone else's file.
  */
 
+// Same numbers as tv_doc_level() in the database. VIEW sits below READ:
+// see the document and its rendered pages, never the original bytes.
 export enum Level {
   NONE = 0,
-  READ = 1,
-  EDIT = 2,
-  MANAGE = 3,
-  OWNER = 4,
+  VIEW = 1,
+  READ = 2,
+  EDIT = 3,
+  MANAGE = 4,
+  OWNER = 5,
 }
 
 /** What each action needs. Anything not listed here cannot be performed. */
 export const REQUIRED_LEVEL = {
-  view: Level.READ,          // metadata and version list
-  download: Level.READ,
+  view: Level.VIEW,          // metadata and version list
+  view_pages: Level.VIEW,    // watermarked page images (THREATS.md V2)
+  download: Level.READ,      // the original bytes: never VIEW (THREATS.md V1)
+  offline_key: Level.READ,   // key for the Android app's encrypted copy (V6)
   edit: Level.EDIT,          // title, category, description
   upload_version: Level.EDIT,
   view_access: Level.MANAGE, // who has access
@@ -39,16 +44,16 @@ export const REQUIRED_LEVEL = {
 export type DocAction = keyof typeof REQUIRED_LEVEL;
 
 /** Actions allowed on a document in the trash (owner only, see evaluate). */
-const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'download', 'restore', 'purge', 'view_history']);
+const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'download', 'restore', 'purge', 'view_history']);
 
 /** Actions that only read: they share the document's lock (see require()). */
-const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'download']);
+const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'download', 'offline_key']);
 
 /** Raw facts from tv_access_facts(); no decision has been made yet. */
 export interface AccessFacts {
   document: { ownerId: string; status: 'ACTIVE' | 'DELETED' } | null;
   user: { role: 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL'; status: 'ACTIVE' | 'DEACTIVATED' | 'INVITED'; accessExpiresAt: string | null } | null;
-  grants: { level: 'READ' | 'EDIT' | 'MANAGE'; expiresAt: string | null; viaGroup: boolean }[];
+  grants: { level: 'VIEW' | 'READ' | 'EDIT' | 'MANAGE'; expiresAt: string | null; viaGroup: boolean }[];
   breakGlassUntil: string | null;
 }
 
@@ -58,7 +63,7 @@ export interface Decision {
   reason: string;
 }
 
-const GRANT_LEVEL = { READ: Level.READ, EDIT: Level.EDIT, MANAGE: Level.MANAGE } as const;
+const GRANT_LEVEL = { VIEW: Level.VIEW, READ: Level.READ, EDIT: Level.EDIT, MANAGE: Level.MANAGE } as const;
 
 /** Effective level of `userId` on the document described by `facts`. Pure. */
 export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): { level: Level; reason: string } {
@@ -69,9 +74,10 @@ export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): {
   if (user.accessExpiresAt && new Date(user.accessExpiresAt) <= now) return { level: Level.NONE, reason: 'user_access_expired' };
 
   // Administrators manage people, not documents: no ownership, no grants,
-  // no groups. Only an unexpired break-glass gives READ (THREATS.md A9, A17).
+  // no groups. Only an unexpired break-glass gives VIEW: an emergency look
+  // at the pages, never the original file (THREATS.md A9, A17, V9).
   if (user.role === 'ADMIN') {
-    if (doc.status === 'ACTIVE' && facts.breakGlassUntil && new Date(facts.breakGlassUntil) > now) return { level: Level.READ, reason: 'break_glass' };
+    if (doc.status === 'ACTIVE' && facts.breakGlassUntil && new Date(facts.breakGlassUntil) > now) return { level: Level.VIEW, reason: 'break_glass' };
     return { level: Level.NONE, reason: 'admin_no_document_access' };
   }
 

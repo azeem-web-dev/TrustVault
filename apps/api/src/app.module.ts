@@ -28,6 +28,7 @@ import { ApprovalsService } from './users/approvals.service.js';
 import { AccessService } from './documents/access.js';
 import { DocumentsService } from './documents/documents.service.js';
 import { SharingService } from './documents/sharing.service.js';
+import { ViewingService } from './documents/viewing.service.js';
 import { DocumentsController } from './documents/documents.controller.js';
 import { FoldersController } from './documents/folders.controller.js';
 import { JobsService } from './jobs/jobs.service.js';
@@ -78,6 +79,7 @@ export class AppModule {
         AccessService,
         DocumentsService,
         SharingService,
+        ViewingService,
         JobsService,
         RescanService,
         MailService,

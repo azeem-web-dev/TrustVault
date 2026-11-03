@@ -16,8 +16,9 @@ export interface GrantInput {
 }
 
 const MAX_GRANT_DAYS = 366;
+const SUGGEST_ORDER: GrantLevel[] = ['VIEW', 'READ', 'EDIT'];
 
-const LEVEL_NAME = ['NONE', 'READ', 'EDIT', 'MANAGE', 'OWNER'] as const;
+const LEVEL_NAME = ['NONE', 'VIEW', 'READ', 'EDIT', 'MANAGE', 'OWNER'] as const;
 
 /** What a person can still do on a document, from the database lock (live). */
 export async function remainingLevel(tx: Tx, documentId: string, userId: string): Promise<string | null> {
@@ -93,7 +94,8 @@ export class SharingService {
         if (!target || target.status !== 'ACTIVE') throw new BadRequestException('That person does not have an active account');
         if (target.role === 'ADMIN') throw new BadRequestException('Administrators cannot be given access to documents');
         if (target.role === 'EXTERNAL') {
-          if (input.level !== 'READ') throw new BadRequestException('External people can only be given READ access');
+          // Externals: VIEW or READ. The apps suggest VIEW first (THREATS.md V10).
+          if (input.level !== 'VIEW' && input.level !== 'READ') throw new BadRequestException('External people can only be given View only or Download access');
           // An external grant never outlives the external account.
           const cap = target.accessExpiresAt!;
           if (!expiresAt) throw new BadRequestException('Access for external people must have an expiry date');
@@ -206,10 +208,12 @@ export class SharingService {
         if (!key || taken.has(key)) continue;
         const entry = score.get(key) ?? {
           type: g.user ? 'user' as const : 'group' as const, id: key,
-          name: g.user?.displayName ?? g.group!.name, detail: g.user?.email ?? 'group', count: 0, level: 'READ' as GrantLevel,
+          name: g.user?.displayName ?? g.group!.name, detail: g.user?.email ?? 'group', count: 0, level: 'VIEW' as GrantLevel,
         };
         entry.count += 1;
-        if (g.level === 'EDIT') entry.level = 'EDIT'; // never suggest MANAGE
+        // The highest level used before; never MANAGE (a MANAGE grant suggests READ, as before).
+        const seen = g.level === 'MANAGE' ? 'READ' : g.level;
+        if (SUGGEST_ORDER.indexOf(seen) > SUGGEST_ORDER.indexOf(entry.level)) entry.level = seen;
         score.set(key, entry);
       }
       const suggestions = [...score.values()].sort((a, b) => b.count - a.count).slice(0, 5).map((s) => ({

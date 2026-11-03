@@ -98,3 +98,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* View-only pages are not printed (a speed bump, THREATS.md V3). */
+@media print {
+  .tv-protected { display: none !important; }
+  .tv-print-note { display: block !important; }
+}

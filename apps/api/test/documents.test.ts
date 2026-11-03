@@ -40,6 +40,9 @@ function routes(docId: string, grantId = '3f0e7a52-5b1a-4c1e-9d2a-1b2c3d4e5f60')
     ['view', (s: Session) => as(t, s).get(`/api/documents/${docId}`)],
     ['download', (s: Session) => as(t, s).get(`/api/documents/${docId}/download`)],
     ['download v1', (s: Session) => as(t, s).get(`/api/documents/${docId}/versions/1/download`)],
+    ['pages', (s: Session) => as(t, s).get(`/api/documents/${docId}/pages`)],
+    ['page 1', (s: Session) => as(t, s).get(`/api/documents/${docId}/pages/1`)],
+    ['offline key', (s: Session) => as(t, s).post(`/api/documents/${docId}/offline-key`)],
     ['edit', (s: Session) => as(t, s).patch(`/api/documents/${docId}`, { title: 'pwned' })],
     ['new version', (s: Session) => as(t, s).upload(`/api/documents/${docId}/versions`, PDF, 'x.pdf')],
     ['access list', (s: Session) => as(t, s).get(`/api/documents/${docId}/access`)],
@@ -67,8 +70,8 @@ describe('one user cannot reach another user’s documents', () => {
       }
     }
     const denials = await auditRows(`document_id = $1 AND outcome = 'DENIED'`, [doc]);
-    // 4 users x 14 routes; "purge" by a non-owner etc. all go through decide().
-    expect(denials.length).toBeGreaterThanOrEqual(4 * 14);
+    // 4 users x 17 routes; "purge" by a non-owner etc. all go through decide().
+    expect(denials.length).toBeGreaterThanOrEqual(4 * 17);
     // Admins are refused for being admins (THREATS.md A17), everyone else for having no grant.
     expect(denials.every((d) => d.reason === (d.actor_id === ADM.userId ? 'admin_no_document_access' : 'no_grant'))).toBe(true);
     // Nobody's refused revoke removed the grant.
@@ -178,7 +181,7 @@ describe('grants give exactly what they say', () => {
     });
     expect(dl.status).toBe(200);
     expect((dl.body as Buffer).equals(PDF)).toBe(true);
-    for (const [name, call] of routes(doc, own.body.id).filter(([n]) => !['view', 'download', 'download v1'].includes(n))) {
+    for (const [name, call] of routes(doc, own.body.id).filter(([n]) => !['view', 'download', 'download v1', 'pages', 'page 1', 'offline key'].includes(n))) {
       expect((await call(V)).status, name).toBe(404);
     }
   });
@@ -469,16 +472,19 @@ describe('the audit trail proves who reached a document', () => {
 });
 
 describe('admins cannot read documents, except through audited break-glass', () => {
-  it('break-glass gives one hour of READ, is audited with the reason, and shows as an alert', async () => {
-    const doc = await upload(A);
+  it('break-glass gives one hour of VIEW (pages, no download), is audited with the reason, and shows as an alert', async () => {
+    const doc = await upload(A, 'Notes', Buffer.from('incident notes\n'), 'notes.txt');
     await as(t, ADM).get(`/api/documents/${doc}`).expect(404);
     // A second admin approves the request first (THREATS.md S19).
     const ADM2 = await login(t, await createUser({ email: 'admin2@t.io', role: 'ADMIN' }));
     await as(t, ADM).post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: doc, reason: 'short' }).expect(400);
     const ok = await approved(t, ADM, ADM2, { action: 'BREAK_GLASS', documentId: doc, reason: 'Legal hold request #4471 from counsel' });
     await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, approvalId: ok }).expect(201);
-    await as(t, ADM).get(`/api/documents/${doc}/download`).expect(200);
-    await as(t, ADM).patch(`/api/documents/${doc}`, { title: 'x' }).expect(404); // READ only
+    await as(t, ADM).get(`/api/documents/${doc}`).expect(200);
+    await as(t, ADM).get(`/api/documents/${doc}/pages/1`).expect(200);
+    // An emergency look, never the original file (THREATS.md V9).
+    await as(t, ADM).get(`/api/documents/${doc}/download`).expect(404);
+    await as(t, ADM).patch(`/api/documents/${doc}`, { title: 'x' }).expect(404); // VIEW only
     const alerts = await as(t, ADM).get('/api/admin/alerts').expect(200);
     expect(alerts.body.alerts.some((a: { kind: string }) => a.kind === 'break_glass')).toBe(true);
     const history = await as(t, A).get(`/api/documents/${doc}/history`);
