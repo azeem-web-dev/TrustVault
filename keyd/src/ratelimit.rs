@@ -14,6 +14,7 @@
 //!   KEYD_LIMIT_MAINT_PER_HOUR     0     re-encryption unwraps per hour (0 = disabled;
 //!                                       the operator enables it for an emergency run)
 //!   KEYD_LIMIT_TOTP_PER_USER_10MIN 20   TOTP secret unwraps per user per 10 minutes
+//!   KEYD_LIMIT_TOTP_ALL_PER_MIN   120   TOTP secret unwraps per minute, all users
 //!   KEYD_LIMIT_REWRAP_PER_MIN     20000 rewraps per minute
 //!   KEYD_LIMIT_REFUSALS_LOGGED_PER_MIN 120 refusals written to the ledger per
 //!                                       minute; the rest are counted and the
@@ -30,6 +31,7 @@ pub struct Limits {
     pub system_per_hour: u32,
     pub maint_per_hour: u32,
     pub totp_per_user_10min: u32,
+    pub totp_all_per_min: u32,
     pub rewrap_per_min: u32,
     pub refusals_logged_per_min: u32,
 }
@@ -43,6 +45,7 @@ impl Default for Limits {
             system_per_hour: 2000,
             maint_per_hour: 0,
             totp_per_user_10min: 20,
+            totp_all_per_min: 120,
             rewrap_per_min: 20_000,
             refusals_logged_per_min: 120,
         }
@@ -64,6 +67,7 @@ impl Limits {
         get("KEYD_LIMIT_SYSTEM_PER_HOUR", &mut l.system_per_hour)?;
         get("KEYD_LIMIT_MAINT_PER_HOUR", &mut l.maint_per_hour)?;
         get("KEYD_LIMIT_TOTP_PER_USER_10MIN", &mut l.totp_per_user_10min)?;
+        get("KEYD_LIMIT_TOTP_ALL_PER_MIN", &mut l.totp_all_per_min)?;
         get("KEYD_LIMIT_REWRAP_PER_MIN", &mut l.rewrap_per_min)?;
         get("KEYD_LIMIT_REFUSALS_LOGGED_PER_MIN", &mut l.refusals_logged_per_min)?;
         Ok(l)
@@ -121,8 +125,9 @@ impl RateLimiter {
         self.take(&[(format!("sys:{action}"), 3600, limit)], now)
     }
 
+    /// Per user, and all users together (so walking every account is capped too).
     pub fn totp_unwrap(&self, user: &str, now: u64) -> bool {
-        self.take(&[(format!("totp:{user}"), 600, self.limits.totp_per_user_10min)], now)
+        self.take(&[(format!("totp:{user}"), 600, self.limits.totp_per_user_10min), ("totp-all".into(), 60, self.limits.totp_all_per_min)], now)
     }
 
     pub fn rewrap(&self, now: u64) -> bool {
@@ -139,7 +144,7 @@ mod tests {
     use super::*;
 
     fn limiter() -> RateLimiter {
-        RateLimiter::new(Limits { user_per_min: 3, user_per_hour: 5, all_per_min: 4, system_per_hour: 2, maint_per_hour: 0, totp_per_user_10min: 2, rewrap_per_min: 1, refusals_logged_per_min: 1 })
+        RateLimiter::new(Limits { user_per_min: 3, user_per_hour: 5, all_per_min: 4, system_per_hour: 2, maint_per_hour: 0, totp_per_user_10min: 2, totp_all_per_min: 3, rewrap_per_min: 1, refusals_logged_per_min: 1 })
     }
 
     #[test]
@@ -183,6 +188,8 @@ mod tests {
         assert!(!r.system_unwrap("rescan", 0));
         assert!(!r.system_unwrap("reencrypt", 0), "maintenance disabled by default");
         assert!(r.totp_unwrap("u", 0) && r.totp_unwrap("u", 0) && !r.totp_unwrap("u", 0));
+        assert!(r.totp_unwrap("v", 0), "3rd TOTP unwrap overall");
+        assert!(!r.totp_unwrap("w", 0), "4th overall: the all-users cap");
         assert!(r.rewrap(0) && !r.rewrap(0));
     }
 }

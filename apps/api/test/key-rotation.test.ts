@@ -181,3 +181,38 @@ describe('emergency re-encryption', () => {
     expect(re.every((e) => e.user === null && e.result === 'ok')).toBe(true);
   });
 });
+
+describe('rotation never overwrites a value that changed under it', () => {
+  it('a row changed during rotation keeps the newer value and is finished by the next run', async () => {
+    const master3 = Buffer.alloc(32, 0x43);
+    const gen3 = new LocalKeyProvider(master, { generations: new Map([[2, master2], [3, master3]]) });
+    const [target] = await rows();
+    expect(target!.keyId).toBe('local-g2-blob');
+    const aad = blobAad(target!.docId, target!.versionId, target!.versionNo);
+    // Someone else re-wraps this row (same data key, new nonce) while our rewrap is in flight.
+    const concurrent = aesGcmSeal(hk(master2, 'tv-wrap-g2-blob'), aesGcmOpen(hk(master2, 'tv-wrap-g2-blob'), target!.wrapped, aad), aad);
+    let first = true;
+    const racing = new Proxy(gen3, {
+      get(t, prop) {
+        if (prop === 'rewrap') {
+          return async (w: Buffer, id: string, a: string) => {
+            if (first && a === aad) {
+              first = false;
+              await owned((db) => db.query('UPDATE document_blobs SET wrapped_key = $1 WHERE version_id = $2', [concurrent, target!.versionId]));
+            }
+            return t.rewrap(w, id, a);
+          };
+        }
+        const v = Reflect.get(t, prop) as unknown;
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+      },
+    }) as KeyProvider;
+    const r = await owned((db) => rotateKeys(db, racing, { batch: 1 }));
+    expect(r.blobs.changedMeanwhile).toBe(1);
+    const [after] = (await rows()).filter((x) => x.versionId === target!.versionId);
+    expect(after!.wrapped).toEqual(concurrent);
+    expect(after!.keyId).toBe('local-g2-blob');
+    await owned((db) => rotateKeys(db, gen3));
+    expect((await owned((db) => verifyKeys(db, gen3))).ok).toBe(true);
+  });
+});

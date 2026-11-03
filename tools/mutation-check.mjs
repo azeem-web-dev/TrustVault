@@ -7,7 +7,7 @@
 // to FAIL. A mutation that leaves the tests green is a check nothing tests.
 //
 //   node tools/mutation-check.mjs            (from the repo root; needs the test DB)
-//   node tools/mutation-check.mjs --only 7   (one mutation)
+//   node tools/mutation-check.mjs --only 7   (one mutation; --only 56-69 for a range)
 //
 // Source files are always restored, even on Ctrl-C. Database mutations are
 // applied to the TEST database only and reverted afterwards.
@@ -190,7 +190,7 @@ const MUTATIONS = [
   code('keys: a ticket works once', 'src/crypto/key-provider.ts',
     "if (this.seen.has(t.tid)) this.refuse(entry, 'ticket already used');", '', ['test/keyd-tickets.test.ts']),
   code('keys: per-user unwrap rate limit', 'src/crypto/key-provider.ts',
-    "if (!allowed) this.refuse(entry, 'rate limited');", '', ['test/keyd-tickets.test.ts']),
+    "if (!allowed) this.refuse(entry, 'rate limited');", "if (!allowed && false) this.refuse(entry, 'rate limited');", ['test/keyd-tickets.test.ts']),
   code('reconcile: key release without a matching audit event', 'src/keys/key-ledger.service.ts',
     'for (const r of noAudit) findings.push(', 'for (const r of noAudit.slice(0, 0)) findings.push(', ['test/keyd-tickets.test.ts']),
   code('reconcile: key release on a ticket the database never issued', 'src/keys/key-ledger.service.ts',
@@ -200,7 +200,9 @@ const MUTATIONS = [
   code('reconcile: mirrored ledger entries are re-verified', 'src/keys/key-ledger.service.ts',
     'const bad = verifyLedgerRun(seq, hash, page);', 'const bad = null;', ['test/keyd-tickets.test.ts']),
   code('rotation: a row is replaced only if unchanged (compare-and-swap)', 'src/keys/rotation.ts',
-    "if (u.rowCount !== 1) throw new Error('the stored blob changed during re-encryption');", '', ['test/key-rotation.test.ts']),
+    "'UPDATE document_blobs SET wrapped_key = $1, key_id = $2 WHERE version_id = $3 AND key_id = $4 AND wrapped_key = $5',",
+    "'UPDATE document_blobs SET wrapped_key = $1, key_id = $2 WHERE version_id = $3 AND $4::text IS NOT NULL AND $5::bytea IS NOT NULL',",
+    ['test/key-rotation.test.ts']),
   sql('database: the application role cannot read the ticket key',
     'GRANT SELECT ON keyd_ticket_keys TO trustvault_app', 'REVOKE SELECT ON keyd_ticket_keys FROM trustvault_app', ['test/keyd-tickets.test.ts']),
   sql('database: the ledger mirror only accepts rows that extend the chain',
@@ -232,7 +234,8 @@ process.on('SIGINT', () => { restoreAll(); process.exit(130); });
 async function main() {
   loadEnv();
   const onlyIdx = process.argv.indexOf('--only');
-  const only = onlyIdx > 0 ? Number(process.argv[onlyIdx + 1]) : null;
+  const [lo, hi = lo] = onlyIdx > 0 ? String(process.argv[onlyIdx + 1]).split('-').map(Number) : [];
+  const only = lo ? { lo, hi } : null;
 
   if (process.argv.includes('--dry-run')) {
     let missing = 0;
@@ -256,7 +259,7 @@ async function main() {
   const results = [];
   for (const [i, m] of MUTATIONS.entries()) {
     const n = i + 1;
-    if (only && only !== n) continue;
+    if (only && (n < only.lo || n > only.hi)) continue;
     process.stdout.write(`#${String(n).padStart(2)} ${m.name} ... `);
     let applied = true;
     try {

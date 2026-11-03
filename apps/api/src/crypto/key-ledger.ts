@@ -206,6 +206,7 @@ export interface UnwrapLimits {
   systemPerHour: number;
   maintPerHour: number;
   totpPerUser10Min: number;
+  totpAllPerMin: number;
   rewrapPerMin: number;
   refusalsLoggedPerMin: number;
 }
@@ -213,7 +214,7 @@ export interface UnwrapLimits {
 /** keyd's defaults (keyd/src/ratelimit.rs). */
 export const DEFAULT_LIMITS: UnwrapLimits = {
   userPerMin: 60, userPerHour: 600, allPerMin: 600, systemPerHour: 2000, maintPerHour: 0,
-  totpPerUser10Min: 20, rewrapPerMin: 20_000, refusalsLoggedPerMin: 120,
+  totpPerUser10Min: 20, totpAllPerMin: 120, rewrapPerMin: 20_000, refusalsLoggedPerMin: 120,
 };
 
 export class RateLimiter {
@@ -243,7 +244,7 @@ export class RateLimiter {
   systemUnwrap(action: string, now: number) {
     return this.take([[`sys:${action}`, 3600, action === 'reencrypt' ? this.limits.maintPerHour : this.limits.systemPerHour]], now);
   }
-  totpUnwrap(user: string, now: number) { return this.take([[`totp:${user}`, 600, this.limits.totpPerUser10Min]], now); }
+  totpUnwrap(user: string, now: number) { return this.take([[`totp:${user}`, 600, this.limits.totpPerUser10Min], ['totp-all', 60, this.limits.totpAllPerMin]], now); }
   rewrap(now: number) { return this.take([['rewrap', 60, this.limits.rewrapPerMin]], now); }
   logRefusal(now: number) { return this.take([['refusals', 60, this.limits.refusalsLoggedPerMin]], now); }
 }
