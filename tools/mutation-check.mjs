@@ -237,6 +237,8 @@ const MUTATIONS = [
     'if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {', 'if (false) {', ['test/step-up.test.ts']),
   code('users: deactivating someone is a step-up route', 'src/users/users.controller.ts',
     "@Post(':id/deactivate')\n  @HttpCode(200)\n  @StepUp()", "@Post(':id/deactivate')\n  @HttpCode(200)", ['test/step-up.test.ts']),
+  code('users: changing an access window is a step-up route', 'src/users/users.controller.ts',
+    "'role' in req.body || 'accessExpiresAt' in req.body", "'role' in req.body", ['test/step-up.test.ts']),
   code('mfa: a step-up code works only once', 'src/auth/mfa.service.ts',
     'AND (totp_last_step IS NULL OR totp_last_step < ${step})', '', ['test/step-up.test.ts']),
   code('session: the MFA policy applies to live sessions', SESSION,
