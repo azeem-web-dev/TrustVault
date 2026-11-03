@@ -65,7 +65,7 @@ async function upload(s: Session, title: string) {
 
 async function queue(query = '', limit = 200) {
   const res = await as(t, ADM).get(`/api/admin/alert-queue?status=all&limit=${limit}${query}`).expect(200);
-  return res.body as { alerts: { id: string; rule: string; severity: string; subjectUserId: string | null; message: string; status: string }[]; total: number; bySeverity: Record<string, number>; nextCursor: string | null };
+  return res.body as { alerts: { id: string; rule: string; severity: string; subjectUserId: string | null; documentId: string | null; message: string; status: string }[]; total: number; bySeverity: Record<string, number>; nextCursor: string | null };
 }
 
 const rulesFor = async (userId: string) => (await queue(`&subjectUserId=${userId}`)).alerts.map((a) => a.rule).sort();
@@ -230,6 +230,8 @@ describe('hard download limits are enforced before release, audited, and overrid
 
     await as(t, ADM).post('/api/admin/download-limits/overrides', { userId: vic.id, dailyLimit: 50, sessionLimit: 50, reason: 'short', expiresAt: new Date(Date.now() + 3_600_000) }).expect(400);
     await as(t, ADM).post('/api/admin/download-limits/overrides', { userId: vic.id, dailyLimit: 50, sessionLimit: 50, reason: 'Quarterly audit export requested by finance (ticket FIN-88)', expiresAt: new Date(Date.now() + 30 * 86_400_000) }).expect(400);
+    const self = await as(t, ADM).post('/api/admin/download-limits/overrides', { userId: admin.id, dailyLimit: 50, sessionLimit: 50, reason: 'Quarterly audit export requested by finance (ticket FIN-88)', expiresAt: new Date(Date.now() + 3_600_000) }).expect(400);
+    expect(self.body.message).toMatch(/your own download limit/);
     await as(t, V).post('/api/admin/download-limits/overrides', { userId: vic.id, dailyLimit: 50, sessionLimit: 50, reason: 'Quarterly audit export requested by finance (ticket FIN-88)', expiresAt: new Date(Date.now() + 3_600_000) }).expect(403);
     const o = await as(t, ADM).post('/api/admin/download-limits/overrides', { userId: vic.id, dailyLimit: 50, sessionLimit: 50, reason: 'Quarterly audit export requested by finance (ticket FIN-88)', expiresAt: new Date(Date.now() + 2_500) }).expect(201);
     await as(t, V).get(`/api/documents/${doc}/download`).expect(200);
@@ -266,7 +268,7 @@ describe('hard download limits are enforced before release, audited, and overrid
     await gen.run();
     const hour = (await queue(`&subjectUserId=${vic.id}&rule=bulk_download_hour`)).alerts[0]!;
     expect(hour).toBeDefined();
-    const policy = (await queue('&rule=download_limit_override')).alerts[0]!;
+    const policy = (await queue(`&rule=download_limit_override&subjectUserId=${admin.id}`)).alerts[0]!;
     expect(policy.message).toMatch(/admin@t\.io raised the download limit of vic@t\.io to 100/);
     await as(t, ADM2).post(`/api/admin/alert-queue/${hour.id}/resolve`, { resolution: 'benign', note: 'Covered by override for AUD-2026' }).expect(200);
     const after = (await as(t, ADM).get(`/api/admin/alert-queue/${hour.id}`).expect(200)).body;
@@ -413,13 +415,15 @@ describe('escalation and existing alert kinds', () => {
   });
 
   it('events the old alert list showed become persistent alerts too (ended session, break-glass)', async () => {
+    const since = new Date(Date.now() - 1000).toISOString();
     const doc = await upload(A, 'Contract');
     await as(t, ADM).post('/api/admin/break-glass', { documentId: doc, reason: 'Legal hold request #4471 from counsel' }).expect(201);
     await as(t, ADM).post(`/api/admin/users/${vic.id}/deactivate`).expect(200);
     await as(t, V).get('/api/documents').expect(401);
     await gen.run();
-    const rules = (await queue()).alerts.map((a) => a.rule);
-    expect(rules).toEqual(expect.arrayContaining(['break_glass', 'ended_session_used']));
+    // Alerts are permanent: look only at this test's, not every earlier run's.
+    expect((await queue(`&rule=break_glass&from=${since}`)).alerts.map((a) => a.documentId)).toContain(doc);
+    expect((await queue(`&rule=ended_session_used&subjectUserId=${vic.id}`)).alerts).toHaveLength(1);
     // The live list keeps working as before.
     const live = (await as(t, ADM).get('/api/admin/alerts').expect(200)).body.alerts as { kind: string }[];
     expect(live.map((a) => a.kind)).toEqual(expect.arrayContaining(['break_glass', 'ended_session_used']));
@@ -442,7 +446,7 @@ describe('escalation and existing alert kinds', () => {
     expect(st.last_error).toMatch(/permission denied/);
     expect(await auditRows(`action = 'alert.generator' AND outcome = 'FAILED' AND seq > $1`, [before])).toHaveLength(1);
     await gen.run();
-    expect((await queue('&rule=break_glass')).alerts.some((a) => a.message.includes('SEC-9001'))).toBe(true);
+    expect((await queue(`&rule=break_glass&from=${since}`)).alerts.some((a) => a.message.includes('SEC-9001'))).toBe(true);
     expect((await queue(`&rule=alert_generator_failed&from=${since}`)).alerts).toHaveLength(1);
   });
 });
