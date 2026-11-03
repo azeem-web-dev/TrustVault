@@ -46,6 +46,11 @@ class Api {
   void Function()? onUnauthorized;
   void Function()? onMfaRequired;
 
+  /// Asks the user for a fresh second factor when the API answers 403
+  /// `step_up_required` before a risky action (THREATS.md S20). Resolves true
+  /// once POST /auth/mfa/step-up succeeded; the request is then sent again, once.
+  Future<bool> Function()? onStepUp;
+
   Future<void> init() async {
     try {
       _session = await _store.read(key: 'session');
@@ -121,6 +126,18 @@ class Api {
   }
 
   Future<dynamic> _send(String method, String path, [Object? body]) async {
+    try {
+      return await _sendOnce(method, path, body);
+    } on ApiError catch (e) {
+      final ask = onStepUp;
+      if (e.status == 403 && e.code == 'step_up_required' && ask != null && await ask()) {
+        return _sendOnce(method, path, body);
+      }
+      rethrow;
+    }
+  }
+
+  Future<dynamic> _sendOnce(String method, String path, [Object? body]) async {
     final uri = Uri.parse('$base$path');
     final req = http.Request(method, uri)..headers.addAll(_headers(method, json: body != null));
     if (body != null) req.body = jsonEncode(body);

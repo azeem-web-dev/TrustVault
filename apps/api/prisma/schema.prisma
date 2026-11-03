@@ -115,6 +115,9 @@ model Session {
   revokedReason String?   @map("revoked_reason")
   /// When the first request with this ended session was refused and recorded.
   rejectedAt    DateTime? @map("rejected_at") @db.Timestamptz(6)
+  /// When a second factor was last presented in this session. Risky actions
+  /// need it to be recent (step-up, THREATS.md S20).
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -422,4 +425,18 @@ model AdminApproval {
   @@index([createdAt])
   @@index([targetUserId], map: "admin_approvals_target_user_idx")
   @@map("admin_approvals")
+}
+
+/// Instance-wide settings: exactly one row (id = 1). Changed only by an
+/// admin, with a fresh second factor, and audited (THREATS.md S21).
+model AppSettings {
+  id               Int      @id @default(1) @db.SmallInt
+  /// Roles that must use a second factor. Always contains ADMIN (a CHECK
+  /// constraint enforces it in the database too).
+  mfaRequiredRoles Role[]   @default([ADMIN]) @map("mfa_required_roles")
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  /// Who last changed it. Not a foreign key: the audit log is the record.
+  updatedById      String?  @map("updated_by_id") @db.Uuid
+
+  @@map("app_settings")
 }

@@ -31,9 +31,23 @@ refuses a *different* browser origin). No API changes were needed.
 App data is excluded from cloud backup and device transfer, and cleartext
 HTTP is disabled.
 
-**Passkeys:** they are bound to the website address, so adding or using a
-passkey is done on the website. The app lists and removes them. An account
-whose only second factor is a passkey sees a note pointing to the website.
+**Passkeys:** added and used in the app through Android's Credential
+Manager (package `passkeys`). They belong to the website address
+(`vault.rayyanazeem.cloud`), so one passkey works on the website and in the
+app. Android allows this only because the site serves
+`/.well-known/assetlinks.json` naming this package and the release signing
+certificate, and the API accepts the app's `android:apk-key-hash:` origin
+(`PASSKEY_ANDROID_ORIGINS`, THREATS.md S22). A build signed with any other
+key (for example the debug key) cannot use them.
+
+**App lock:** a face / fingerprint / phone-PIN lock (`local_auth`) when the
+app is opened or comes back after 30 seconds away. On by default when the
+phone has a screen lock; switch it in Account. It only covers the screen; the
+server session is unchanged (S24).
+
+**Step-up:** when the API asks for a fresh second factor before a risky
+action (`403 step_up_required`), the app asks for a code or passkey and sends
+the request again.
 
 ## Build
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseAndroidOrigins } from '../auth/passkey-origins.js';
 
 // Every setting the API reads, validated once at startup. A missing or
 // malformed value stops the process instead of failing later at runtime.
@@ -44,6 +45,17 @@ const EnvSchema = z.object({
   RESET_LINK_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
   /** Hours an invitation link works. */
   INVITE_LINK_HOURS: z.coerce.number().int().min(1).max(336).default(72),
+  /** Risky actions need a second factor presented within this many minutes (THREATS.md S20). */
+  STEP_UP_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+  /** Extra passkey origins: the Android app's android:apk-key-hash:..., comma separated (THREATS.md S22). */
+  PASSKEY_ANDROID_ORIGINS: z.string().default('').transform((v, ctx) => {
+    try {
+      return parseAndroidOrigins(v);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'malformed' });
+      return z.NEVER;
+    }
+  }),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

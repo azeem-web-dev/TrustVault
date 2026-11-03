@@ -86,7 +86,11 @@ export async function startApp(overrides: Record<string, string> = {}): Promise<
  * design — so tests look up their own rows by request id or document id.
  */
 export async function resetState(app: INestApplication): Promise<void> {
-  await withDb(ownerDb(), (db) => db.query('TRUNCATE sessions, users, groups CASCADE'));
+  await withDb(ownerDb(), async (db) => {
+    await db.query('TRUNCATE sessions, users, groups CASCADE');
+    // Back to the default second-factor policy (ADMIN only).
+    await db.query(`UPDATE app_settings SET mfa_required_roles = '{ADMIN}', updated_by_id = NULL`);
+  });
   const { RedisService } = await import('../src/redis/redis.service.js');
   const redis = app.get(RedisService).client;
   // KEYS is blocked by the Redis ACL (it is in @dangerous), so iterate with

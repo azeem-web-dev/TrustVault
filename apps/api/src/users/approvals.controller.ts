@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post } f
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
-import { CurrentActor, Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles, StepUp } from '../auth/decorators.js';
 import { ApprovalsService } from './approvals.service.js';
 
 const RequestSchema = z.strictObject({
@@ -31,18 +31,21 @@ export class ApprovalsController {
 
   /** Ask for a second admin's approval. 409 `no_second_admin` when there is no other active admin. */
   @Post()
+  @StepUp()
   async request(@CurrentActor() actor: Actor, @Body(new ZodPipe(RequestSchema)) body: z.infer<typeof RequestSchema>) {
     return { approval: await this.approvals.request(actor, body) };
   }
 
   /** Another active admin approves. A break-glass approval emails the document's owner at once. */
   @Post(':id/approve')
+  @StepUp()
   @HttpCode(200)
   async approve(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
     return { approval: await this.approvals.approve(actor, id) };
   }
 
   @Post(':id/reject')
+  @StepUp()
   @HttpCode(200)
   async reject(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
     return { approval: await this.approvals.reject(actor, id) };

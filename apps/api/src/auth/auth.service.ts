@@ -9,6 +9,7 @@ import { currentContext, type Actor } from '../common/request-context.js';
 import { logger } from '../common/logger.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type NewSession } from './session.service.js';
+import { MfaPolicyService } from './mfa-policy.service.js';
 import type { Role } from '../generated/prisma/enums.js';
 
 /** One message for every login failure, so responses never reveal whether an account exists. */
@@ -47,6 +48,7 @@ export class AuthService {
     @Inject(PasswordService) private readonly passwords: PasswordService,
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(ENV) private readonly env: Env,
+    @Inject(MfaPolicyService) private readonly policy: MfaPolicyService,
   ) {}
 
   /**
@@ -155,7 +157,7 @@ export class AuthService {
     return {
       session: result,
       user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-      mfa: { required: user.role === 'ADMIN' || enrolled, enrolled, methods },
+      mfa: { required: MfaPolicyService.isRequired(user.role, enrolled, await this.policy.requiredRoles()), enrolled, methods },
     };
   }
 

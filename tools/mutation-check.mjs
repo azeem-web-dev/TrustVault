@@ -227,6 +227,27 @@ const MUTATIONS = [
   sql('database: the app role cannot read password hashes or TOTP secrets',
     'GRANT SELECT ON users TO trustvault_app',
     'REVOKE SELECT ON users FROM trustvault_app; GRANT SELECT ("id", "email", "display_name", "role", "status", "password_changed_at", "failed_login_count", "locked_until", "access_expires_at", "created_at", "updated_at", "created_by_id", "deactivated_at", "activated_at", "is_protected", "totp_enabled_at", "totp_last_step") ON users TO trustvault_app', ['test/identity-guards.test.ts']),
+  // --- step-up, MFA policy, signed-in devices (THREATS.md S20, S21, S23) -----
+  code('guard: risky actions need a recent second factor (step-up)', GUARD,
+    'if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {', 'if (false) {', ['test/step-up.test.ts']),
+  code('users: deactivating someone is a step-up route', 'src/users/users.controller.ts',
+    "@Post(':id/deactivate')\n  @HttpCode(200)\n  @StepUp()", "@Post(':id/deactivate')\n  @HttpCode(200)", ['test/step-up.test.ts']),
+  code('mfa: a step-up code works only once', 'src/auth/mfa.service.ts',
+    'AND (totp_last_step IS NULL OR totp_last_step < ${step})', '', ['test/step-up.test.ts']),
+  code('session: the MFA policy applies to live sessions', SESSION,
+    'mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),', "mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, ['ADMIN']),",
+    ['test/mfa-policy.test.ts']),
+  code('policy: ADMIN can never be taken out of the MFA policy', 'src/auth/mfa-policy.service.ts',
+    "if (!roles.includes('ADMIN')) throw new BadRequestException('Administrators always need a second factor');", '', ['test/mfa-policy.test.ts']),
+  code('mfa: a role the policy covers keeps its last factor', 'src/auth/mfa.service.ts',
+    'if (MfaPolicyService.isRequired(actor.role, false, await this.policy.requiredRoles(tx))) {', "if (actor.role === 'ADMIN') {", ['test/mfa-policy.test.ts']),
+  code('devices: you can only sign out your own sessions', 'src/auth/sessions.controller.ts',
+    'where: { id, userId: actor.userId, revokedAt: null }', 'where: { id, revokedAt: null }', ['test/devices.test.ts']),
+  sql('database: ADMIN always in the MFA policy (check constraint)',
+    'ALTER TABLE app_settings DROP CONSTRAINT app_settings_admin_needs_mfa',
+    "ALTER TABLE app_settings ADD CONSTRAINT app_settings_admin_needs_mfa CHECK ('ADMIN' = ANY (mfa_required_roles))", ['test/mfa-policy.test.ts']),
+  sql('database: instance settings changed only in an admin transaction',
+    'ALTER TABLE app_settings DISABLE TRIGGER app_settings_admin_only', 'ALTER TABLE app_settings ENABLE TRIGGER app_settings_admin_only', ['test/mfa-policy.test.ts']),
 ];
 
 function loadEnv() {

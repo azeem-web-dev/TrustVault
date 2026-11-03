@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "cloud.rayyanazeem.trustvault",
+      "sha256_cert_fingerprints": [
+        "42:07:B1:E4:EF:E7:19:69:A9:18:F5:1F:34:FF:27:C6:BE:90:97:3F:52:53:0E:F9:C4:74:9B:D8:02:69:47:88"
+      ]
+    }
+  }
+]

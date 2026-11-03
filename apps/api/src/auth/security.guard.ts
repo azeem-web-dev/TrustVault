@@ -15,7 +15,7 @@ import { logger } from '../common/logger.js';
 import { currentContext, markRefusalAudited } from '../common/request-context.js';
 import { ErrorsFilter } from '../common/errors.filter.js';
 import { PrismaService } from '../db/prisma.service.js';
-import { PARTIAL_AUTH_KEY, PUBLIC_KEY, ROLES_KEY } from './decorators.js';
+import { PARTIAL_AUTH_KEY, PUBLIC_KEY, ROLES_KEY, STEP_UP_KEY, type StepUpWhen } from './decorators.js';
 import { SESSION_COOKIE, SessionService } from './session.service.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -27,6 +27,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  *  3. CSRF token: required on state-changing requests with a session.
  *  4. Second factor, if the account requires one.
  *  5. Account role, if the route declares @Roles().
+ *  6. A recent second factor, if the route declares @StepUp().
  * Document-level permissions are a separate, later check (decide()).
  */
 @Injectable()
@@ -115,6 +116,20 @@ export class SecurityGuard implements CanActivate {
         { action: 'security.role', outcome: 'DENIED', reason: 'role_not_allowed', details: { method: req.method, path: req.path, required: roles } },
         new ForbiddenException('Not allowed'),
       );
+    }
+
+    // 6. Step-up. Risky actions need a second factor presented within
+    //    STEP_UP_MINUTES in this session (THREATS.md S20). After the role
+    //    check, so a caller who may not use the route at all is told that.
+    const stepUp = this.reflector.getAllAndOverride<StepUpWhen | true | undefined>(STEP_UP_KEY, targets);
+    if (stepUp && actor.mfaRequired && (stepUp === true || stepUp(req))) {
+      const verifiedAt = actor.mfaVerifiedAt?.getTime() ?? 0;
+      if (Date.now() - verifiedAt > this.env.STEP_UP_MINUTES * 60_000) {
+        await this.refuse(
+          { action: 'security.step_up_required', outcome: 'DENIED', reason: actor.mfaVerifiedAt ? 'second_factor_stale' : 'no_second_factor_in_session', details: { method: req.method, path: req.path } },
+          new ForbiddenException({ message: 'Confirm it’s you: enter a code from your authenticator app or use your passkey', code: 'step_up_required' }),
+        );
+      }
     }
     return true;
   }

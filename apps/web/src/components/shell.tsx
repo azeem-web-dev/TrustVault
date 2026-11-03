@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  BellRinging, CaretUpDown, Desktop, Files, List, ListMagnifyingGlass, MagnifyingGlass, Moon, ShieldCheck, SignOut, Sun, UserCheck, UserCircleGear, UsersFour, UsersThree, X,
+  BellRinging, CaretUpDown, Desktop, Files, GearSix, List, ListMagnifyingGlass, MagnifyingGlass, Moon, ShieldCheck, SignOut, Sun, UserCheck, UserCircleGear, UsersFour, UsersThree, X,
 } from '@phosphor-icons/react';
 import { useSession } from './session';
 import { useTheme, type ThemeChoice } from './theme';
@@ -49,6 +49,7 @@ export function Shell({ children }: { children: ReactNode }) {
         { href: '/admin/users', label: 'Users', icon: <UsersThree size={20} />, hint: 'Accounts and roles' },
         { href: '/admin/approvals', label: 'Approvals', icon: <UserCheck size={20} />, hint: 'Requests needing a second admin' },
         { href: '/admin/groups', label: 'Groups', icon: <UsersFour size={20} />, hint: 'Teams for sharing' },
+        { href: '/admin/settings', label: 'Settings', icon: <GearSix size={20} />, hint: 'Second-factor policy' },
       ]
     : [];
   const all = [...workspace, ...admin];

@@ -4,13 +4,15 @@ import 'package:flutter/services.dart';
 import '../widgets/phosphor.dart';
 
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/api.dart';
+import '../core/app_lock.dart';
+import '../core/passkey.dart';
 import '../core/format.dart';
 import '../core/session.dart';
 import '../core/theme.dart';
 import '../widgets/art.dart';
+import '../widgets/totp_guide.dart';
 import '../widgets/ui.dart';
 import 'shell.dart';
 
@@ -24,6 +26,8 @@ class AccountScreen extends StatefulWidget {
 
 class _AccountScreenState extends State<AccountScreen> {
   Map? _mfa;
+  List<Map>? _devices;
+  List<String>? _policy;
   String? _error;
   String? _busy;
   ({String secret, String uri})? _totp;
@@ -50,7 +54,16 @@ class _AccountScreenState extends State<AccountScreen> {
   Future<void> _load() async {
     try {
       final r = await Api.I.get('/auth/mfa') as Map;
-      if (mounted) setState(() => _mfa = r);
+      final d = await Api.I.get('/auth/sessions') as Map;
+      final isAdmin = mounted && context.read<Session>().user?.isAdmin == true;
+      final pol = isAdmin ? await Api.I.get('/admin/settings/mfa-policy') as Map : null;
+      if (mounted) {
+        setState(() {
+          _mfa = r;
+          _devices = (d['sessions'] as List).cast<Map>();
+          _policy = (pol?['requiredRoles'] as List?)?.cast<String>();
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = errorText(e));
     }
@@ -208,16 +221,23 @@ class _AccountScreenState extends State<AccountScreen> {
                         color: p.soft,
                         border: Border(top: BorderSide(color: p.divider)),
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Ic(PhosphorIconsDuotone.globe, size: 18, color: p.muted),
-                          gap8,
-                          Expanded(
-                            child: Text(
-                              'To add a passkey, open vault.rayyanazeem.cloud in your browser, go to Account, and choose “Add passkey”. Passkeys are tied to the website address.',
-                              style: ts(context, size: 12.5, color: p.muted, height: 1.5),
-                            ),
+                          Btn(
+                            'Add a passkey on this phone',
+                            variant: BtnVariant.primary,
+                            icon: PhosphorIconsBold.plus,
+                            loading: _busy == 'passkey',
+                            onPressed: () => _run('passkey', () async {
+                              await Passkeys.register('Android phone');
+                              await session.refresh();
+                            }, 'Passkey added'),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Uses your screen lock and is saved to your Google account. A passkey made on the website works here too.',
+                            style: ts(context, size: 12, color: p.muted, height: 1.45),
                           ),
                         ],
                       ),
@@ -242,6 +262,14 @@ class _AccountScreenState extends State<AccountScreen> {
                       Ic(PhosphorIconsDuotone.shieldCheck, size: 22, color: p.dark ? C.emerald300 : C.emerald600),
                       gap12,
                       Expanded(child: Text('Set up. You will be asked for a code when you sign in.', style: ts(context, size: 13.5))),
+                      if (!(mfa['requiredByRole'] == true && !hasPasskey))
+                        Btn(
+                          'Remove',
+                          variant: BtnVariant.danger,
+                          size: BtnSize.sm,
+                          loading: _busy == 'totp-rm',
+                          onPressed: () => _run('totp-rm', () => Api.I.delete('/auth/mfa/totp'), 'Authenticator app removed'),
+                        ),
                     ],
                   ),
                 )
@@ -250,16 +278,21 @@ class _AccountScreenState extends State<AccountScreen> {
               : Align(
                   alignment: Alignment.centerLeft,
                   child: Btn(
-                    'Set up an authenticator app',
+                    'Set up Google Authenticator',
                     icon: PhosphorIconsDuotone.deviceMobile,
                     loading: _busy == 'totp-setup',
                     onPressed: () => _run('totp-setup', () async {
                       final r = await Api.I.post('/auth/mfa/totp/setup') as Map;
                       setState(() => _totp = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
-                    }, 'Scan the code, then enter the 6 digits'),
+                    }, 'Follow the three steps to finish'),
                   ),
                 ),
         ),
+        gap16,
+        _devicesCard(context, p),
+        gap16,
+        _lockCard(context, p),
+        if (user.isAdmin) ...[gap16, _policyCard(context, p)],
         gap16,
         TvCard(
           title: 'Password',
@@ -354,106 +387,176 @@ class _AccountScreenState extends State<AccountScreen> {
 
   Widget _totpSetup(BuildContext context, Pal p, Session session) {
     final t = _totp!;
-    Widget step(int n, Widget child) => Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: const BoxDecoration(shape: BoxShape.circle, gradient: C.brandGradient),
-            child: Center(
-              child: Text(
-                '$n',
-                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-          gap12,
-          Expanded(
-            child: Padding(padding: const EdgeInsets.only(top: 2), child: child),
-          ),
-        ],
-      ),
-    );
     return Rise(
       dy: 6,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: C.slate200),
-              ),
-              child: QrImageView(
-                data: t.uri,
-                size: 168,
-                padding: EdgeInsets.zero,
-                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: C.slate900),
-                dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: C.slate900),
+      child: TotpSetupGuide(
+        secret: t.secret,
+        uri: t.uri,
+        child: Row(
+          children: [
+            SizedBox(
+              width: 150,
+              child: TextField(
+                controller: _code,
+                keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: const TextStyle(fontFamily: C.mono, fontSize: 18, letterSpacing: 6),
+                decoration: fieldDeco(hint: '000000').copyWith(counterText: ''),
               ),
             ),
-          ),
-          gap16,
-          step(1, Text('Open Google Authenticator, 1Password or Authy and scan the code.', style: ts(context, size: 13.5, color: p.body))),
-          step(
-            2,
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            gap8,
+            Btn(
+              'Turn on',
+              variant: BtnVariant.primary,
+              loading: _busy == 'totp',
+              onPressed: _code.text.length != 6
+                  ? null
+                  : () => _run('totp', () async {
+                      await Api.I.post('/auth/mfa/totp/enable', {'code': _code.text});
+                      setState(() {
+                        _totp = null;
+                        _code.clear();
+                      });
+                      await session.refresh();
+                    }, 'Authenticator app turned on'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Signed-in devices (THREATS.md S23): own sessions only; signing others
+  /// out asks for a fresh second factor (the API decides, lib/widgets/step_up.dart asks).
+  Widget _devicesCard(BuildContext context, Pal p) {
+    final devices = _devices;
+    return TvCard(
+      title: 'Signed-in devices',
+      icon: PhosphorIconsDuotone.desktop,
+      description: 'Where your account is signed in now. Sign out anything you don’t recognise.',
+      padded: false,
+      child: devices == null
+          ? const SkeletonRows(rows: 2)
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Or enter this key:', style: ts(context, size: 13.5, color: p.body)),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
-                  decoration: BoxDecoration(color: p.soft2, borderRadius: BorderRadius.circular(10)),
-                  child: Row(
-                    children: [
-                      Expanded(child: Mono(t.secret, size: 12)),
-                      CopyBtn(t.secret, label: 'Copy key'),
-                    ],
-                  ),
+                RowList(
+                  children: [
+                    for (final d in devices)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                        child: Row(
+                          children: [
+                            IconTile(
+                              RegExp('app|Android|iPhone').hasMatch(d['device'] as String) ? PhosphorIconsDuotone.deviceMobile : PhosphorIconsDuotone.desktop,
+                              tone: d['current'] == true ? Tone.green : Tone.brand,
+                            ),
+                            gap12,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      Text(d['device'] as String, style: ts(context, size: 13.5, w: FontWeight.w600)),
+                                      if (d['current'] == true) const TvBadge('This device', tone: Tone.green),
+                                    ],
+                                  ),
+                                  Text(
+                                    '${d['ip'] ?? 'Unknown IP'} · active ${relativeTime(d['lastSeenAt'] as String?)}${d['authLevel'] != 'mfa' ? ' · password only' : ''}',
+                                    style: ts(context, size: 12, color: p.muted),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (d['current'] != true)
+                              Btn(
+                                'Sign out',
+                                size: BtnSize.sm,
+                                loading: _busy == 'so-${d['id']}',
+                                onPressed: () => _run('so-${d['id']}', () => Api.I.delete('/auth/sessions/${d['id']}'), 'Device signed out'),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
+                if (devices.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Btn(
+                      'Sign out all other devices',
+                      variant: BtnVariant.danger,
+                      icon: PhosphorIconsDuotone.signOut,
+                      loading: _busy == 'others',
+                      onPressed: () => _run('others', () => Api.I.post('/auth/sessions/revoke-others'), 'Signed out everywhere else'),
+                    ),
+                  ),
               ],
             ),
+    );
+  }
+
+  /// Admin setting: which roles must use a second factor (THREATS.md S21).
+  /// The API enforces it, keeps ADMIN on, and asks for a fresh factor.
+  Widget _policyCard(BuildContext context, Pal p) {
+    final policy = _policy;
+    const roles = [('ADMIN', 'Administrators'), ('OWNER', 'Document owners'), ('VIEWER', 'Viewers'), ('EXTERNAL', 'External partners')];
+    return TvCard(
+      title: 'Second factor required for',
+      icon: PhosphorIconsDuotone.shieldCheck,
+      description: 'Everyone in these roles must use an authenticator app or a passkey, from their next click. Admins always.',
+      padded: false,
+      child: policy == null
+          ? const SkeletonRows(rows: 3)
+          : RowList(
+              children: [
+                for (final (role, label) in roles)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(label, style: ts(context, size: 13.5, w: FontWeight.w600))),
+                        if (role == 'ADMIN') const TvBadge('Always', tone: Tone.violet),
+                        Switch(
+                          value: role == 'ADMIN' || policy.contains(role),
+                          onChanged: role == 'ADMIN' || _busy != null
+                              ? null
+                              : (on) => _run('policy', () async {
+                                  final next = on ? [...policy, role] : policy.where((r) => r != role).toList();
+                                  final r = await Api.I.put('/admin/settings/mfa-policy', {'requiredRoles': next}) as Map;
+                                  setState(() => _policy = (r['requiredRoles'] as List).cast<String>());
+                                }, 'Policy saved'),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+
+  /// Face / fingerprint lock for this phone only (THREATS.md S24).
+  Widget _lockCard(BuildContext context, Pal p) {
+    final lock = context.watch<AppLock>();
+    return TvCard(
+      title: 'App lock',
+      icon: PhosphorIconsDuotone.lockKey,
+      description: 'Ask for your face, fingerprint or phone PIN when TrustVault is opened, or after 30 seconds away.',
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              lock.supported ? (lock.enabled ? 'On for this phone' : 'Off for this phone') : 'This phone has no screen lock set up',
+              style: ts(context, size: 13, color: p.muted),
+            ),
           ),
-          step(3, Text('Type the 6 digits the app shows.', style: ts(context, size: 13.5, color: p.body))),
-          Row(
-            children: [
-              SizedBox(
-                width: 150,
-                child: TextField(
-                  controller: _code,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  textAlign: TextAlign.center,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  style: const TextStyle(fontFamily: C.mono, fontSize: 18, letterSpacing: 6),
-                  decoration: fieldDeco(hint: '000000').copyWith(counterText: ''),
-                ),
-              ),
-              gap8,
-              Btn(
-                'Turn on',
-                variant: BtnVariant.primary,
-                loading: _busy == 'totp',
-                onPressed: _code.text.length != 6
-                    ? null
-                    : () => _run('totp', () async {
-                        await Api.I.post('/auth/mfa/totp/enable', {'code': _code.text});
-                        setState(() {
-                          _totp = null;
-                          _code.clear();
-                        });
-                        await session.refresh();
-                      }, 'Authenticator app turned on'),
-              ),
-            ],
-          ),
+          Switch(value: lock.enabled, onChanged: lock.supported ? (v) => lock.setEnabled(v) : null),
         ],
       ),
     );

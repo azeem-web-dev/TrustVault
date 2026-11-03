@@ -6,7 +6,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import { type Actor, currentContext } from '../common/request-context.js';
-import { CurrentActor, Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles, StepUp } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
 import { SharingService } from './sharing.service.js';
@@ -154,6 +154,7 @@ export class DocumentsController {
   /** Owner only, and only from the trash. */
   @Delete(':id')
   @HttpCode(204)
+  @StepUp()
   async purge(@CurrentActor() actor: Actor, @Param('id') id: string) {
     await this.docs.purge(actor, docId(id));
   }
@@ -161,6 +162,7 @@ export class DocumentsController {
   /** Owner only. */
   @Post(':id/transfer')
   @HttpCode(200)
+  @StepUp()
   transfer(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(TransferSchema)) body: z.infer<typeof TransferSchema>) {
     return this.docs.transfer(actor, docId(id), body.newOwnerId);
   }
