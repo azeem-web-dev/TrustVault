@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '../src/redis/redis.service.js';
 import { MailService } from '../src/mail/mail.service.js';
 import { emailKey, LIMITS } from '../src/auth/login-throttle.service.js';
+import { PARAMS } from '../src/auth/password.service.js';
 import { createUser, ORIGIN, resetState, startApp, type TestApp, type TestUser } from './helpers.js';
 
 /**
@@ -25,7 +26,7 @@ import { createUser, ORIGIN, resetState, startApp, type TestApp, type TestUser }
  *
  * What is compared, with the production rule that failures are padded to
  * LOGIN_FAILURE_FLOOR_MS (here 120 ms; test Argon2 is light, so the real
- * work is well under it):
+ * work is well under it; 400 ms if production Argon2 is in force):
  *   login     unknown email      vs real account, wrong password
  *   login     under attack: wrong password vs the right one (which also
  *             issues and emails a sign-in link) — both answer 202
@@ -41,7 +42,11 @@ import { createUser, ORIGIN, resetState, startApp, type TestApp, type TestUser }
  */
 
 const N = Number(process.env.TIMING_SAMPLES ?? 60);
-const FLOOR_MS = 120;
+// The floor must stay above the real work. The suite normally uses light
+// test Argon2 parameters; when production parameters are in force (NODE_ENV
+// not "test", e.g. a .env loaded by tools/mutation-check.mjs) one verify
+// alone takes 100-200 ms, so the floor is raised to keep the check meaningful.
+const FLOOR_MS = PARAMS.memoryCost >= 65536 ? 400 : 120;
 const AUC_MARGIN = 0.2;
 const P_MAX = 0.001;
 
