@@ -50,7 +50,7 @@ The class of a wrapped value is decided by its AAD and enforced twice: separate 
 | Nightly malware re-scan (`rescan`) | system ticket (no user), ALLOWED `document.rescan_decrypt` event per version; capped by `KEYD_LIMIT_SYSTEM_PER_HOUR` (default 2000, **0 disables re-scan decryption**) | The re-scan must read every file; this is the widest path a compromised API keeps (section 5) |
 | Emergency re-encryption (`reencrypt`) | ticket from `tv_issue_maintenance_ticket()`, which only the schema owner can execute; keyd refuses unless the operator set `KEYD_LIMIT_MAINT_PER_HOUR` > 0 | Needs both root-only credentials (owner URL) and a keyd config change |
 | Rotation (`rewrap`), verification (`check`) | no ticket; rate-limited; rewraps ledgered | The plaintext never leaves keyd, so these grant nothing |
-| TOTP secret unwrap | **no ticket** (documented exception), per-user limit `KEYD_LIMIT_TOTP_PER_USER_10MIN` (20), ledgered as `totp_unwrap` | See below |
+| TOTP secret unwrap | **no ticket** (documented exception), per-user limit `KEYD_LIMIT_TOTP_PER_USER_10MIN` (20) and `KEYD_LIMIT_TOTP_ALL_PER_MIN` (120 per minute overall), ledgered as `totp_unwrap` | See below |
 | Break-glass | an admin with a live break-glass row has level 1, so downloads go through the normal ticket path, audited and alerted | No separate keyd capability exists |
 | Recovery (lost server) | the encrypted backup holds `/etc/tvkeyd` (master keys and ticket key) | docs/RESTORE.md; restore `ticket.key` and `extra/` too, then `keys.js status` |
 
