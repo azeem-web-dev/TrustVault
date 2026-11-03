@@ -289,9 +289,23 @@ describe('the key ledger is reconciled with the audit log', () => {
   });
 
   it('the witness endpoint publishes signed ledger heads without signing in', async () => {
+    await ledger.mirror();
     const res = await t.http.get('/api/witness/keyd-ledger?since=1').expect(200);
     expect(res.body.format).toBe('trustvault-keyd-ledger-v1');
     expect(res.body.checkpoints.length).toBeGreaterThanOrEqual(1);
     expect(res.body.checkpoints[0]).toMatchObject({ seq: expect.any(String), headHash: expect.stringMatching(/^[0-9a-f]{64}$/), signature: expect.any(String) });
+  });
+
+  // Last: it leaves this key service's ledger broken on purpose.
+  it('an entry altered before it is mirrored is refused, and reported', async () => {
+    await ledger.mirror();
+    const v = await upload('Tampered ledger');
+    await expect(keys.unwrap(v.wrapped, v.keyId, aadOf(v))).rejects.toThrow();
+    const entries = (keys.ledger as unknown as { entries: { user: string | null }[] }).entries;
+    entries[entries.length - 1]!.user = stranger.id;
+    const r = await ledger.mirror();
+    expect(r.problems.join(' ')).toMatch(/hash mismatch/);
+    const [ev] = (await auditRows(`action = 'keyd.ledger'`)).slice(-1);
+    expect(ev).toMatchObject({ outcome: 'FAILED' });
   });
 });
