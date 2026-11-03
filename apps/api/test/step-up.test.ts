@@ -68,8 +68,6 @@ describe('step-up for risky actions', () => {
       ['role change', () => a.patch(`/api/admin/users/${id}`, { role: 'OWNER' })],
       ['deactivate', () => a.post(`/api/admin/users/${id}/deactivate`)],
       ['MFA reset', () => a.post(`/api/admin/users/${id}/mfa/reset`)],
-      ['invite someone', () => a.post('/api/admin/users', { email: 'su-new@t.io', role: 'VIEWER' })],
-      ['send an invitation again', () => a.post(`/api/admin/users/${id}/invite`)],
       ['ask a second admin', () => a.post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: id, reason: 'x'.repeat(30) })],
       ['approve a request', () => a.post(`/api/admin/approvals/${id}/approve`)],
       ['reject a request', () => a.post(`/api/admin/approvals/${id}/reject`)],
@@ -95,6 +93,11 @@ describe('step-up for risky actions', () => {
     await a.patch(`/api/admin/users/${other.id}`, { displayName: 'Renamed' }).expect(200);
     await a.post(`/api/admin/users/${other.id}/reactivate`).expect(200);
     await a.get('/api/auth/sessions').expect(200);
+    // Inviting is ordinary admin work too: the account can do nothing until accepted.
+    const inv = await a.post('/api/admin/users', { email: 'su-new@t.io', role: 'VIEWER' });
+    expect(inv.body.code).not.toBe('step_up_required');
+    expect(inv.status).toBe(201);
+    expect((await a.post(`/api/admin/users/${inv.body.user.id}/invite`)).body.code).not.toBe('step_up_required');
   });
 
   it('document owners: transfer and permanent delete need it too', async () => {

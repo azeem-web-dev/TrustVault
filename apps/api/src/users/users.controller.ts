@@ -49,8 +49,9 @@ export class UsersController {
   }
 
   /** Creates an INVITED account and emails the invitation. `invited` is false when mail is off. */
+  // No step-up: an invited account can do nothing until the person accepts,
+  // and its role is shown to every admin (owner's choice, THREATS.md S20).
   @Post()
-  @StepUp()
   async create(@CurrentActor() actor: Actor, @Body(new ZodPipe(CreateUserSchema)) body: z.infer<typeof CreateUserSchema>) {
     const user = await this.users.create(actor, body);
     const { sent } = await this.invites.send(actor, user.id, false);
@@ -60,7 +61,6 @@ export class UsersController {
   /** Emails the invitation again; earlier links stop working. Only for INVITED accounts. */
   @Post(':id/invite')
   @HttpCode(202)
-  @StepUp()
   async resendInvite(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
     return { ok: true, ...(await this.invites.send(actor, id, true)) };
   }
