@@ -127,8 +127,9 @@ describe('guard triggers', () => {
   it('the database refuses external and admin group members, whatever the API does (A11, A17)', async () => {
     const g = id();
     await owner.query(`INSERT INTO groups (id, name) VALUES ($1, 'Guarded')`, [g]);
+    // Even in an admin's transaction, which may change groups (A25).
     for (const who of [ids.erin, ids.adm]) {
-      await expect(app.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, who])).rejects.toThrow(/cannot be group members/);
+      await expect(asUser(ids.adm!, () => app.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, who]))).rejects.toThrow(/cannot be group members/);
     }
     await owner.query(`DELETE FROM groups WHERE id = $1`, [g]);
   });
@@ -183,7 +184,7 @@ describe('guard triggers', () => {
   it('external users cannot be added to groups', async () => {
     const g = id();
     await owner.query(`INSERT INTO groups (id, name) VALUES ($1, 'G')`, [g]);
-    await expect(app.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, ids.erin])).rejects.toThrow(/external/);
+    await expect(asUser(ids.adm!, () => app.query(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)`, [g, ids.erin]))).rejects.toThrow(/external/);
   });
 
   it('versions and blobs cannot be modified or deleted by the app role, even by the owner', async () => {

@@ -4,7 +4,7 @@ import {
   type AuthenticationResponseJSON, type AuthenticatorTransportFuture, type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { ENV, type Env } from '../config/env.js';
-import { PrismaService } from '../db/prisma.service.js';
+import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
@@ -74,18 +74,20 @@ export class MfaService {
     await this.requireMfaIfEnrolled(actor);
     const secret = newTotpSecret();
     const { wrapped, keyId } = await this.keys.wrap(secret, totpAad(actor.userId));
-    await this.prisma.user.update({ where: { id: actor.userId }, data: { totpSecretEnc: new Uint8Array(packWrapped(keyId, wrapped)), totpLastStep: null } });
+    // As the person themselves: only they may set their own second factor (THREATS.md A23).
+    await this.prisma.asUser(actor.userId, (tx) => tx.user.update({ where: { id: actor.userId }, data: { totpSecretEnc: new Uint8Array(packWrapped(keyId, wrapped)), totpLastStep: null }, select: { id: true } }));
     const b32 = base32Encode(secret);
     return { secret: b32, otpauthUri: otpauthUri(b32, user.email) };
   }
 
   /** Confirms enrolment with a first code; the session becomes MFA level. */
   async enableTotp(actor: Actor, code: string): Promise<NewSession> {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true, totpSecretEnc: true } });
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true } });
     if (user.totpEnabledAt) throw new ConflictException('An authenticator app is already set up');
-    if (!user.totpSecretEnc) throw new BadRequestException('Start the setup first');
+    const [secret] = await this.prisma.$queryRaw<{ s: Buffer | null }[]>`SELECT tv_totp_secret(${actor.userId}::uuid) AS s`;
+    if (!secret?.s) throw new BadRequestException('Start the setup first');
     await this.checkCode(actor, code, 'mfa.totp_enable');
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.asUser(actor.userId, async (tx) => {
       await tx.user.update({ where: { id: actor.userId }, data: { totpEnabledAt: new Date() } });
       await this.audit.record({ action: 'mfa.totp_enable', outcome: 'ALLOWED', targetType: 'user', targetId: actor.userId }, tx);
       return this.upgrade(actor, tx);
@@ -105,8 +107,9 @@ export class MfaService {
 
   private async checkCode(actor: Actor, code: string, action: string): Promise<void> {
     await this.limits.hit(`mfa:${actor.userId}`, 5, 300, 'Too many codes tried. Wait five minutes.');
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpSecretEnc: true } });
-    const stored = unpackWrapped(Buffer.from(user.totpSecretEnc!));
+    // The sealed secret, through its function (the app role cannot select the column, A26).
+    const [row] = await this.prisma.$queryRaw<{ s: Buffer }[]>`SELECT tv_totp_secret(${actor.userId}::uuid) AS s`;
+    const stored = unpackWrapped(Buffer.from(row!.s));
     const secret = await this.keys.unwrap(stored.wrapped, stored.keyId, totpAad(actor.userId)).catch(() => null);
     const step = secret ? matchTotp(secret, code) : null;
     secret?.fill(0);
@@ -160,7 +163,8 @@ export class MfaService {
     }
     const { credential } = verification.registrationInfo;
     const wasEnrolled = actor.authLevel === 'mfa';
-    return this.prisma.$transaction(async (tx) => {
+    // As the person themselves: only they may add their own passkey (A23).
+    return this.prisma.asUser(actor.userId, async (tx) => {
       await tx.passkey.create({
         data: { userId: actor.userId, credentialId: credential.id, publicKey: new Uint8Array(credential.publicKey), counter: BigInt(credential.counter), transports: credential.transports ?? [], name },
       });
@@ -211,7 +215,7 @@ export class MfaService {
 
   async removePasskey(actor: Actor, id: string): Promise<void> {
     if (actor.authLevel !== 'mfa') throw new ForbiddenException('Confirm your second factor first');
-    await this.prisma.$transaction(async (tx) => {
+    await this.prisma.asUser(actor.userId, async (tx) => {
       const user = await tx.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { totpEnabledAt: true, passkeys: { select: { id: true } } } });
       if (!user.passkeys.some((p) => p.id === id)) throw new NotFoundException('Passkey not found');
       if (actor.role === 'ADMIN' && !user.totpEnabledAt && user.passkeys.length === 1) {
@@ -233,7 +237,7 @@ export class MfaService {
   }
 
   /** Replace the password-level session with a new MFA-level one. */
-  private async upgrade(actor: Actor, tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0]): Promise<NewSession> {
+  private async upgrade(actor: Actor, tx: Tx): Promise<NewSession> {
     const ctx = currentContext();
     // Re-check everything under the user row lock that admin resets and
     // deactivation also take: if the password-only session was ended, or the

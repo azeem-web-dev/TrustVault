@@ -1,7 +1,8 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, NotFoundException, Param, Patch, Post } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
-import { Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles } from '../auth/decorators.js';
+import type { Actor } from '../common/request-context.js';
 import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 
@@ -47,9 +48,9 @@ export class GroupsController {
   }
 
   @Post()
-  async create(@Body(new ZodPipe(GroupSchema)) body: z.infer<typeof GroupSchema>) {
+  async create(@CurrentActor() actor: Actor, @Body(new ZodPipe(GroupSchema)) body: z.infer<typeof GroupSchema>) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      return await this.prisma.asUser(actor.userId, async (tx) => {
         const g = await tx.group.create({ data: { name: body.name, description: body.description ?? null }, select: { id: true, name: true } });
         await this.audit.record({ action: 'group.create', outcome: 'ALLOWED', targetType: 'group', targetId: g.id, details: { name: g.name } }, tx);
         return g;
@@ -61,8 +62,8 @@ export class GroupsController {
   }
 
   @Patch(':id')
-  async update(@Param('id') groupId: string, @Body(new ZodPipe(UpdateSchema)) body: z.infer<typeof UpdateSchema>) {
-    return this.prisma.$transaction(async (tx) => {
+  async update(@CurrentActor() actor: Actor, @Param('id') groupId: string, @Body(new ZodPipe(UpdateSchema)) body: z.infer<typeof UpdateSchema>) {
+    return this.prisma.asUser(actor.userId, async (tx) => {
       const r = await tx.group.updateMany({ where: { id: id(groupId) }, data: { name: body.name, description: body.description } });
       if (r.count === 0) throw new NotFoundException('Group not found');
       await this.audit.record({ action: 'group.update', outcome: 'ALLOWED', targetType: 'group', targetId: groupId, details: body }, tx);
@@ -73,8 +74,8 @@ export class GroupsController {
   /** Deleting a group removes every document grant made to it, in the same transaction. */
   @Delete(':id')
   @HttpCode(204)
-  async remove(@Param('id') groupId: string) {
-    await this.prisma.$transaction(async (tx) => {
+  async remove(@CurrentActor() actor: Actor, @Param('id') groupId: string) {
+    await this.prisma.asUser(actor.userId, async (tx) => {
       const g = await tx.group.findUnique({ where: { id: id(groupId) }, select: { name: true, _count: { select: { grants: true, members: true } } } });
       if (!g) throw new NotFoundException('Group not found');
       // Every member's and every shared document's lock, in order, before the
@@ -87,8 +88,8 @@ export class GroupsController {
 
   @Post(':id/members')
   @HttpCode(204)
-  async addMember(@Param('id') groupId: string, @Body(new ZodPipe(MemberSchema)) body: z.infer<typeof MemberSchema>) {
-    await this.prisma.$transaction(async (tx) => {
+  async addMember(@CurrentActor() actor: Actor, @Param('id') groupId: string, @Body(new ZodPipe(MemberSchema)) body: z.infer<typeof MemberSchema>) {
+    await this.prisma.asUser(actor.userId, async (tx) => {
       await tx.$executeRaw`SELECT tv_lock_user(${body.userId}::uuid, true)`;
       const user = await tx.user.findUnique({ where: { id: body.userId }, select: { role: true, status: true, email: true } });
       if (!user || user.status !== 'ACTIVE') throw new BadRequestException('User not found or inactive');
@@ -104,8 +105,8 @@ export class GroupsController {
   /** Takes effect on the member's next request: group membership is never cached. */
   @Delete(':id/members/:userId')
   @HttpCode(204)
-  async removeMember(@Param('id') groupId: string, @Param('userId') userId: string) {
-    await this.prisma.$transaction(async (tx) => {
+  async removeMember(@CurrentActor() actor: Actor, @Param('id') groupId: string, @Param('userId') userId: string) {
+    await this.prisma.asUser(actor.userId, async (tx) => {
       // The member's lock: none of their requests is mid-decision (R11).
       await tx.$executeRaw`SELECT tv_lock_user(${id(userId)}::uuid, true)`;
       const r = await tx.groupMember.deleteMany({ where: { groupId: id(groupId), userId: id(userId) } });

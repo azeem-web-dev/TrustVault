@@ -57,7 +57,7 @@ export class UsersService {
     checkExternalExpiry(input.role, input.accessExpiresAt ?? null);
     const passwordHash = await this.invites.unusablePasswordHash();
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      return await this.prisma.asUser(actor.userId, async (tx) => {
         const user = await tx.user.create({
           data: {
             // A placeholder until they choose their own name.
@@ -77,7 +77,7 @@ export class UsersService {
   }
 
   async update(actor: Actor, id: string, patch: { displayName?: string | undefined; role?: Role | undefined; accessExpiresAt?: Date | null | undefined }): Promise<AdminUserView> {
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.asUser(actor.userId, async (tx) => {
       const before = await this.lockUser(tx, id);
       assertNotProtected(before);
       const role = patch.role ?? before.role;
@@ -127,7 +127,7 @@ export class UsersService {
 
   async deactivate(actor: Actor, id: string): Promise<AdminUserView> {
     if (id === actor.userId) throw new BadRequestException('You cannot deactivate your own account');
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.asUser(actor.userId, async (tx) => {
       const before = await this.lockUser(tx, id);
       assertNotProtected(before);
       if (before.status === 'DEACTIVATED') return before;
@@ -144,8 +144,8 @@ export class UsersService {
     });
   }
 
-  async reactivate(id: string): Promise<AdminUserView> {
-    return this.prisma.$transaction(async (tx) => {
+  async reactivate(actor: Actor, id: string): Promise<AdminUserView> {
+    return this.prisma.asUser(actor.userId, async (tx) => {
       const before = await this.lockUser(tx, id);
       if (before.status !== 'DEACTIVATED') return before;
       // Someone who never accepted their invitation goes back to INVITED, not

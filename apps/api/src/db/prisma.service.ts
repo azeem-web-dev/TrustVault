@@ -12,7 +12,9 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
   constructor(@Inject(ENV) env: Env) {
     // Connects as the low-privilege app role. It owns no tables, so
     // row-level security and the audit triggers always apply to it.
-    super({ adapter: new PrismaPg({ connectionString: env.DATABASE_URL, max: 10 }) });
+    // Password hashes and TOTP secrets are not readable by that role
+    // (THREATS.md A26): never select them; read one through its function.
+    super({ adapter: new PrismaPg({ connectionString: env.DATABASE_URL, max: 10 }), omit: { user: { passwordHash: true, totpSecretEnc: true } } });
   }
 
   /**

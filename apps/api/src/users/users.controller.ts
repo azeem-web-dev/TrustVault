@@ -76,8 +76,8 @@ export class UsersController {
 
   @Post(':id/reactivate')
   @HttpCode(200)
-  async reactivate(@Param('id', uuid) id: string) {
-    return { user: await this.users.reactivate(id) };
+  async reactivate(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
+    return { user: await this.users.reactivate(actor, id) };
   }
 
   /** VIEWER or EXTERNAL: one admin. OWNER or ADMIN: `{approvalId}` from a second admin (THREATS.md S19). */

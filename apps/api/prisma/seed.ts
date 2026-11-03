@@ -62,7 +62,11 @@ function makePdf(title: string, lines: string[]): Buffer {
 }
 
 async function main(): Promise<void> {
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.DATABASE_URL }) });
+  // As the schema owner: the app's role may not create active, protected or
+  // second-factor-enrolled accounts (THREATS.md A23).
+  const owner = process.env.DATABASE_OWNER_URL;
+  if (!owner) throw new Error('DATABASE_OWNER_URL is required: demo accounts are created as the schema owner');
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: owner }) });
   const keys = createKeyProvider(env);
   const hasher = new PasswordService();
   const ids: Record<string, string> = {};

@@ -73,10 +73,17 @@ export class AuthService {
     const ctx = currentContext();
     await this.enforceRateLimits(email, ctx?.ip ?? 'unknown');
 
-    const user = await this.prisma.user.findUnique({ where: { email }, include: { _count: { select: { passkeys: true } } } });
+    // The hash comes from its own function (the app role cannot select the
+    // column, THREATS.md A26), looked up by email in parallel so a known and
+    // an unknown email cost the same.
+    const [user, [stored]] = await Promise.all([
+      this.prisma.user.findUnique({ where: { email }, include: { _count: { select: { passkeys: true } } } }),
+      this.prisma.$queryRaw<{ hash: string | null }[]>`SELECT tv_password_hash(u.id) AS hash FROM (SELECT NULL::uuid AS id) z LEFT JOIN users u ON u.email = ${email}`,
+    ]);
+    const passwordHash = user ? (stored?.hash ?? null) : null;
     // Always run a full Argon2 verify, even for unknown accounts (dummy hash),
     // so response time does not reveal which emails exist.
-    const passwordOk = await this.passwords.verify(user?.passwordHash ?? null, password);
+    const passwordOk = await this.passwords.verify(passwordHash, password);
 
     const deny = async (reason: string): Promise<never> => {
       await this.audit.record({ action: 'auth.login', outcome: 'DENIED', reason, actorId: user?.id ?? null, actorEmail: email });
@@ -125,8 +132,8 @@ export class AuthService {
       // that window, the old password must not yield a session (THREATS.md R9).
       // The row lock orders this against those changes.
       const [now] = await tx.$queryRaw<{ password_hash: string; status: string; access_expires_at: Date | null }[]>`
-        SELECT password_hash, status, access_expires_at FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
-      if (!now || now.password_hash !== user.passwordHash || now.status !== 'ACTIVE' || (now.access_expires_at && now.access_expires_at.getTime() <= Date.now())) {
+        SELECT tv_password_hash(id) AS password_hash, status, access_expires_at FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
+      if (!now || now.password_hash !== passwordHash || now.status !== 'ACTIVE' || (now.access_expires_at && now.access_expires_at.getTime() <= Date.now())) {
         return null;
       }
       await tx.user.update({ where: { id: user.id }, data: { failedLoginCount: 0, lockedUntil: null } });
@@ -167,12 +174,14 @@ export class AuthService {
   async changePassword(actor: Actor, current: string, next: string): Promise<void> {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: actor.userId } });
     if (user.isProtected) throw new ForbiddenException('Demo account passwords cannot be changed');
-    if (!(await this.passwords.verify(user.passwordHash, current))) {
+    const [stored] = await this.prisma.$queryRaw<{ hash: string }[]>`SELECT tv_password_hash(${user.id}::uuid) AS hash`;
+    if (!(await this.passwords.verify(stored?.hash ?? null, current))) {
       await this.audit.record({ action: 'auth.password_change', outcome: 'DENIED', reason: 'wrong_current_password', targetType: 'user', targetId: user.id });
       throw new UnauthorizedException('Current password is incorrect');
     }
     const passwordHash = await this.passwords.hash(next);
-    await this.prisma.$transaction(async (tx) => {
+    // As the person themselves: the database lets only them set their password (A23).
+    await this.prisma.asUser(user.id, async (tx) => {
       // The person's access lock first, as every account change takes it (R11).
       await tx.$executeRaw`SELECT tv_lock_user(${user.id}::uuid, true)`;
       // passwordChangedAt makes every older session invalid on its next request;

@@ -210,6 +210,23 @@ const MUTATIONS = [
   sql('database: break-glass needs an approval used in the same transaction',
     'ALTER TABLE break_glass DISABLE TRIGGER break_glass_needs_approval', 'ALTER TABLE break_glass ENABLE TRIGGER break_glass_needs_approval',
     ['test/approvals.test.ts']),
+
+  // --- the database protects identities on its own (THREATS.md A23-A26) -------
+  sql('database: account changes need an admin, the person or a link (users guard)',
+    'ALTER TABLE users DISABLE TRIGGER users_guard_update', 'ALTER TABLE users ENABLE TRIGGER users_guard_update', ['test/identity-guards.test.ts']),
+  sql('database: new accounts only from an admin, as invitations',
+    'ALTER TABLE users DISABLE TRIGGER users_guard_insert', 'ALTER TABLE users ENABLE TRIGGER users_guard_insert', ['test/identity-guards.test.ts']),
+  sql('database: passkeys added only by their owner, removed under the second-factor rules',
+    'ALTER TABLE passkeys DISABLE TRIGGER passkeys_guard', 'ALTER TABLE passkeys ENABLE TRIGGER passkeys_guard', ['test/identity-guards.test.ts']),
+  sql('database: groups and members changed only by an admin',
+    'ALTER TABLE groups DISABLE TRIGGER groups_admin_only; ALTER TABLE group_members DISABLE TRIGGER group_members_admin_only',
+    'ALTER TABLE groups ENABLE TRIGGER groups_admin_only; ALTER TABLE group_members ENABLE TRIGGER group_members_admin_only', ['test/identity-guards.test.ts']),
+  sql('database: a used reset or invitation link stays used',
+    'ALTER TABLE password_reset_tokens DISABLE TRIGGER password_reset_tokens_guard', 'ALTER TABLE password_reset_tokens ENABLE TRIGGER password_reset_tokens_guard',
+    ['test/identity-guards.test.ts']),
+  sql('database: the app role cannot read password hashes or TOTP secrets',
+    'GRANT SELECT ON users TO trustvault_app',
+    'REVOKE SELECT ON users FROM trustvault_app; GRANT SELECT ("id", "email", "display_name", "role", "status", "password_changed_at", "failed_login_count", "locked_until", "access_expires_at", "created_at", "updated_at", "created_by_id", "deactivated_at", "activated_at", "is_protected", "totp_enabled_at", "totp_last_step") ON users TO trustvault_app', ['test/identity-guards.test.ts']),
 ];
 
 function loadEnv() {

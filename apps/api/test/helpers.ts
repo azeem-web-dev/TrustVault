@@ -115,7 +115,8 @@ export async function createUser(opts: { email: string; role: Role; password?: s
   const wantMfa = opts.mfa ?? opts.role === 'ADMIN';
   const accessExpiresAt = opts.accessExpiresAt ?? (opts.role === 'EXTERNAL' ? new Date(Date.now() + 30 * 86_400_000) : null);
   const passwordHash = await hasher.hash(password);
-  const { rows } = await withDb(appDb(), (db) =>
+  // As the schema owner: the app role may only create invitations (THREATS.md A23).
+  const { rows } = await withDb(ownerDb(), (db) =>
     db.query<{ id: string }>(
       `INSERT INTO users (id, email, display_name, role, password_hash, access_expires_at, updated_at)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now()) RETURNING id`,
@@ -127,7 +128,7 @@ export async function createUser(opts: { email: string; role: Role; password?: s
   if (wantMfa) {
     totpSecret = newTotpSecret();
     const { wrapped, keyId } = await keys().wrap(totpSecret, `tv-totp-v1|${id}`);
-    await withDb(appDb(), (db) => db.query(`UPDATE users SET totp_secret_enc = $1, totp_enabled_at = now() WHERE id = $2`, [packWrapped(keyId, wrapped), id]));
+    await withDb(ownerDb(), (db) => db.query(`UPDATE users SET totp_secret_enc = $1, totp_enabled_at = now() WHERE id = $2`, [packWrapped(keyId, wrapped), id]));
   }
   return { id, email: opts.email, password, role: opts.role, totpSecret };
 }
