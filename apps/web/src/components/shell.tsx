@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  BellRinging, CaretUpDown, Desktop, Files, List, ListMagnifyingGlass, MagnifyingGlass, Moon, ShieldCheck, SignOut, Sun, UserCircleGear, UsersFour, UsersThree, X,
+  BellRinging, CaretUpDown, Clock, Desktop, Files, HandPalm, List, ListMagnifyingGlass, MagnifyingGlass, Moon, ShieldCheck, SignOut, Sun, UserCircleGear, UsersFour, UsersThree, X,
 } from '@phosphor-icons/react';
 import { useSession } from './session';
 import { useTheme, type ThemeChoice } from './theme';
@@ -40,6 +40,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const workspace: NavItem[] = [
     { href: '/', label: 'Documents', icon: <Files size={20} />, hint: 'Everything you can open' },
+    ...(user.role !== 'ADMIN' ? [{ href: '/approvals', label: 'Approvals', icon: <HandPalm size={20} />, hint: 'Download requests waiting for you' }] : []),
     { href: '/account', label: 'Account', icon: <UserCircleGear size={20} />, hint: 'Password, passkeys, 2FA' },
   ];
   const admin: NavItem[] = user.role === 'ADMIN'
@@ -48,6 +49,7 @@ export function Shell({ children }: { children: ReactNode }) {
         { href: '/admin/alerts', label: 'Alerts', icon: <BellRinging size={20} />, hint: 'Activity worth a look' },
         { href: '/admin/users', label: 'Users', icon: <UsersThree size={20} />, hint: 'Accounts and roles' },
         { href: '/admin/groups', label: 'Groups', icon: <UsersFour size={20} />, hint: 'Teams for sharing' },
+        { href: '/admin/policies', label: 'Access rules', icon: <Clock size={20} />, hint: 'Hours and networks per role' },
       ]
     : [];
   const all = [...workspace, ...admin];

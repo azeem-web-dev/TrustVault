@@ -14,9 +14,10 @@ import { SpotArt } from '@/components/art';
 import { ActionIcon, actionMeta } from '@/components/audit-ui';
 import {
   ACCESS_LABEL, ACCESS_TONE, Alert, Avatar, Badge, Button, ButtonLink, Card, EmptyState, FileIcon, IconButton, IconTile, Input, Label,
-  OUTCOME_TONE, Segmented, Select, Skeleton, SkeletonRows, Textarea, cx, fileType, relativeTime,
+  Modal, OUTCOME_TONE, Segmented, Select, Skeleton, SkeletonRows, Textarea, cx, fileType, relativeTime,
 } from '@/components/ui';
 import { api, ApiError, errorText, formatBytes, formatDate, type Access, type Level } from '@/lib/api';
+import { ConditionBadges, DownloadRequestCard, PolicyFields, type SharePolicy, type SharePolicyView } from '@/components/access-policy';
 
 interface Version {
   versionNo: number;
@@ -42,6 +43,8 @@ interface Doc {
   owner: { id: string; displayName: string; email: string };
   isOwner: boolean;
   myAccess: Access;
+  /** Downloads need the owner's approval (a condition on the share). */
+  downloadNeedsApproval?: boolean;
   folder: { id: string; name: string } | null;
   versions: Version[];
 }
@@ -56,6 +59,8 @@ export default function DocumentPage() {
   const toast = useToast();
   const [doc, setDoc] = useState<Doc | null>(null);
   const [notFound, setNotFound] = useState(false);
+  // A share that exists but does not apply right now (time window, network).
+  const [policyBlock, setPolicyBlock] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
 
@@ -64,6 +69,7 @@ export default function DocumentPage() {
       setDoc(await api.get<Doc>(`/documents/${id}`));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setNotFound(true);
+      else if (err instanceof ApiError && err.status === 403 && (err.body?.code === 'outside_time_window' || err.body?.code === 'network_not_allowed')) setPolicyBlock(err.message);
       else setError(errorText(err));
     }
   }, [id]);
@@ -94,6 +100,21 @@ export default function DocumentPage() {
             action={<Link href="/"><Button icon={<ArrowLeft size={16} />}>Back to documents</Button></Link>}
           >
             This document does not exist, or you do not have access to it. We deliberately don&apos;t say which.
+          </EmptyState>
+        </div>
+      </Shell>
+    );
+  }
+  if (policyBlock) {
+    return (
+      <Shell>
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
+          <EmptyState
+            art={<SpotArt icon={<LockKey size={30} />} tone="amber" />}
+            title="Not available right now"
+            action={<Link href="/"><Button icon={<ArrowLeft size={16} />}>Back to documents</Button></Link>}
+          >
+            {policyBlock}. The owner set this condition on your share; if you need it now, ask them for a temporary exception.
           </EmptyState>
         </div>
       </Shell>
@@ -153,6 +174,8 @@ export default function DocumentPage() {
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               {current.quarantine ? (
                 <Button disabled icon={<Prohibit size={18} />}>Download blocked</Button>
+              ) : doc.downloadNeedsApproval ? (
+                <ButtonLink href="#download-request" variant="primary" size="lg" icon={<DownloadSimple size={18} />} onClick={() => setTab('overview')}>Ask to download</ButtonLink>
               ) : (
                 <ButtonLink href={`/api/documents/${doc.id}/download`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
                   Download <span className="hidden max-w-[12rem] truncate font-normal opacity-80 md:inline">{current.fileName}</span>
@@ -171,6 +194,7 @@ export default function DocumentPage() {
         <div className="min-w-0 space-y-6 lg:col-span-2">
           {tab === 'overview' && (
             <>
+              {doc.downloadNeedsApproval && current && !current.quarantine && <div id="download-request"><DownloadRequestCard docId={doc.id} versionNo={current.versionNo} /></div>}
               <Details doc={doc} canEdit={level >= RANK.EDIT && !trashed} onSave={(patch) => act(() => api.patch(`/documents/${doc.id}`, patch), 'Details saved')} />
               <ProtectionCard doc={doc} />
             </>
@@ -333,7 +357,7 @@ function Versions({ doc, canUpload, onUploaded, onError }: { doc: Doc; canUpload
                 {v.quarantine ? (
                   <Badge tone="red" icon={<Prohibit size={11} />}>Download blocked</Badge>
                 ) : (
-                  <ButtonLink size="sm" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`} icon={<DownloadSimple size={14} />}>Download</ButtonLink>
+                  {!doc.downloadNeedsApproval && <ButtonLink size="sm" href={`/api/documents/${doc.id}/versions/${v.versionNo}/download`} icon={<DownloadSimple size={14} />}>Download</ButtonLink>}
                 )}
               </div>
               {v.quarantine && (
@@ -362,7 +386,10 @@ interface GrantRow {
   expired: boolean;
   grantedBy: string;
   subject: { type: 'user'; id: string; name: string; email: string; role: string; active: boolean } | { type: 'group'; id: string; name: string; members: number; covered?: number; pending?: number };
+  policy?: SharePolicyView;
 }
+
+interface OverrideRow { id: string; reason: string; createdAt: string; expiresAt: string; user: { id: string; displayName: string; email: string } }
 
 interface Suggestion { type: 'user' | 'group'; id: string; name: string; detail: string; level: Level; why: string }
 interface DirUser { id: string; displayName: string; email: string; role: string; accessExpiresAt: string | null }
@@ -383,11 +410,15 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
   const [target, setTarget] = useState<{ type: 'user' | 'group'; id: string; label: string; external: boolean } | null>(null);
   const [level, setLevel] = useState<Level>('READ');
   const [expires, setExpires] = useState('');
+  const [policy, setPolicy] = useState<SharePolicy | undefined>(undefined);
+  const [overrides, setOverrides] = useState<OverrideRow[]>([]);
+  const [exceptionFor, setExceptionFor] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get<{ grants: GrantRow[] }>(`/documents/${doc.id}/access`);
+      const r = await api.get<{ grants: GrantRow[]; overrides?: OverrideRow[] }>(`/documents/${doc.id}/access`);
       setGrants(r.grants);
+      setOverrides(r.overrides ?? []);
     } catch (err) {
       onError(errorText(err));
     }
@@ -408,14 +439,15 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
     return () => clearTimeout(t);
   }, [query]);
 
-  const share = async (subject: { userId?: string; groupId?: string }, lvl: Level, expiresAt: string | null, fromSuggestion = false, label = '') => {
+  const share = async (subject: { userId?: string; groupId?: string }, lvl: Level, expiresAt: string | null, fromSuggestion = false, label = '', withPolicy?: SharePolicy) => {
     onError(null);
     try {
-      await api.put(`/documents/${doc.id}/access`, { ...subject, level: lvl, expiresAt, fromSuggestion });
+      await api.put(`/documents/${doc.id}/access`, { ...subject, level: lvl, expiresAt, fromSuggestion, ...(withPolicy ? { policy: withPolicy } : {}) });
       toast(`${label || 'Access'} can now ${lvl === 'READ' ? 'read' : lvl === 'EDIT' ? 'edit' : 'manage'} this document.`);
       setTarget(null);
       setQuery('');
       setExpires('');
+      setPolicy(undefined);
       await load();
       if (suggestions) setSuggestions(suggestions.filter((s) => s.id !== (subject.userId ?? subject.groupId)));
     } catch (err) {
@@ -439,7 +471,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!target) return;
-    void share(target.type === 'user' ? { userId: target.id } : { groupId: target.id }, level, expires ? new Date(`${expires}T23:59:59`).toISOString() : null, false, target.label);
+    void share(target.type === 'user' ? { userId: target.id } : { groupId: target.id }, level, expires ? new Date(`${expires}T23:59:59`).toISOString() : null, false, target.label, policy);
   };
 
   const levels = LEVELS.filter((l) => l.id === 'READ' || (!target?.external && (l.id === 'EDIT' || doc.isOwner)));
@@ -510,6 +542,11 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
             </div>
             <Button type="submit" variant="primary" size="lg" icon={<ShareNetwork size={18} />} disabled={!target}>Share</Button>
           </div>
+          <PolicyFields
+            value={policy}
+            onChange={setPolicy}
+            managers={(grants ?? []).filter((g) => g.level === 'MANAGE' && g.subject.type === 'user' && g.subject.id !== target?.id).map((g) => ({ id: g.subject.id, name: g.subject.name }))}
+          />
         </form>
       </Card>
 
@@ -534,6 +571,10 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
                     {g.subject.type === 'user' && <>{g.subject.email} · </>}granted by {g.grantedBy}
                     {g.expiresAt && <> · {g.expired ? <span className="font-medium text-red-600">expired</span> : 'expires'} {formatDate(g.expiresAt)}</>}
                   </p>
+                  <div className="mt-1 flex flex-wrap gap-1"><ConditionBadges policy={g.policy} /></div>
+                  {doc.isOwner && g.subject.type === 'user' && g.policy && (g.policy.downloadApproval || g.policy.window || g.policy.networks) && (
+                    <Button size="sm" variant="ghost" className="mt-1" onClick={() => setExceptionFor({ id: g.subject.id, name: g.subject.name })}>Emergency exception…</Button>
+                  )}
                   {g.subject.type === 'group' && (g.subject.pending ?? 0) > 0 && (
                     <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
                       {g.subject.pending} added to the group since you shared. They cannot open it until you confirm.
@@ -550,7 +591,32 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
           </ul>
         )}
         {grants && grants.length === 0 && <p className="border-t border-slate-100 px-5 py-4 text-sm text-slate-500 dark:border-white/[0.05]">Only the owner can open this document.</p>}
+        {overrides.length > 0 && (
+          <div className="border-t border-slate-100 px-5 py-4 dark:border-white/[0.05]">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Emergency exceptions in force</p>
+            <ul className="space-y-2 text-sm">
+              {overrides.map((o) => (
+                <li key={o.id} className="flex flex-wrap items-center gap-2">
+                  <span className="flex-1"><span className="font-medium">{o.user.displayName}</span> until {formatDate(o.expiresAt)}: “{o.reason}”</span>
+                  <Button size="sm" variant="soft" onClick={() => void api.delete(`/documents/${doc.id}/overrides/${o.id}`).then(() => { toast('Exception ended. The share conditions apply again.'); return load(); }).catch((err) => onError(errorText(err)))}>End now</Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Card>
+      {exceptionFor && (
+        <ExceptionDialog
+          name={exceptionFor.name}
+          onClose={() => setExceptionFor(null)}
+          onSubmit={async (reason, hours) => {
+            await api.post(`/documents/${doc.id}/overrides`, { userId: exceptionFor.id, reason, hours });
+            toast(`${exceptionFor.name} can use this document without its conditions for ${hours} hour${hours === 1 ? '' : 's'}. You were emailed a receipt.`);
+            setExceptionFor(null);
+            await load();
+          }}
+        />
+      )}
 
       <Card
         title="Suggested people"
@@ -684,5 +750,34 @@ function OwnerActions(props: { doc: Doc; onTrash: () => void; onRestore: () => v
         </div>
       </div>
     </Card>
+  );
+}
+
+function ExceptionDialog({ name, onClose, onSubmit }: { name: string; onClose: () => void; onSubmit: (reason: string, hours: number) => Promise<void> }) {
+  const [reason, setReason] = useState('');
+  const [hours, setHours] = useState(4);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Emergency exception for ${name}`}
+      description="Lifts the time window, network and download-approval conditions of their share for a few hours. It never gives more than the share's level, and organisation-wide role rules still apply. Recorded, and they are emailed."
+      icon={<Warning size={20} />}
+      footer={<>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={reason.trim().length < 10} onClick={() => void onSubmit(reason.trim(), hours).catch((err) => setError(errorText(err)))}>Give exception</Button>
+      </>}
+    >
+      <div className="space-y-3">
+        <Label label="Reason (recorded and emailed)" hint="At least 10 characters."><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} /></Label>
+        <Label label="For how long">
+          <Select value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+            {[1, 2, 4, 8, 12, 24].map((h) => <option key={h} value={h}>{h} hour{h === 1 ? '' : 's'}</option>)}
+          </Select>
+        </Label>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+      </div>
+    </Modal>
   );
 }
