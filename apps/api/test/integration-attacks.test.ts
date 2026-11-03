@@ -46,9 +46,12 @@ describe('View only cannot be turned into the original file', () => {
     await share(doc, { userId: viewer.id, level: 'VIEW' }).expect(200);
     await share(doc, { userId: other.id, level: 'READ', policy: { downloadApproval: true } }).expect(200);
     await as(t, V).get(`/api/documents/${doc}/pages/1`).expect(200);
-    // VIEW cannot even ask: the app refuses, and the database refuses the row (needs READ).
-    expect([403, 404]).toContain((await as(t, V).post(`/api/documents/${doc}/download-requests`, { reason: 'I would like the original please' })).status);
-    // The person with READ asks and is approved; the VIEW holder still gets nothing.
+    // A VIEW holder may ASK (THREATS.md V1), but asking alone releases nothing:
+    // without their OWN approved request the bytes stay refused.
+    await as(t, V).post(`/api/documents/${doc}/download-requests`, { reason: 'I would like the original please' }).expect(201);
+    await as(t, V).get(`/api/documents/${doc}/download`).expect(404);
+    // The person with READ asks and is approved; the VIEW holder still gets nothing
+    // from an approval meant for someone else.
     const req = await as(t, O).post(`/api/documents/${doc}/download-requests`, { reason: 'Needed for the year-end audit' }).expect(201);
     await as(t, A).post(`/api/download-requests/${req.body.id}/approve`, { hours: 24, uses: 3 }).expect(200);
     await as(t, V).get(`/api/documents/${doc}/download`).expect(404);

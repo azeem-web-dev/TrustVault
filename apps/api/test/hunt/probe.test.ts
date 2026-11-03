@@ -74,8 +74,12 @@ describe('level confusion', () => {
     await share(A, doc, bob.id, 'VIEW').expect(200);
     expect((await as(t, B).get(`/api/documents/${doc}/download`)).status).toBe(404);
     expect((await as(t, B).post(`/api/documents/${doc}/offline-key`)).status).toBe(404);
-    // No approval flow for VIEW (download not allowed at all).
-    expect((await as(t, B).post(`/api/documents/${doc}/download-requests`, { reason: 'view wants download' })).status).toBe(404);
+    // A VIEW holder may now ASK for download permission (THREATS.md V1), but the
+    // request alone releases nothing: without the owner's approval the bytes and
+    // the Android key are still refused.
+    expect((await as(t, B).post(`/api/documents/${doc}/download-requests`, { reason: 'view wants a download copy' })).status).toBe(201);
+    expect((await as(t, B).get(`/api/documents/${doc}/download`)).status).toBe(404);
+    expect((await as(t, B).post(`/api/documents/${doc}/offline-key`)).status).toBe(404);
     // But pages are allowed.
     expect((await as(t, B).get(`/api/documents/${doc}/pages`)).status).toBe(200);
   });

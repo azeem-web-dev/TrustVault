@@ -29,8 +29,18 @@ export class DownloadApprovalsService {
   /** A recipient asks to download one version (default: the current one). */
   async request(actor: Actor, documentId: string, input: { reason: string; versionNo?: number | undefined }) {
     const result = await this.prisma.asUser(actor.userId, async (tx) => {
-      const decision = await this.access.require(tx, actor, documentId, 'download');
-      if (!decision.approvalRequired) throw new BadRequestException('You can download this document without approval');
+      // A VIEW holder cannot pass require(..., 'download') until they HAVE an
+      // approval, so the request itself is gated on 'view' (they can open the
+      // document) plus "they need an approval to get the bytes" (THREATS.md V1):
+      // a VIEW grantee always does; a READ+ holder only on a share that asks
+      // for one. Someone who can already download freely is told to just do so.
+      const decision = await this.access.require(tx, actor, documentId, 'view');
+      // An administrator's only view is break-glass (VIEW, emergency look): never
+      // a route to the original, so they cannot request one either (THREATS.md V9).
+      if (actor.role === 'ADMIN') throw new ForbiddenException('Administrators cannot request downloads');
+      const needsApproval = decision.level === Level.VIEW
+        || (decision.level >= Level.READ && decision.approvalRequired === true);
+      if (!needsApproval) throw new BadRequestException('You can download this document without approval');
       const doc = await tx.document.findUniqueOrThrow({ where: { id: documentId }, select: { title: true, ownerId: true, currentVersionNo: true } });
       const versionNo = input.versionNo ?? doc.currentVersionNo;
       const version = await tx.documentVersion.findUnique({ where: { documentId_versionNo: { documentId, versionNo } }, select: { id: true } });
