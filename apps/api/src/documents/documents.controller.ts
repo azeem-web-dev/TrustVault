@@ -10,6 +10,7 @@ import { CurrentActor, Roles } from '../auth/decorators.js';
 import { RateLimitService } from '../redis/rate-limit.service.js';
 import { DocumentsService, type UploadedFile as File } from './documents.service.js';
 import { SharingService } from './sharing.service.js';
+import { DownloadLifecycleService } from '../risk/download-lifecycle.service.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
 
@@ -80,6 +81,7 @@ export class DocumentsController {
     @Inject(DocumentsService) private readonly docs: DocumentsService,
     @Inject(SharingService) private readonly sharing: SharingService,
     @Inject(RateLimitService) private readonly limits: RateLimitService,
+    @Inject(DownloadLifecycleService) private readonly lifecycle: DownloadLifecycleService,
   ) {}
 
   /** Search documents I own or hold a live grant on. */
@@ -200,7 +202,7 @@ export class DocumentsController {
    * Files are always sent as attachments with a locked-down CSP, so even a
    * file that slipped past validation can never run as a page on our origin.
    */
-  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string }) {
+  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string; downloadId?: string; documentId?: string; versionNo?: number }) {
     const ascii = file.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     res.setHeader('Content-Type', file.mimeType);
     res.setHeader('Content-Length', String(file.data.length));
@@ -209,6 +211,8 @@ export class DocumentsController {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store, private');
     res.setHeader('X-Document-SHA256', file.sha256);
+    // Completed / interrupted are recorded after the bytes go (or don't).
+    if (file.downloadId) this.lifecycle.track(res, { downloadId: file.downloadId, documentId: file.documentId!, versionNo: file.versionNo!, bytes: file.data.length });
     res.end(file.data);
   }
 }

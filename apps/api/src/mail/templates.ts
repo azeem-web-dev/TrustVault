@@ -12,7 +12,7 @@ interface Layout {
   footer: string;
 }
 
-function render(name: string, l: Layout): { text: string; html: string } {
+export function render(name: string, l: Layout): { text: string; html: string } {
   const text = [
     `Hi ${name},`,
     '',

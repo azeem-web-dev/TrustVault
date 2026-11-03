@@ -10,6 +10,7 @@ import { AccessService, Level } from './access.js';
 import { remainingLevel } from './sharing.service.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
+import { DownloadLimitsService } from '../risk/download-limits.service.js';
 
 export interface UploadedFile {
   buffer: Buffer;
@@ -88,6 +89,7 @@ export class DocumentsService {
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(MALWARE_SCANNER) private readonly scanner: MalwareScanner,
+    @Inject(DownloadLimitsService) private readonly limits: DownloadLimitsService,
   ) {}
 
   // ------------------------------------------------------------------ search
@@ -224,13 +226,19 @@ export class DocumentsService {
         });
         throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
       }
+      // Hard download limits (THREATS.md U9): counted and enforced here,
+      // after the access decision and before anything is audited or sent.
+      await this.limits.enforce(tx, actor, id, version.versionNo);
       // Audited and committed BEFORE any byte leaves the server: if the
-      // audit write fails, nothing is sent.
+      // audit write fails, nothing is sent. This is the "authorized" step of
+      // the download lifecycle; completion is recorded after the response
+      // (DownloadLifecycleService), under the same downloadId.
+      const downloadId = randomUUID();
       await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
-        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex') },
+        details: { versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), downloadId },
       }, tx);
-      return version;
+      return { ...version, downloadId };
     });
 
     const blob = found.blob!;
@@ -241,14 +249,14 @@ export class DocumentsService {
         authTag: Buffer.from(blob.authTag), ciphertext: Buffer.from(blob.ciphertext),
       }, blobAad(id, found.id, found.versionNo));
     } catch {
-      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
+      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo, downloadId: found.downloadId } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
     if (!sha256(plaintext).equals(Buffer.from(found.sha256))) {
-      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'hash_mismatch', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
+      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'hash_mismatch', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo, downloadId: found.downloadId } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
-    return { data: plaintext, fileName: found.fileName, mimeType: found.mimeType, sha256: Buffer.from(found.sha256).toString('hex') };
+    return { data: plaintext, fileName: found.fileName, mimeType: found.mimeType, sha256: Buffer.from(found.sha256).toString('hex'), downloadId: found.downloadId, documentId: id, versionNo: found.versionNo };
   }
 
   // ----------------------------------------------------------------- change
