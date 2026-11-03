@@ -252,3 +252,40 @@ describe('only administrators', () => {
     }
   });
 });
+
+describe('the two protected demo admins (README: admin@demo.com and admin2@demo.com)', () => {
+  it('complete break-glass end to end, request, approve, use, and every demo safeguard still holds', async () => {
+    const d1 = await createUser({ email: 'demo-admin-1@t.io', role: 'ADMIN' });
+    const d2 = await createUser({ email: 'demo-admin-2@t.io', role: 'ADMIN' });
+    // As the seed makes them: protected (schema owner only).
+    await withDb(ownerDb(), (db) => db.query('UPDATE users SET is_protected = true WHERE id = ANY($1::uuid[])', [[d1.id, d2.id]]));
+    const [S1, S2] = [await login(t, d1), await login(t, d2)];
+    const doc = await upload('Demo board pack');
+
+    // Request (Ada) -> approve (Ben) -> use (Ada, once).
+    const approvalId = await approved(t, S1, S2, { action: 'BREAK_GLASS', documentId: doc, reason: 'Demo: legal hold request LEG-1 from counsel' });
+    await as(t, S1).post('/api/admin/break-glass', { documentId: doc, approvalId }).expect(201);
+    await as(t, S1).get(`/api/documents/${doc}`).expect(200);
+    await as(t, S1).get(`/api/documents/${doc}/download`).expect(404); // VIEW only (THREATS.md V9)
+    await as(t, S1).post('/api/admin/break-glass', { documentId: doc, approvalId }).expect(403); // once
+    await as(t, S2).post('/api/admin/break-glass', { documentId: doc, approvalId }).expect(403); // not Ben's
+    expect((await auditRows(`action = 'admin.break_glass' AND document_id = $1`, [doc]))[0]).toMatchObject({ actor_id: d1.id });
+
+    // Neither can approve their own request.
+    const own = await ask(S2, { action: 'BREAK_GLASS', documentId: doc }).expect(201);
+    await as(t, S2).post(`/api/admin/approvals/${own.body.approval.id}/approve`).expect(409);
+
+    // Demo safeguards: neither can deactivate, demote or clear the other's second factor; neither is ever emailed.
+    await as(t, S2).post(`/api/admin/users/${d1.id}/deactivate`).expect(403);
+    await as(t, S1).patch(`/api/admin/users/${d2.id}`, { role: 'OWNER' }).expect(403);
+    // Clearing a protected admin's second factor cannot even be asked for.
+    const reset = await ask(S2, { action: 'MFA_RESET', targetUserId: d1.id });
+    expect(reset.status).toBe(403);
+    expect(reset.body.message).toMatch(/protected demo account/);
+    const after = await withDb(ownerDb(), async (db) => (await db.query('SELECT status, role, totp_enabled_at IS NOT NULL AS mfa FROM users WHERE id = ANY($1::uuid[]) ORDER BY email', [[d1.id, d2.id]])).rows);
+    expect(after).toEqual([{ status: 'ACTIVE', role: 'ADMIN', mfa: true }, { status: 'ACTIVE', role: 'ADMIN', mfa: true }]);
+    await settle();
+    expect(sentTo(d1.email)).toHaveLength(0);
+    expect(sentTo(d2.email)).toHaveLength(0);
+  });
+});

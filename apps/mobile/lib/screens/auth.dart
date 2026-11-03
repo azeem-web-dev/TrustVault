@@ -134,6 +134,7 @@ class _Demo {
 // or second factor.
 const _demo = [
   _Demo('Ada Admin', 'Administrator', 'admin@demo.com', 'admin1234567'),
+  _Demo('Ben Admin', 'Second administrator', 'admin2@demo.com', 'admin2345678'),
   _Demo('Olivia Owner', 'Document owner', 'olivia@demo.com', 'owner1234567'),
   _Demo('Victor Viewer', 'Viewer', 'victor@demo.com', 'viewer123456'),
   _Demo('Erin External', 'External partner', 'erin@demo.com', 'external1234'),

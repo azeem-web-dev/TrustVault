@@ -13,6 +13,7 @@ import { errorText } from '@/lib/api';
 // protected server-side: nobody can change their password or second factor.
 const DEMO = [
   { name: 'Ada Admin', role: 'Administrator', email: 'admin@demo.com', password: 'admin1234567', note: 'Needs a 6-digit code' },
+  { name: 'Ben Admin', role: 'Second administrator', email: 'admin2@demo.com', password: 'admin2345678', note: 'Approves the first admin’s requests' },
   { name: 'Olivia Owner', role: 'Document owner', email: 'olivia@demo.com', password: 'owner1234567' },
   { name: 'Victor Viewer', role: 'Viewer', email: 'victor@demo.com', password: 'viewer123456' },
   { name: 'Erin External', role: 'External partner', email: 'erin@demo.com', password: 'external1234' },

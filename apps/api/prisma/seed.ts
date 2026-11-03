@@ -3,10 +3,17 @@
 //
 // Safe to re-run: accounts that exist are left alone (only marked
 // protected), and documents are only created if Olivia has none yet.
+// Re-running it in full also re-adds Victor and Oscar to their demo groups
+// if someone removed them; on a live server use `--accounts-only`, which
+// only creates missing demo accounts (and a second factor for a demo admin
+// that has none) and touches nothing else.
 //
-// Passwords: SEED_PASSWORD_ADMIN / _OWNER / _VIEWER / _EXTERNAL (required in
-// production). The demo admin's authenticator secret: SEED_ADMIN_TOTP_SECRET
-// (base32), printed at the end so it can be published in the README.
+// Passwords: SEED_PASSWORD_ADMIN / _ADMIN2 / _OWNER / _VIEWER / _EXTERNAL
+// (required in production). The demo admins' authenticator secrets:
+// SEED_ADMIN_TOTP_SECRET and SEED_ADMIN2_TOTP_SECRET (base32), printed at
+// the end so they can be published in the README. There are two demo
+// admins so the two-administrator flows (break-glass, clearing an owner's
+// second factor) can be tried end to end (THREATS.md S19).
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -33,6 +40,7 @@ function password(role: string): string {
 
 const accounts: { key: string; email: string; displayName: string; role: Role; pw: string; expiresInDays?: number }[] = [
   { key: 'admin', email: 'admin@demo.com', displayName: 'Ada Admin', role: 'ADMIN', pw: 'ADMIN' },
+  { key: 'admin2', email: 'admin2@demo.com', displayName: 'Ben Admin', role: 'ADMIN', pw: 'ADMIN2' },
   { key: 'olivia', email: 'olivia@demo.com', displayName: 'Olivia Owner', role: 'OWNER', pw: 'OWNER' },
   { key: 'oscar', email: 'oscar@demo.com', displayName: 'Oscar Owner', role: 'OWNER', pw: 'OWNER' },
   { key: 'victor', email: 'victor@demo.com', displayName: 'Victor Viewer', role: 'VIEWER', pw: 'VIEWER' },
@@ -94,15 +102,24 @@ async function main(): Promise<void> {
       console.log(`created  ${a.role.padEnd(8)} ${a.email}`);
     }
 
-    // The demo admin needs a second factor like every admin. Its secret is
-    // published in the README so judges can generate codes.
-    const admin = await prisma.user.findUniqueOrThrow({ where: { id: ids.admin! } });
-    let totpB32: string | null = null;
-    if (!admin.totpEnabledAt) {
-      const secret = process.env.SEED_ADMIN_TOTP_SECRET ? base32Decode(process.env.SEED_ADMIN_TOTP_SECRET) : newTotpSecret();
+    // The demo admins need a second factor like every admin. Their secrets
+    // are published in the README so judges can generate codes. An admin
+    // that already has one is left alone.
+    const totpB32: Record<string, string> = {};
+    for (const [key, envName] of [['admin', 'SEED_ADMIN_TOTP_SECRET'], ['admin2', 'SEED_ADMIN2_TOTP_SECRET']] as const) {
+      const admin = await prisma.user.findUniqueOrThrow({ where: { id: ids[key]! } });
+      if (admin.totpEnabledAt) continue;
+      if (isProd && !process.env[envName]) throw new Error(`${envName} is required in production (it is published in the README)`);
+      const secret = process.env[envName] ? base32Decode(process.env[envName]!) : newTotpSecret();
       const { wrapped, keyId } = await keys.wrap(secret, `tv-totp-v1|${admin.id}`);
       await prisma.user.update({ where: { id: admin.id }, data: { totpSecretEnc: new Uint8Array(packWrapped(keyId, wrapped)), totpEnabledAt: new Date(), totpLastStep: null } });
-      totpB32 = base32Encode(secret);
+      totpB32[admin.email] = base32Encode(secret);
+    }
+
+    if (process.argv.includes('--accounts-only')) {
+      for (const [email, b32] of Object.entries(totpB32)) console.log(`\nDemo admin ${email} authenticator secret (publish in README): ${b32}`);
+      console.log('\n--accounts-only: groups and documents left as they are');
+      return;
     }
 
     // ------------------------------------------------------------ groups
@@ -165,7 +182,7 @@ async function main(): Promise<void> {
       }
     }
 
-    if (totpB32) console.log(`\nDemo admin authenticator secret (publish in README): ${totpB32}`);
+    for (const [email, b32] of Object.entries(totpB32)) console.log(`\nDemo admin ${email} authenticator secret (publish in README): ${b32}`);
   } finally {
     await prisma.$disconnect();
   }
