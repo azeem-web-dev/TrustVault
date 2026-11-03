@@ -1,0 +1,35 @@
+# Weekly, grouped dependency update PRs. Security updates are separate and
+# immediate once "Dependabot security updates" is enabled in repo settings.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    commit-message: { prefix: "deps(npm)" }
+  - package-ecosystem: cargo
+    directory: /keyd
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    commit-message: { prefix: "deps(cargo)" }
+  - package-ecosystem: pub
+    directory: /apps/mobile
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      pub-minor-patch:
+        update-types: [minor, patch]
+    commit-message: { prefix: "deps(pub)" }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message: { prefix: "deps(actions)" }

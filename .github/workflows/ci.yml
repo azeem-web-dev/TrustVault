@@ -34,8 +34,10 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       KEY_PROVIDER: local
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -75,7 +77,9 @@ jobs:
       run:
         working-directory: apps/mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: 3.47.9
@@ -96,20 +100,97 @@ jobs:
           dart run tool/android_security_check.dart --merged
 
   keyd:
-    name: keyd (Rust) tests
+    name: keyd (Rust) tests, locked
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cd keyd && cargo test --release
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # 1.91.1 is the toolchain install-keyd.sh uses on the server.
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+      # --locked: fail if Cargo.lock is missing or out of date, so CI builds
+      # exactly the dependency versions that were reviewed.
+      - run: cd keyd && cargo test --release --locked
+      - run: cd keyd && cargo build --release --locked
+
+  keyd-reproducible:
+    name: keyd builds bit-for-bit twice
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+      - name: Build twice in different directories and compare SHA-256
+        run: bash tools/repro-check-keyd.sh
+
+  audit:
+    name: Dependency vulnerabilities (npm, Cargo, pub)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: npm audit (production dependencies, high and above)
+        run: npm audit --omit=dev --audit-level=high
+      # OSV-Scanner reads all three lockfiles (npm, Cargo, pub) and fails on
+      # ANY known vulnerability that is not in osv-scanner.toml. Every entry
+      # there needs a reason and an expiry date.
+      - uses: google/osv-scanner-action/osv-scanner-action@6ad84ce1ef2d4124ba333b221894c133c4a970ea # v2.7.0
+        with:
+          scan-args: |-
+            --config=osv-scanner.toml
+            --lockfile=package-lock.json
+            --lockfile=keyd/Cargo.lock
+            --lockfile=apps/mobile/pubspec.lock
+      # Second opinion straight from the RustSec advisory database.
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        with:
+          tool: cargo-audit@0.22.2
+      - name: cargo audit
+        run: cd keyd && cargo audit --deny warnings --file Cargo.lock
+
+  sbom:
+    name: SBOMs (CycloneDX)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - name: Generate
+        run: |
+          mkdir sbom
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm sbom --sbom-format cyclonedx --omit dev --package-lock-only > sbom/npm.cdx.json
+          (cd keyd && cargo cyclonedx --format json --override-filename tvkeyd.cdx)
+          mv keyd/tvkeyd.cdx.json sbom/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/
+          retention-days: 90
 
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
