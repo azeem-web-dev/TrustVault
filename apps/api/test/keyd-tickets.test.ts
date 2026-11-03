@@ -196,6 +196,10 @@ describe('keyd authorises decryption itself (compromised API)', () => {
   it('keyd rate-limits each user, so impersonating one user cannot drain the store quickly', async () => {
     const v = await upload('Limited');
     const limited = new LocalKeyProvider(master, { limits: { userPerMin: 2 } });
+    // The limit counts per clock minute (as keyd does): start well inside a
+    // minute so the three unwraps below cannot straddle two windows.
+    const intoMinute = Date.now() % 60_000;
+    if (intoMinute > 45_000) await new Promise((r) => setTimeout(r, 60_000 - intoMinute + 200));
     for (let i = 0; i < 2; i++) {
       const { ticket } = await ticketAsApp(v, owner.id);
       await limited.unwrap(v.wrapped, v.keyId, aadOf(v), ticket);
