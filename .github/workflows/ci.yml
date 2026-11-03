@@ -59,6 +59,8 @@ jobs:
         run: node tools/verify-audit.test.mjs
       - name: Offline key-ledger reconciliation (forged, rewritten and truncated ledgers)
         run: node tools/reconcile-ledger.test.mjs
+      - name: Independent Python verifier agrees with the Node verifier (docs/VERIFY.md)
+        run: node tools/independent-verify/agreement.test.mjs
       - name: Build web
         run: cd apps/web && npx next build
       - name: Browser tests (passkeys; stored XSS, CSP, framing and headers on the production build)

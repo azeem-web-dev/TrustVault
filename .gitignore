@@ -18,3 +18,4 @@ apps/web/AGENTS.md
 *.tsbuildinfo
 api-dev.log
 web-dev.log
+__pycache__/
