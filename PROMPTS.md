@@ -29,6 +29,12 @@ Tools: ChatGPT (early brainstorming), Claude Code / Claude Opus (planning, code,
 
 The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at the start of each working session, with the instruction: *"Every endpoint must go through decide(); never cache permissions; every allow and deny writes an audit row in the same transaction."*
 
+When a piece of work is split across parallel subagents — the independent reviewers (2026-11-02) and later the attack/hardening run (2026-11-03) — each subagent is handed the same written brief, so they stay consistent and never step on each other. The brief for the security hunt, given to every attacker/reviewer, was in substance:
+
+> Authorised defensive review of our own app; local only, never touch production. Read the problem statement, docs/PLAN.md and THREATS.md first. You own one area, one throwaway database and one git worktree — attack only your area, against your local build. The three guarantees you are trying to break: (1) a document is reachable only by someone granted it, through any route, server-decided every time; (2) you can prove who reached it, including refused attempts, from a tamper-evident record; (3) revocation takes effect immediately. For each confirmed finding write: severity, which guarantee it breaks, exact reproduction, root cause (file:line), the fix, and a regression test that fails without the fix. Rank real, reachable bugs above theoretical ones — a short list of real findings beats a long list of noise. If an area is clean, say what you tried and why you are confident; negative results count. Do not push to main; the parent integrates and runs CI once.
+
+The same shape drives the independent code reviewers: one property each, and every finding confirmed with a live request before it is fixed.
+
 ---
 
 ## 2026-11-01 — First migration: users, sessions, hash-chained audit log
@@ -129,6 +135,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 **Asked (Claude):** "List every authorisation check, remove each one, and confirm a test fails." This is the brief's own test, as a script (`tools/mutation-check.mjs`).
 
+**Got:** a `tools/mutation-check.mjs` that, for each listed authorisation rule, edits the source to disable that one rule, runs only the tests it names, and reports the rule "caught" if a test fails or "survived" if none does — writing the result to `docs/MUTATION_REPORT.md`.
+
 **What was wrong (found before running it, by reading which tests exercise which line):**
 1. The session lookup re-checks "account deactivated" and "password changed since this session" on every request. But every API path that deactivates or changes a password **also deletes the sessions**, so removing those re-checks would have left every test green. They are a backup layer that no test exercised.
 2. Search has an app-side access filter and RLS underneath. Remove the app filter and RLS still hides everything, so no API test can tell. Defence in depth makes a single layer untestable through the API.
@@ -140,6 +148,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 ---
 
 ## 2026-11-01 — Toolchain surprises (not security, recorded because they cost time)
+
+*(Supplementary notes, not one of the main entries — no single commit carries them.)*
 
 - NestJS 12 ships as ES modules, and TypeScript 7 was the default install; Nest's dependency injection needs the older decorator metadata. Pinned TypeScript 5.9 and used explicit `@Inject()` on every constructor parameter, so injection works the same under the dev runner, the test runner and the build.
 - Ubuntu 24.04's default Rust (1.75) cannot build current crates (edition 2024). Used the archive's versioned `rustc-1.91` instead of piping an install script into a shell.
@@ -165,6 +175,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 
 **Asked (Claude):** build an outside witness for the audit chain, malware scanning, encrypted backups and a full passkey test.
 
+**Got:** a pulled GitHub-Actions witness of the audit checkpoints, a clamd malware scan that runs on every upload, encrypted off-site backups, and a passkey test driven by a software authenticator that builds real WebAuthn bytes.
+
 **Decisions I made, and why:**
 - **Witness is pulled, not pushed.** If the server pushed checkpoints somewhere, it would need a credential, and whoever owns the server would own that credential. Instead a public read-only endpoint serves checkpoints only, and a scheduled GitHub Actions job pulls them into the `witness` branch. The test that matters re-signs a forged history **with the real signing key** — the witness still rejects it, because the heads already recorded on GitHub cannot be matched.
 - **The scanner fails closed,** and only an exact `stream: OK` counts as clean. The tests run the real clamd protocol code against a fake daemon that can refuse connections, answer nonsense or never answer.
@@ -181,6 +193,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 ## 2026-11-01 — Shrinking the remaining gaps (audit tail, new malware, real browser)
 
 **Asked (Claude):** "fix the remaining open gaps too": the newest ~20 minutes of audit events had no outside copy, signature scanning misses brand-new malware, and passkeys had never run in a real browser.
+
+**Got:** per-minute checkpoints published to Sigstore's public Rekor log by a separate internet-only service, a nightly re-scan that re-decrypts and re-checks every stored version and quarantines newly-detected malware, and a passkey test driven through real Chrome against the live pages.
 
 **Decisions I made, and why:**
 - **Publish checkpoints to Sigstore's public transparency log (Rekor), but not from the API.** The GitHub witness can only look every 15 minutes, and GitHub delays scheduled jobs. Pushing each checkpoint somewhere public as soon as it is signed closes most of that window, and Rekor needs no credential: it accepts any correctly signed entry and never lets anyone remove it. I asked the owner before publishing anything there (entries are permanent). The API itself still has no internet access; a separate one-shot service with a throwaway user, no database password and no key service access reads the public checkpoint list on localhost and submits new ones, checking Rekor's signed receipt against a pinned key before it records anything. Checkpoints are now signed every minute instead of every five.
@@ -200,6 +214,8 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 ## 2026-11-02 — Simpler demo logins, and a redesigned interface
 
 **Asked (Claude):** "make email and passwords simple" (for the published demo accounts), then "work hard on ui … premium icons and images … every screen section … easy to operate".
+
+**Got:** `@demo.com` logins with 12-character passwords and one-click demo buttons on the sign-in page, and a redesigned web interface — sidebar, Ctrl+K command palette, light/dark/system themes, Phosphor icons and hand-drawn inline-SVG illustrations.
 
 **Decisions I made, and why:**
 - **Demo logins:** `@demo.com` emails and 12-character passwords (the app's minimum). They were already public in the README, so long random passwords protected nothing and only made them hard to type. The live accounts were changed in place with one `user.update` audit event each, and their sessions ended. The login page now has one-click demo account buttons that fill these in.
@@ -261,6 +277,84 @@ The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at th
 **What is still accepted, not fixed** (all in THREATS.md): an admin resetting someone's password and signing in as them is detected and alerted (S15), not prevented; the re-scan functions bypass the database lock for ciphertext (A18); the last minute or two of audit events can be cut by root (L5); the two sign-in races are closed by locking and re-checking but not proven by a timed test.
 
 **Commits:** [a9de674](https://github.com/azeem-web-dev/TrustVault/commit/a9de674) (access: admins, groups, revocation), [071156b](https://github.com/azeem-web-dev/TrustVault/commit/071156b) (sessions and refusals on record), [6eff294](https://github.com/azeem-web-dev/TrustVault/commit/6eff294) (audit evidence: verifier and checkpoints)
+
+---
+
+## 2026-11-03 — Accounts by invitation
+
+**Asked (Claude):** "for a new account … admin enters mail and role and if any access date, and the receiver gets an email and fills the remaining info" — build invite-by-email account creation.
+
+**Got:** an admin form that takes email, role and an optional access-end date and sends a one-time invite link; an `/invite` page where the invited person sets their own name and password; the same flow in the Android app. No admin-chosen password ever exists, and an invited account can do nothing until it is accepted.
+
+**What was wrong:**
+- **The invite email never arrived.** The API service is sandboxed with no outbound internet (so a compromised API cannot phone home), which also blocked its own SMTP connection — every send failed with `Connection timeout`. The sandbox had always blocked this; the earlier one-off test email was sent from outside the API, so it hid the gap.
+- Inviting someone asked the admin for a fresh second factor (step-up). The owner judged that too heavy for a routine invite that grants nothing until accepted.
+
+**What I did instead:** a narrow systemd drop-in lets the API reach only the SMTP host's current addresses and nothing else on the internet (`infra/server/mail-egress.sh`), so mail works while the rest of the egress block stands. Inviting and re-inviting are no longer step-up routes (role changes, resets and the rest still are), recorded in THREATS.md S20.
+
+**Commits:** [22dd266](https://github.com/azeem-web-dev/TrustVault/commit/22dd266) (invite flow, API), [1ab7319](https://github.com/azeem-web-dev/TrustVault/commit/1ab7319) (web and Android invite + accept page), [3a3d3ed](https://github.com/azeem-web-dev/TrustVault/commit/3a3d3ed) (SMTP-only egress), [9bb965f](https://github.com/azeem-web-dev/TrustVault/commit/9bb965f) (invites without step-up)
+
+---
+
+## 2026-11-03 — Ten security workstreams in parallel
+
+**Asked (Claude):** "make the authenticator good and advanced"; then, for view-only files, "if only view is given, users can still download or screenshot … what's the plan?" → "build all 6"; then "use max sub agents" to work the security checklist.
+
+**Got:** ten branches built in parallel, each in its own worktree and test database: step-up re-verification + per-role MFA policy + signed-in devices + Android passkeys; a VIEW level below READ with watermarked in-app pages and stamped downloads; download approvals, time windows and network allowlists; a key service that unwraps only against database-issued tickets, with its own signed key-use ledger; insider-extraction detection with a persistent alert queue and hard download limits; auth-abuse resilience (no stranger lockout, trusted-device cookie, under-attack sign-in links); structural PDF/Office upload checks in a resource-limited worker; an Android security test suite; supply-chain hardening (pinned actions, SBOMs, signed release); and the ops runbooks.
+
+**What was wrong:**
+- **A shared scratchpad let two agents collide:** one agent's mutation-runner truncated another's service file mid-edit. Fixed by giving every agent a branch-unique temp name and its own worktree, which is how the later runs are isolated.
+- **A timezone bug rejected good sessions:** a Postgres session running in the server's local time made Prisma misread `timestamptz`, so valid sessions were read as "password changed" and refused. Fixed by forcing `TimeZone=UTC` on every database connection, with a test that switches the test database to another zone to prove it.
+
+**What I did instead:** each workstream kept to its own branch and database; I integrated them one at a time (next entry).
+
+**Commits (branch merges):** [a2af2a8](https://github.com/azeem-web-dev/TrustVault/commit/a2af2a8) (MFA/passkeys), [a997df8](https://github.com/azeem-web-dev/TrustVault/commit/a997df8) (view-only), [384e4c4](https://github.com/azeem-web-dev/TrustVault/commit/384e4c4) (access policies), [9aaa8f3](https://github.com/azeem-web-dev/TrustVault/commit/9aaa8f3) (keyd ledger), [afb90ab](https://github.com/azeem-web-dev/TrustVault/commit/afb90ab) (insider detection), [4ac803c](https://github.com/azeem-web-dev/TrustVault/commit/4ac803c) (auth abuse), [a168041](https://github.com/azeem-web-dev/TrustVault/commit/a168041) (content checks + web CSP), [09f7737](https://github.com/azeem-web-dev/TrustVault/commit/09f7737) (Android tests), [df797ce](https://github.com/azeem-web-dev/TrustVault/commit/df797ce) (supply chain), [bee6141](https://github.com/azeem-web-dev/TrustVault/commit/bee6141) (ops docs), [cc25222](https://github.com/azeem-web-dev/TrustVault/commit/cc25222) (every connection runs in UTC)
+
+---
+
+## 2026-11-03 — Integrating ten branches, making CI fast, and deploying
+
+**Asked (Claude):** "deploy … start all three … keep working until all are satisfied"; later "make ci green and deploy it"; then "deploy".
+
+**Got:** the ten branches merged into main one at a time with the full suite after each, a second protected demo admin so the two-admin break-glass flow can be tried end to end ([0859258](https://github.com/azeem-web-dev/TrustVault/commit/0859258)), and a production deploy (migrations in order, new settings, the key-service install, health checks).
+
+**What was wrong:**
+- **CI took about 50 minutes and kept failing late.** The mutation check ran all ~200 rules one after another after the full suite; a leftover download-limit from one test made the next test's download burst fail; and two timing tests answered a fraction of a millisecond early on busy runners.
+- Each failed run cost another ~50 minutes, so fixing by trial was slow, and the owner asked specifically to make CI faster.
+
+**What I did instead:** split the mutation check across 8 machines that run in parallel (`--shard K/8`), cutting CI from ~50 minutes to ~10; reset detection thresholds and limits between tests; and held the timing floors to whole milliseconds. Then deployed on the owner's "deploy", with a backup first and only the TrustVault services restarted.
+
+**Commit:** [8847c3e](https://github.com/azeem-web-dev/TrustVault/commit/8847c3e) (parallel mutation check), deployed as part of the merged main.
+
+---
+
+## 2026-11-03 — Screenshots, PDF sanitising, and a simpler second factor
+
+**Asked (Claude), three separate requests:** "for view-only documents I can take a screenshot — stop it, and tell the owner, without telling the viewer"; the owner's sanitisation rules for uploaded PDFs ("sanitise and validate automatically before encryption; reject if sanitising fails; scan the output again; log both hashes"); and "every user can turn on two-step — authenticator or a simple email toggle".
+
+**Got, what was wrong, and what I did — one per request:**
+- **Screenshots (web):** the viewer blanks the page and overwrites the clipboard on the usual capture keys and silently records the attempt — the owner sees it in the document history, by email and as an alert; the viewer is told nothing. Stated honestly (THREATS V11): a web page cannot truly block a screenshot or a phone camera, so the watermark and trace code remain what make a leaked picture traceable; only the Android app (`FLAG_SECURE`) really blocks capture. [2f0f8ce](https://github.com/azeem-web-dev/TrustVault/commit/2f0f8ce)
+- **PDF sanitising:** every uploaded PDF is now rebuilt into a fresh file in the sandboxed worker with scripts, auto-actions, launch actions, attachments and forms removed; the rebuilt copy must pass the full check and a virus scan or the upload is refused; both the original and sanitised SHA-256 are logged. This also closed a real gap the owner's rules exposed — refused uploads were not being audited at all; now every rejection is recorded. [0934f9c](https://github.com/azeem-web-dev/TrustVault/commit/0934f9c)
+- **Email-code two-step:** a per-user toggle adds an emailed 6-digit code as a second factor beside the authenticator and passkeys; turning it on needs a code to the mailbox, turning it off needs a fresh factor. Admins cannot use email as their only factor (a mailbox compromise would be an admin compromise), enforced in the app and by a database constraint; demo accounts, which never receive mail, are refused. [4b949f1](https://github.com/azeem-web-dev/TrustVault/commit/4b949f1)
+
+---
+
+## 2026-11-03 — Attacking everything at once (the security hunt)
+
+**Asked (Claude):** "start the hunt" — the 40 KB file that takes the server down, SQL injection from files, "and all security constraints you can think of", with the parallel attackers each in isolation.
+
+**Got:** six attacker/reviewer subagents, each in its own git worktree and throwaway database (resource-exhaustion files, injection, access-control bypass, authentication, key service + audit, and web/Android), plus a password-cracking benchmark. Five real bugs, all fixed with a regression test each:
+- **Two HIGH, availability:** a tiny PDF whose content stream decodes to millions of trivial ops froze the whole API because pages were drawn on the main thread with no time limit; and a tiny image declaring billions of pixels made the API allocate gigabytes at view/download time. Fixed by moving rendering to a worker pool with a 10-second deadline and capping uploaded images at 40 megapixels.
+- **Two MEDIUM:** the Android app only blanked the app-switcher preview on document screens, leaking other signed-in screens; and the key-use reconciler cried "released without a ticket" on every normal first Android copy key, which would train admins to ignore the one alarm meant to catch a real key-release bypass.
+- **One LOW:** changing a user's access-end date skipped the fresh-second-factor check that every other access-altering admin action requires.
+- Access-control and injection were attacked hard and came back clean; the password hashing (Argon2id, 64 MiB) was measured strong.
+
+**What was wrong / honest notes:**
+- The subagents could not create their own test databases (reading the local superuser password is blocked for them, correctly), so the parent created the databases for them.
+- Two mutation rows read as "missing" when checked on Windows — a line-ending quirk only; they apply cleanly in CI on Linux, and the full CI run confirmed every rule caught.
+- The two HIGH denial-of-service bugs were live on production until the fix was deployed; the owner was told, offered an interim block, and chose to deploy the fix.
+
+**Commits:** [894eb49](https://github.com/azeem-web-dev/TrustVault/commit/894eb49) (image/PDF DoS), [1c00aaa](https://github.com/azeem-web-dev/TrustVault/commit/1c00aaa) (keyd reconciler), [7a9ec86](https://github.com/azeem-web-dev/TrustVault/commit/7a9ec86) (Android recents), [fc5cdfa](https://github.com/azeem-web-dev/TrustVault/commit/fc5cdfa) (step-up on access window), [243e91d](https://github.com/azeem-web-dev/TrustVault/commit/243e91d) (access probes); merged to main and deployed.
 
 ---
 
