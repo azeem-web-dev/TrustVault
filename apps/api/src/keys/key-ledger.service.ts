@@ -216,6 +216,12 @@ export class KeyLedgerService {
     //    otherwise the file was produced without keyd (cached key?).
     //    And an ALLOWED event of a ticketed action with no ticket at all,
     //    after tickets were introduced: bytes released outside the protocol.
+    //    A first Android copy key is freshly generated here and handed over
+    //    without unwrapping any stored ciphertext (viewing.service offlineKey,
+    //    `created:true`), so it has no ticket and no ledger entry BY DESIGN;
+    //    it is not a key release and must not read as one, or the reconciler
+    //    cries wolf on every first open and real release_without_ticket hits
+    //    drown in the noise.
     const auditSide = await this.prisma.$queryRaw<{ seq: bigint; action: string; actor_id: string | null; document_id: string | null; has_ticket: boolean; ledger: string | null }[]>`
       SELECT ae.seq, ae.action, ae.actor_id::text AS actor_id, ae.document_id::text AS document_id,
              (t.id IS NOT NULL) AS has_ticket,
@@ -224,6 +230,7 @@ export class KeyLedgerService {
         LEFT JOIN unwrap_tickets t ON t.audit_event_id = ae.id
        WHERE ae.seq > ${auditFrom} AND ae.seq <= ${auditTo} AND ae.outcome = 'ALLOWED'
          AND ae.action IN (SELECT audit_action FROM unwrap_actions UNION SELECT 'keys.reencrypt_version')
+         AND NOT (ae.action = 'document.offline_key' AND (ae.details ->> 'created') = 'true')
          AND ae.occurred_at >= coalesce((SELECT min(issued_at) FROM unwrap_tickets), 'infinity'::timestamptz)
          AND (t.id IS NULL OR NOT EXISTS (SELECT 1 FROM keyd_ledger_entries l WHERE l.audit_event_id = ae.id::text AND l.event = 'unwrap' AND l.result = 'ok'))
        ORDER BY ae.seq LIMIT 500`;
