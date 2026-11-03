@@ -126,3 +126,30 @@ Mail is sent after the change it reports is committed. It never delays or fails 
 | `user.invite` | An admin invited someone or sent the invitation again (`details.again`). `ALLOWED`; or `DENIED` with `mail_off` |
 | `auth.invite_accepted` | An invitation link used. `ALLOWED`; or `DENIED` with `malformed_link`, `unknown_link`, `wrong_link_type` (a reset link), `link_used`, `link_expired` or `not_eligible` |
 | `auth.invite_check` | Only refusals, with the same reasons |
+
+## Sign-in abuse resilience (THREATS.md S19-S21)
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/auth/login` | **public** | As above, plus: while the account is *under attack* (more than 10 attempts in an hour from untrusted devices) a browser without this account's trusted-device cookie gets **`202 {signInLinkSent: true, message}`** and no session, whatever the email and password. Only the right password for a usable account emails a one-time link. `429 {message: "Too many attempts. Try again later.", retryAfterSeconds}` for: 20 attempts per IP or 100 per network (IPv4 /24, IPv6 /48; 20 once the network is flagged for stuffing) per 15 minutes; 5 per (account, client) per 15 minutes, then that client is held off 15 minutes, doubling up to 24 h; an IP that failed on 6+ accounts in an hour, for an hour. Never a per-account lock. A full sign-in (after the second factor, if any) sets `__Host-tv_device` (HttpOnly, Secure, SameSite=Strict, 90 days, rotated each time). |
+| POST | `/auth/login/link` | **public** | `{token}` from the emailed `/signin-link#token=…`. Same `200` body and cookies as a successful login (the second factor is still required if the account has one). One `400` message for any bad, used, expired, cancelled or pre-password-change link. 20 per IP per 15 minutes. |
+| POST | `/auth/password/forgot` | **public** | Also 30 per network per 15 minutes; padded to `LOGIN_FAILURE_FLOOR_MS` like a failed login. |
+| POST | `/auth/password/reset` | **public** | 20 per IP per 15 minutes. |
+| POST | `/auth/password` | signed in | 5 tries at the current password per 15 minutes, then `429`. |
+| POST | `/auth/mfa/totp/verify`, `/auth/mfa/passkeys/verify` | partial session | 5 per session per 5 minutes and 10 per account per 15 minutes; on the account's trusted device, 5 per 5 minutes for that device instead. |
+
+Configuration: `DEVICE_TRUST_KEY` (32 bytes base64; without it a random key per process, so devices are forgotten on restart), `DEVICE_TRUST_DAYS` (90), `SIGNIN_LINK_MINUTES` (15).
+
+New `/admin/alerts` kinds: `auth_abuse_detected`, `stuffing_from_ip` (high); `failed_sign_in_burst`, `sign_in_failure_spike` (medium). Computed from the audit log (`apps/api/src/audit/auth-abuse-alerts.ts`).
+
+| Action | Outcome and reason |
+|---|---|
+| `auth.login` | New `DENIED` reasons: `rate_limited_pair`, `rate_limited_network`, `rate_limited_stuffing_ip`; while under attack `stepup_wrong_password`, `stepup_unknown_account`, `stepup_account_not_activated`, `stepup_account_deactivated`, `stepup_access_expired`, `stepup_link_sent` (right password, link emailed) and `stepup_link_not_sent` (right password, no mail or over 3 an hour). `details.trustedDevice` on failures. `ALLOWED` rows carry `details.via`: `password`, `trusted_device` or `signin_link`. The old `account_locked` and `wrong_password_locked_*` reasons are no longer written |
+| `auth.signin_link` | Only refusals: `malformed_link`, `unknown_link`, `wrong_link_type`, `link_used`, `link_expired`, `not_eligible`, `password_changed` |
+| `auth.account_under_attack` | Once an hour per account: `DENIED`, `many_failed_attempts`, with the attempt count, IP and network |
+| `auth.credential_stuffing` | Once an hour per IP or network: `many_accounts_from_ip` (the IP is then refused for an hour) or `many_accounts_from_network` (its limit drops to 20) |
+| `auth.distributed_guessing` | Once an hour per account: `many_networks_on_account` (4+ networks failed on it) |
+
+| Email | Who gets it |
+|---|---|
+| Sign-in confirmation link (account under attack, right password, untrusted device) | The account holder: time, IP, the link, and what to do if it was not them |
