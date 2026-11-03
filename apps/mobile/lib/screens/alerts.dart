@@ -5,8 +5,8 @@ import '../widgets/phosphor.dart';
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/theme.dart';
+import '../widgets/approvals.dart';
 import '../widgets/ui.dart';
-import 'document_detail.dart';
 import 'shell.dart';
 
 class _Sev {
@@ -45,6 +45,7 @@ class AlertsScreen extends StatefulWidget {
 }
 
 class _AlertsScreenState extends State<AlertsScreen> {
+  final _approvals = GlobalKey<ApprovalsCardState>();
   String _hours = '24';
   List<Map>? _alerts;
   String? _error;
@@ -115,7 +116,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
                 ),
         ),
         gap16,
-        _BreakGlass(onDone: _load),
+        ApprovalsCard(key: _approvals),
+        gap16,
+        _BreakGlass(onDone: () {
+          _load();
+          _approvals.currentState?.load();
+        }),
       ],
     );
   }
@@ -216,7 +222,7 @@ class _BreakGlass extends StatefulWidget {
 class _BreakGlassState extends State<_BreakGlass> {
   final _doc = TextEditingController();
   final _reason = TextEditingController();
-  Map? _result;
+  bool _asked = false;
   String? _error;
   bool _busy = false;
 
@@ -236,13 +242,14 @@ class _BreakGlassState extends State<_BreakGlass> {
       _busy = true;
     });
     try {
-      final r = await Api.I.post('/admin/break-glass', {'documentId': _doc.text.trim(), 'reason': _reason.text}) as Map;
+      // Break-glass needs a second administrator (THREATS.md S19): this asks.
+      await Api.I.post('/admin/approvals', {'action': 'BREAK_GLASS', 'documentId': _doc.text.trim(), 'reason': _reason.text});
       if (!mounted) return;
       setState(() {
-        _result = r;
+        _asked = true;
         _reason.clear();
       });
-      toast(context, 'Emergency access granted for one hour. This was alerted.', tone: Tone.blue);
+      toast(context, 'Request sent. Another administrator must approve it.', tone: Tone.blue);
       widget.onDone();
     } catch (e) {
       if (mounted) setState(() => _error = errorText(e));
@@ -306,7 +313,7 @@ class _BreakGlassState extends State<_BreakGlass> {
                 ),
                 gap12,
                 Text(
-                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of read access to a single document. The reason is recorded in the audit trail, raised as an alert, and shown in the document's own history to its owner.",
+                  "Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of read access to a single document. A second administrator must approve; then you open it from the requests above, once, within 24 hours. The owner is emailed when it is approved, and the reason is in the audit trail, the alerts and the document's history. With only one administrator it is impossible.",
                   style: ts(context, size: 13, color: p.body, height: 1.55),
                 ),
                 gap16,
@@ -329,21 +336,11 @@ class _BreakGlassState extends State<_BreakGlass> {
                   ),
                 ),
                 gap16,
-                Btn('Take emergency access', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.siren, loading: _busy, expand: true, onPressed: _submit),
+                Btn('Ask for emergency access', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.siren, loading: _busy, expand: true, onPressed: _submit),
                 if (_error != null) ...[gap12, TvAlert(_error!)],
-                if (_result != null) ...[
+                if (_asked) ...[
                   gap12,
-                  TvAlert(
-                    'Access to "${_result!['title']}" until ${formatDate(_result!['expiresAt'] as String?)}.',
-                    tone: Tone.amber,
-                    title: 'Emergency access granted',
-                    action: Btn(
-                      'Open document',
-                      size: BtnSize.sm,
-                      icon: PhosphorIconsDuotone.arrowSquareOut,
-                      onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DocumentDetailScreen(id: _result!['documentId'] as String))),
-                    ),
-                  ),
+                  const TvAlert('Once another admin approves, open the access from "Requests waiting for approval" above.', tone: Tone.amber, title: 'Waiting for a second administrator'),
                 ],
               ],
             ),

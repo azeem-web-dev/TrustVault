@@ -123,7 +123,7 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
   const toast = useToast();
   const [documentId, setDocumentId] = useState('');
   const [reason, setReason] = useState('');
-  const [result, setResult] = useState<{ documentId: string; title: string; expiresAt: string } | null>(null);
+  const [asked, setAsked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -132,10 +132,11 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      const r = await api.post<{ documentId: string; title: string; expiresAt: string }>('/admin/break-glass', { documentId: documentId.trim(), reason });
-      setResult(r);
+      // Break-glass needs a second administrator (THREATS.md S19): this asks.
+      await api.post('/admin/approvals', { action: 'BREAK_GLASS', documentId: documentId.trim(), reason });
+      setAsked(true);
       setReason('');
-      toast('Emergency access granted for one hour. This was alerted.', 'info');
+      toast('Request sent. Another administrator must approve it on the Approvals page.', 'info');
       onDone();
     } catch (err) {
       setError(errorText(err));
@@ -153,8 +154,9 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
           <div className="min-w-0 flex-1">
             <h2 className="text-[15px] font-semibold">Break-glass access</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              Administrators cannot open documents. In an emergency (legal hold, incident response) you can take one hour of read access to a single document.
-              The reason is recorded in the audit trail, raised as an alert, and shown in the document&apos;s own history to its owner.
+              Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of read access to a single document.
+              A second administrator must approve; then you open it from the Approvals page, once, within 24 hours. The owner is emailed when it is approved,
+              and the reason is recorded in the audit trail, raised as an alert, and shown in the document&apos;s own history. With only one administrator it is impossible.
             </p>
           </div>
           <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">Audited and alerted</span>
@@ -164,11 +166,11 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
           <div className="sm:col-span-2">
             <Label label="Reason (at least 20 characters)" hint={`${reason.length}/500`}><Textarea rows={2} required minLength={20} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Legal hold requested by counsel, ticket LEG-142" /></Label>
           </div>
-          <div><Button type="submit" variant="danger" icon={<Siren size={16} />} loading={busy}>Take emergency access</Button></div>
+          <div><Button type="submit" variant="danger" icon={<Siren size={16} />} loading={busy}>Ask for emergency access</Button></div>
         </form>
         {error && <div className="mt-4"><Alert>{error}</Alert></div>}
-        {result && (
-          <div className="mt-4"><Alert tone="amber" title="Emergency access granted">Access to &quot;{result.title}&quot; until {formatDate(result.expiresAt)}. <Link className="font-semibold underline" href={`/documents/${result.documentId}`}>Open document</Link></Alert></div>
+        {asked && (
+          <div className="mt-4"><Alert tone="amber" title="Waiting for a second administrator">Once another admin approves, open the access from <Link className="font-semibold underline" href="/admin/approvals">Approvals</Link>.</Alert></div>
         )}
       </div>
     </section>

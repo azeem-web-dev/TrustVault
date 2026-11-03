@@ -10,6 +10,7 @@ import '../core/api.dart';
 import '../core/format.dart';
 import '../core/session.dart';
 import '../core/theme.dart';
+import '../widgets/approvals.dart';
 import '../widgets/ui.dart';
 import 'shell.dart';
 
@@ -272,7 +273,20 @@ class _UsersState extends State<_Users> {
                     onSelected: (v) {
                       switch (v) {
                         case 'mfa':
-                          _run(() => Api.I.post('/admin/users/${u['id']}/mfa/reset'), 'Second factor reset for $email; they must set it up again');
+                          // An owner's or admin's second factor needs a second
+                          // admin's approval (THREATS.md S19): ask for it.
+                          if (u['role'] == 'OWNER' || u['role'] == 'ADMIN') {
+                            askApproval(
+                              context,
+                              title: 'Reset the second factor of $email',
+                              description: 'Another administrator must approve (Alerts tab); then you clear it from there, once, within 24 hours. They are emailed when it happens.',
+                              body: {'action': 'MFA_RESET', 'targetUserId': u['id']},
+                            ).then((sent) {
+                              if (sent && context.mounted) toast(context, 'Request sent. Another administrator must approve it.');
+                            });
+                          } else {
+                            _run(() => Api.I.post('/admin/users/${u['id']}/mfa/reset'), 'Second factor reset for $email; they must set it up again');
+                          }
                         case 'deactivate':
                           _run(() => Api.I.post('/admin/users/${u['id']}/deactivate'), invited ? 'Invitation for $email cancelled' : '$email deactivated and signed out');
                         case 'reactivate':

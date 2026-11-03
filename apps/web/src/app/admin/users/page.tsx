@@ -9,7 +9,8 @@ import { Shell } from '@/components/shell';
 import { useSession } from '@/components/session';
 import { useToast } from '@/components/toast';
 import { SpotArt } from '@/components/art';
-import { Alert, Avatar, Badge, Button, EmptyState, Input, Label, Modal, PageTitle, Segmented, Select, SkeletonRows, StatCard, cx } from '@/components/ui';
+import Link from 'next/link';
+import { Alert, Avatar, Badge, Button, EmptyState, Input, Label, Modal, PageTitle, Segmented, Select, SkeletonRows, StatCard, Textarea, cx } from '@/components/ui';
 import { api, errorText, type Role } from '@/lib/api';
 
 interface AdminUser {
@@ -46,6 +47,7 @@ export default function AdminUsersPage() {
   const [creating, setCreating] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [inviting, setInviting] = useState<string | null>(null);
+  const [asking, setAsking] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -190,7 +192,11 @@ export default function AdminUsersPage() {
                       <td className="whitespace-nowrap px-5 py-3 text-right">
                         <div className="inline-flex gap-1.5">
                           {!self && !u.isProtected && u.totpEnabledAt && (
-                            <Button size="sm" variant="ghost" icon={<Fingerprint size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/mfa/reset`), `Second factor reset for ${u.email}; they must set it up again`)}>Reset 2FA</Button>
+                            // An owner's or admin's second factor is cleared only with a second
+                            // admin's approval (THREATS.md S19): this asks for it.
+                            u.role === 'OWNER' || u.role === 'ADMIN'
+                              ? <Button size="sm" variant="ghost" icon={<Fingerprint size={14} />} onClick={() => setAsking(u)}>Reset 2FA…</Button>
+                              : <Button size="sm" variant="ghost" icon={<Fingerprint size={14} />} onClick={() => void run(() => api.post(`/admin/users/${u.id}/mfa/reset`), `Second factor reset for ${u.email}; they must set it up again`)}>Reset 2FA</Button>
                           )}
                           {!self && !u.isProtected && u.status === 'INVITED' && (
                             <Button size="sm" variant="ghost" icon={<PaperPlaneTilt size={14} />} loading={inviting === u.id} onClick={() => void resendInvite(u)}>Resend invite</Button>
@@ -216,6 +222,8 @@ export default function AdminUsersPage() {
           </div>
         )}
       </div>
+
+      <AskMfaReset user={asking} onClose={() => setAsking(null)} onAsked={() => { setAsking(null); toast('Request sent. Another administrator must approve it on the Approvals page; then you clear the factor from there.'); }} />
 
       <CreateUser
         open={creating}
@@ -294,6 +302,46 @@ function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () =
           <Input icon={<CalendarBlank size={18} />} type="date" required={form.role === 'EXTERNAL'} min={new Date().toISOString().slice(0, 10)} value={form.accessExpiresAt} onChange={(e) => setForm({ ...form, accessExpiresAt: e.target.value })} />
         </Label>
         {error && <Alert>{error}</Alert>}
+      </form>
+    </Modal>
+  );
+}
+
+/** Asks a second administrator to approve clearing an owner's or admin's second factor. */
+function AskMfaReset({ user, onClose, onAsked }: { user: AdminUser | null; onClose: () => void; onAsked: () => void }) {
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setReason(''); setError(null); }, [user]);
+  if (!user) return null;
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post('/admin/approvals', { action: 'MFA_RESET', targetUserId: user.id, reason });
+      onAsked();
+    } catch (err) {
+      setError(errorText(err, 'Request failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Reset the second factor of ${user.displayName}`}
+      description="Clearing an owner's or administrator's second factor needs a second administrator. Say why; another admin approves on the Approvals page, then you carry it out once, within 24 hours. The person is emailed when it happens."
+      icon={<Fingerprint size={20} />}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="ask-mfa" loading={busy}>Ask for approval</Button></>}
+    >
+      <form id="ask-mfa" onSubmit={submit} className="space-y-4">
+        <Label label="Reason (at least 20 characters)" hint={`${reason.length}/500`}>
+          <Textarea rows={3} required minLength={20} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Lost phone, confirmed by video call, ticket IT-311" />
+        </Label>
+        {error && <Alert>{error}</Alert>}
+        <p className="text-xs text-slate-500 dark:text-slate-400">See <Link className="font-semibold underline" href="/admin/approvals">Approvals</Link> for the request.</p>
       </form>
     </Modal>
   );
