@@ -68,9 +68,58 @@ jobs:
           CHROME_PATH: /usr/bin/google-chrome
           E2E_SKIP_BUILD: '1'
         run: cd apps/api && npm run test:e2e
-      - name: Mutation check (remove each authorisation rule; tests must fail)
-        if: github.event_name == 'push'
-        run: node tools/mutation-check.mjs
+
+  mutation:
+    # 204 rows, each a separate test run: split across 8 machines in parallel.
+    # The full committed report comes from a local `node tools/mutation-check.mjs`.
+    name: Mutation check ${{ matrix.shard }}/8 (remove each authorisation rule; tests must fail)
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-superuser
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      PUBLIC_ORIGIN: https://vault.test
+      DATABASE_URL: postgresql://tv_dev_app:ci-app@127.0.0.1:5432/trustvault_test
+      TEST_DATABASE_URL: postgresql://tv_dev_app:ci-app@127.0.0.1:5432/trustvault_test
+      TEST_DATABASE_OWNER_URL: postgresql://tv_dev_owner:ci-owner@127.0.0.1:5432/trustvault_test
+      REDIS_URL: redis://127.0.0.1:6379
+      KEY_PROVIDER: local
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Create database roles (same layout as production)
+        run: PGPASSWORD=ci-superuser psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f infra/ci/setup-db.sql
+      - name: Install (no install scripts except the approved ones)
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild prisma @prisma/engines esbuild
+      - name: Generate a throwaway master key for the local key provider
+        run: echo "LOCAL_MASTER_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Generate Prisma client
+        run: cd apps/api && npx prisma generate
+      - name: Mutations in this shard
+        run: node tools/mutation-check.mjs --shard ${{ matrix.shard }}/8
 
   mobile:
     name: Android app (analyze, unit/widget tests, static security check)

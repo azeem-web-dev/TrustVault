@@ -8,6 +8,7 @@
 //
 //   node tools/mutation-check.mjs            (from the repo root; needs the test DB)
 //   node tools/mutation-check.mjs --only 7   (one mutation; --only 56-69 for a range)
+//   node tools/mutation-check.mjs --shard 3/8 (every 8th row from row 3; CI runs 8 in parallel)
 //
 // Source files are always restored, even on Ctrl-C. Database mutations are
 // applied to the TEST database only and reverted afterwards.
@@ -585,6 +586,12 @@ async function main() {
   const onlyIdx = process.argv.indexOf('--only');
   const [lo, hi = lo] = onlyIdx > 0 ? String(process.argv[onlyIdx + 1]).split('-').map(Number) : [];
   const only = lo ? { lo, hi } : null;
+  // --shard K/N: run every Nth row starting at K (CI runs N of these in parallel).
+  const shardIdx = process.argv.indexOf('--shard');
+  const [sk, sn] = shardIdx > 0 ? String(process.argv[shardIdx + 1]).split('/').map(Number) : [];
+  const shard = sn ? { k: sk, n: sn } : null;
+  if (shard && !(shard.k >= 1 && shard.k <= shard.n)) { console.error('--shard K/N needs 1 <= K <= N'); process.exit(2); }
+  const selected = (n) => (!only || (n >= only.lo && n <= only.hi)) && (!shard || (n - 1) % shard.n === shard.k - 1);
 
   if (process.argv.includes('--dry-run')) {
     let missing = 0;
@@ -597,8 +604,10 @@ async function main() {
     process.exit(missing ? 1 : 0);
   }
 
-  console.log('baseline: running the full suite unmodified...');
-  const baseline = runTests([]);
+  // A shard's baseline is the test files its rows use (the full suite runs in the main API job).
+  const baselineFiles = shard ? [...new Set(MUTATIONS.flatMap((m, i) => (selected(i + 1) ? m.tests : [])))] : [];
+  console.log(shard ? `baseline: shard ${shard.k}/${shard.n}, ${baselineFiles.length} test files unmodified...` : 'baseline: running the full suite unmodified...');
+  const baseline = runTests(baselineFiles);
   if (baseline.failed) {
     console.error(`baseline is not green (${baseline.summary}); fix the tests first`);
     for (const l of baseline.failures) console.error(`  ${l}`);
@@ -609,7 +618,7 @@ async function main() {
   const results = [];
   for (const [i, m] of MUTATIONS.entries()) {
     const n = i + 1;
-    if (only && (n < only.lo || n > only.hi)) continue;
+    if (!selected(n)) continue;
     process.stdout.write(`#${String(n).padStart(2)} ${m.name} ... `);
     let applied = true;
     try {
@@ -652,8 +661,10 @@ async function main() {
     ...results.map((r) => `| ${r.n} | ${r.name} | ${r.kind === 'code' ? `\`${r.file.replace('../../', '')}\`` : 'database'} | ${r.tests.map((t) => `\`${t.replace('test/', '')}\``).join(', ')} | **${r.verdict}** — ${r.summary} |`),
     '',
   ];
-  writeFileSync(join(ROOT, 'docs/MUTATION_REPORT.md'), lines.join('\n'));
-  console.log(`\n${caught}/${results.length} caught. Report: docs/MUTATION_REPORT.md`);
+  // A shard does not rewrite the committed report; it names what was not caught.
+  if (!shard) writeFileSync(join(ROOT, 'docs/MUTATION_REPORT.md'), lines.join('\n'));
+  for (const r of results.filter((x) => x.verdict !== 'CAUGHT')) console.log(`NOT CAUGHT: #${r.n} ${r.name} (${r.verdict})`);
+  console.log(`\n${caught}/${results.length} caught.${shard ? '' : ' Report: docs/MUTATION_REPORT.md'}`);
   process.exit(caught === results.length ? 0 : 1);
 }
 
