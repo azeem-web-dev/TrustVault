@@ -34,8 +34,13 @@ export async function sealFile(keys: KeyProvider, plaintext: Buffer, aad: string
   }
 }
 
-export async function openFile(keys: KeyProvider, sealed: SealedFile, aad: string): Promise<Buffer> {
-  const dataKey = await keys.unwrap(sealed.wrappedKey, sealed.keyId, aad);
+/**
+ * `ticket` comes from issueUnwrapTicket() (tickets.ts), minted by the
+ * database for this exact version, user, action and audit event; the key
+ * service refuses to unwrap a document data key without it.
+ */
+export async function openFile(keys: KeyProvider, sealed: SealedFile, aad: string, ticket: string): Promise<Buffer> {
+  const dataKey = await keys.unwrap(sealed.wrappedKey, sealed.keyId, aad, ticket);
   try {
     const decipher = createDecipheriv('aes-256-gcm', dataKey, sealed.nonce);
     decipher.setAAD(Buffer.from(aad, 'utf8'));
