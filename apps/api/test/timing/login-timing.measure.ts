@@ -2,8 +2,9 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { createUser, ORIGIN, ownerDb, resetState, startApp, withDb, type TestApp, type TestUser } from '../helpers.js';
+import { createUser, ORIGIN, resetState, startApp, type TestApp, type TestUser } from '../helpers.js';
 import { RedisService } from '../../src/redis/redis.service.js';
+import { emailKey, LIMITS } from '../../src/auth/login-throttle.service.js';
 import { PARAMS } from '../../src/auth/password.service.js';
 
 /**
@@ -12,11 +13,14 @@ import { PARAMS } from '../../src/auth/password.service.js';
  * Interleaves, in random order, failed logins for:
  *   unknown   an email with no account
  *   wrong     a real account, wrong password
- *   locked    a real, locked account, wrong password
+ *   locked    a real account under attack (more than 10 failed attempts
+ *             in the hour), wrong password: answered 202 "check your email"
+ *             (there is no per-account lock any more; THREATS.md S19)
  * through the full HTTP stack with production Argon2 parameters, then asks
  * how well an attacker could tell them apart: a threshold is fitted on half
  * of the samples and scored on the other half. 50% means "coin toss".
- * Writes docs/LOGIN_TIMING.md.
+ * Writes docs/LOGIN_TIMING.md. The automated, CI-safe check is
+ * test/timing.test.ts; this script is the slow, full-strength measurement.
  */
 
 const N = Number(process.env.TIMING_SAMPLES ?? 250);
@@ -40,18 +44,16 @@ async function clearLimits() {
   const redis = t.app.get(RedisService).client;
   let cursor = '0';
   do {
-    const [next, found] = await redis.scan(cursor, 'MATCH', 'tvdev:test:rl:*', 'COUNT', 500);
+    const prefix = (redis.options.keyPrefix ?? '') as string;
+    const [next, found] = await redis.scan(cursor, 'MATCH', `${prefix}rl:*`, 'COUNT', 500);
     cursor = next;
-    if (found.length) await redis.del(...found.map((k) => k.slice('tvdev:test:'.length)));
+    if (found.length) await redis.del(...found.map((k) => k.slice(prefix.length)));
   } while (cursor !== '0');
 }
 
 async function prepare() {
   await clearLimits();
-  await withDb(ownerDb(), async (db) => {
-    await db.query(`UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = $1`, [real.id]);
-    await db.query(`UPDATE users SET failed_login_count = 3, locked_until = now() + interval '1 hour' WHERE id = $1`, [locked.id]);
-  });
+  await t.app.get(RedisService).client.set(`rl:login:acct:${emailKey(locked.email)}`, String(LIMITS.account.soft + 5), 'EX', 600);
 }
 
 async function timeOne(kind: Kind): Promise<number> {
@@ -59,7 +61,7 @@ async function timeOne(kind: Kind): Promise<number> {
   const start = process.hrtime.bigint();
   const res = await t.http.post('/api/auth/login').set('Origin', ORIGIN).send({ email, password: 'definitely-not-the-password' });
   const ms = Number(process.hrtime.bigint() - start) / 1e6;
-  if (res.status !== 401) throw new Error(`expected 401 for ${kind}, got ${res.status}`);
+  if (res.status !== (kind === 'locked' ? 202 : 401)) throw new Error(`unexpected ${res.status} for ${kind}`);
   return ms;
 }
 
@@ -117,7 +119,7 @@ it(`login timing: ${N} samples per case`, async () => {
     'An attacker\'s best single threshold, fitted on half the samples and tested on the other half (50% = coin toss):',
     '',
     `- unknown email vs real account, wrong password: **${(vsWrong * 100).toFixed(1)}%** (median difference ${diffWrong.toFixed(1)} ms)`,
-    `- unknown email vs locked account: **${(vsLocked * 100).toFixed(1)}%** (median difference ${diffLocked.toFixed(1)} ms)`,
+    `- unknown email vs account under attack (202 "check your email"): **${(vsLocked * 100).toFixed(1)}%** (median difference ${diffLocked.toFixed(1)} ms)`,
     '',
     'Every failed login, whatever the reason, also gets the same response body and status (401, "Invalid email or password"), and is rate limited per account and per IP, which caps how many samples a real attacker could collect.',
     ...(FLOOR === undefined ? ['', 'The padding hides small differences; the code paths are also equal without it. With the padding off (`TIMING_FLOOR_MS=0`): [LOGIN_TIMING_floor0.md](LOGIN_TIMING_floor0.md).', ''] : []),
