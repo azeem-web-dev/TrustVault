@@ -13,6 +13,7 @@ import '../widgets/art.dart';
 import '../widgets/ui.dart';
 import 'account.dart';
 import 'alerts.dart';
+import 'approvals.dart';
 import 'audit.dart';
 import 'document_detail.dart';
 import 'documents.dart';
@@ -38,6 +39,7 @@ class _HomeShellState extends State<HomeShell> {
 
   List<_Tab> _tabs(User u) => [
     const _Tab('Documents', PhosphorIconsDuotone.files, 'Everything you can open', DocumentsScreen()),
+    if (!u.isAdmin) const _Tab('Approvals', PhosphorIconsDuotone.sealCheck, 'Download requests waiting for you', ApprovalsScreen()),
     if (u.isAdmin) ...[
       const _Tab('Audit', PhosphorIconsDuotone.listMagnifyingGlass, 'Who did what, when', AuditScreen()),
       const _Tab('Alerts', PhosphorIconsDuotone.bellRinging, 'Activity worth a look', AlertsScreen()),

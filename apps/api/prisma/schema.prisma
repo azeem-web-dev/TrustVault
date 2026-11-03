@@ -90,6 +90,13 @@ model User {
   approvalsRefused  AdminApproval[] @relation("ApprovalRejecter")
   approvalsAboutMe  AdminApproval[] @relation("ApprovalTargetUser")
   offlineKeys      OfflineKey[]
+  downloadApproverFor Grant[]          @relation("GrantDownloadApprover")
+  downloadRequests    DownloadApproval[] @relation("DownloadRequester")
+  downloadDecisions   DownloadApproval[] @relation("DownloadDecider")
+  overridesReceived   AccessOverride[]   @relation("OverrideUser")
+  overridesGiven      AccessOverride[]   @relation("OverrideCreatedBy")
+  overridesEnded      AccessOverride[]   @relation("OverrideRevokedBy")
+  rolePoliciesSet     RoleAccessPolicy[]
 
   @@map("users")
 }
@@ -208,6 +215,8 @@ model Document {
   breakGlass BreakGlass[]
   approvals  AdminApproval[]
   offlineKeys OfflineKey[]
+  downloadApprovals DownloadApproval[]
+  accessOverrides   AccessOverride[]
 
   @@index([ownerId])
   @@index([category])
@@ -234,6 +243,7 @@ model DocumentVersion {
   uploadedBy User          @relation(fields: [uploadedById], references: [id])
   blob       DocumentBlob?
   quarantine VersionQuarantine?
+  downloadApprovals DownloadApproval[]
 
   @@unique([documentId, versionNo])
   @@map("document_versions")
@@ -278,9 +288,21 @@ model Grant {
   grantedById String     @map("granted_by_id") @db.Uuid
   createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// Access policy (THREATS.md P1-P12). Downloads need an approval.
+  downloadApproval   Boolean  @default(false) @map("download_approval")
+  /// A manager the owner nominated to approve downloads (the owner always can).
+  downloadApproverId String?  @map("download_approver_id") @db.Uuid
+  /// Time window: ISO days (1 Mon .. 7 Sun), local minutes [start, end), IANA zone.
+  windowDays         Int[]    @map("window_days") @db.SmallInt
+  windowStartMin     Int?     @map("window_start_min") @db.SmallInt
+  windowEndMin       Int?     @map("window_end_min") @db.SmallInt
+  windowTz           String?  @map("window_tz")
+  /// Network allowlist (canonical CIDR strings). Null: any network.
+  allowedCidrs       String[] @map("allowed_cidrs")
 
   document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user      User?    @relation("GrantUser", fields: [userId], references: [id])
+  downloadApprover User? @relation("GrantDownloadApprover", fields: [downloadApproverId], references: [id], onDelete: SetNull)
   group     Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   grantedBy User     @relation("GrantGrantedBy", fields: [grantedById], references: [id])
   /// For a group grant: the members the sharer confirmed (THREATS.md A19).
@@ -459,4 +481,82 @@ model OfflineKey {
 
   @@id([documentId, userId])
   @@map("offline_keys")
+}
+
+// ---------------------------------------------------------------------------
+// Access policies (migration 20261103600000, THREATS.md P1-P12)
+// ---------------------------------------------------------------------------
+
+enum DownloadApprovalStatus {
+  PENDING
+  APPROVED
+  USED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+/// Organisation-wide time window and network rules for one role. Admins only.
+model RoleAccessPolicy {
+  role           Role     @id
+  windowDays     Int[]    @map("window_days") @db.SmallInt
+  windowStartMin Int?     @map("window_start_min") @db.SmallInt
+  windowEndMin   Int?     @map("window_end_min") @db.SmallInt
+  windowTz       String?  @map("window_tz")
+  allowedCidrs   String[] @map("allowed_cidrs")
+  updatedById    String   @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User @relation(fields: [updatedById], references: [id])
+
+  @@map("role_access_policies")
+}
+
+/// An owner's emergency exception: lifts one share's conditions for one person, at most 24 hours.
+model AccessOverride {
+  id          String    @id @default(uuid()) @db.Uuid
+  documentId  String    @map("document_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  createdById String    @map("created_by_id") @db.Uuid
+  reason      String
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedById String?   @map("revoked_by_id") @db.Uuid
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user      User     @relation("OverrideUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User     @relation("OverrideCreatedBy", fields: [createdById], references: [id])
+  revokedBy User?    @relation("OverrideRevokedBy", fields: [revokedById], references: [id])
+
+  @@index([documentId, userId])
+  @@map("access_overrides")
+}
+
+/// A request to download one version, and its decision. Changed only by
+/// tv_decide_download / tv_consume_download / tv_expire_downloads.
+model DownloadApproval {
+  id           String                 @id @default(uuid()) @db.Uuid
+  documentId   String                 @map("document_id") @db.Uuid
+  versionId    String                 @map("version_id") @db.Uuid
+  requesterId  String                 @map("requester_id") @db.Uuid
+  reason       String
+  status       DownloadApprovalStatus @default(PENDING)
+  decidedById  String?                @map("decided_by_id") @db.Uuid
+  decidedAt    DateTime?              @map("decided_at") @db.Timestamptz(6)
+  decisionNote String?                @map("decision_note")
+  validUntil   DateTime?              @map("valid_until") @db.Timestamptz(6)
+  maxUses      Int?                   @map("max_uses")
+  uses         Int                    @default(0)
+  lastUseTx    BigInt?                @map("last_use_tx")
+  createdAt    DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document  Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version   DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  requester User            @relation("DownloadRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  decidedBy User?           @relation("DownloadDecider", fields: [decidedById], references: [id])
+
+  @@index([documentId, createdAt])
+  @@index([requesterId, versionId])
+  @@map("download_approvals")
 }

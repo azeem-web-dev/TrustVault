@@ -31,6 +31,9 @@ import { SharingService } from './documents/sharing.service.js';
 import { ViewingService } from './documents/viewing.service.js';
 import { DocumentsController } from './documents/documents.controller.js';
 import { FoldersController } from './documents/folders.controller.js';
+import { DownloadApprovalsService } from './documents/download-approvals.service.js';
+import { AccessPolicyService } from './documents/access-policy.service.js';
+import { DownloadRequestsController, RolePoliciesController } from './documents/policies.controller.js';
 import { JobsService } from './jobs/jobs.service.js';
 import { MailService } from './mail/mail.service.js';
 import { NotifyService } from './mail/notify.service.js';
@@ -59,6 +62,7 @@ export class AppModule {
         HealthController, AuthController, MfaController, UsersController, GroupsController, DirectoryController, ApprovalsController,
         DocumentsController, FoldersController, AuditAdminController, WitnessController,
         SessionsController, SettingsController,
+        DownloadRequestsController, RolePoliciesController,
       ],
       providers: [
         { provide: ENV, useValue: env },
@@ -80,6 +84,8 @@ export class AppModule {
         DocumentsService,
         SharingService,
         ViewingService,
+        DownloadApprovalsService,
+        AccessPolicyService,
         JobsService,
         RescanService,
         MailService,

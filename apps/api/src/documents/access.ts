@@ -1,7 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import type { Tx } from '../db/prisma.service.js';
-import type { Actor } from '../common/request-context.js';
+import { type Actor, currentContext } from '../common/request-context.js';
+import { ipAllowed, normalizeIp } from '../common/ip.js';
+import { type AccessWindow, describeWindow, inWindow } from './schedule.js';
 
 /**
  * THE AUTHORISATION DECISION FOR DOCUMENTS.
@@ -39,6 +41,7 @@ export const REQUIRED_LEVEL = {
   restore: Level.OWNER,
   purge: Level.OWNER,
   transfer: Level.OWNER,
+  override: Level.OWNER,     // emergency exception to a share's conditions
 } as const;
 
 export type DocAction = keyof typeof REQUIRED_LEVEL;
@@ -49,24 +52,78 @@ const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'do
 /** Actions that only read: they share the document's lock (see require()). */
 const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'download', 'offline_key']);
 
+/** Conditions a share (or a role) puts on access: THREATS.md P1-P12. */
+export interface AccessConditions {
+  window?: AccessWindow | null;
+  networks?: string[] | null;
+}
+
+export interface GrantFacts extends AccessConditions {
+  level: 'VIEW' | 'READ' | 'EDIT' | 'MANAGE';
+  expiresAt: string | null;
+  viaGroup: boolean;
+  /** Downloads through this share need an approval. */
+  downloadApproval?: boolean;
+}
+
 /** Raw facts from tv_access_facts(); no decision has been made yet. */
 export interface AccessFacts {
   document: { ownerId: string; status: 'ACTIVE' | 'DELETED' } | null;
   user: { role: 'ADMIN' | 'OWNER' | 'VIEWER' | 'EXTERNAL'; status: 'ACTIVE' | 'DEACTIVATED' | 'INVITED'; accessExpiresAt: string | null } | null;
-  grants: { level: 'VIEW' | 'READ' | 'EDIT' | 'MANAGE'; expiresAt: string | null; viaGroup: boolean }[];
+  grants: GrantFacts[];
   breakGlassUntil: string | null;
+  /** Organisation-wide rules for the user's role (administrators set them). */
+  rolePolicy?: AccessConditions | null;
+  /** An owner's emergency exception for this user on this document. */
+  overrideUntil?: string | null;
+}
+
+/** Where the request comes from: the client IP as derived by Express (trusted proxy only). */
+export interface RequestOrigin {
+  ip: string | null;
 }
 
 export interface Decision {
   allowed: boolean;
   level: Level;
   reason: string;
+  /** The bytes need a download approval (THREATS.md P8). */
+  approvalRequired?: boolean;
+  /** Why a share that exists did not count; shown to the person. */
+  policyMessage?: string;
 }
+
+/** Refusals caused by an access policy rather than by having no share. */
+export const POLICY_REASONS: ReadonlySet<string> = new Set(['outside_time_window', 'network_not_allowed']);
 
 const GRANT_LEVEL = { VIEW: Level.VIEW, READ: Level.READ, EDIT: Level.EDIT, MANAGE: Level.MANAGE } as const;
 
+/**
+ * Does a live grant count right now? The role rules first (an owner's
+ * exception never lifts them), then the share's own window and network,
+ * unless the owner gave an exception. Null when usable, else why not.
+ */
+export function grantBlocked(g: AccessConditions, facts: AccessFacts, now: Date, origin: RequestOrigin): { reason: string; message: string } | null {
+  const role = facts.rolePolicy;
+  if (role) {
+    if (role.window && !inWindow(role.window, now)) return { reason: 'outside_time_window', message: `Your role can open shared documents only ${describeWindow(role.window)}` };
+    if (!ipAllowed(role.networks, origin.ip)) return { reason: 'network_not_allowed', message: 'Your role can open shared documents only from approved networks' };
+  }
+  if (facts.overrideUntil && new Date(facts.overrideUntil) > now) return null;
+  if (g.window && !inWindow(g.window, now)) return { reason: 'outside_time_window', message: `This share is available only ${describeWindow(g.window)}` };
+  if (!ipAllowed(g.networks, origin.ip)) return { reason: 'network_not_allowed', message: 'This share can be opened only from approved networks' };
+  return null;
+}
+
+interface Effective {
+  level: Level;
+  reason: string;
+  approvalRequired?: boolean;
+  policyMessage?: string;
+}
+
 /** Effective level of `userId` on the document described by `facts`. Pure. */
-export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): { level: Level; reason: string } {
+export function effectiveLevel(facts: AccessFacts, userId: string, now: Date, origin: RequestOrigin = { ip: null }): Effective {
   const { document: doc, user } = facts;
   if (!doc) return { level: Level.NONE, reason: 'no_such_document' };
   if (!user) return { level: Level.NONE, reason: 'no_such_user' };
@@ -85,26 +142,34 @@ export function effectiveLevel(facts: AccessFacts, userId: string, now: Date): {
   if (doc.status !== 'ACTIVE') return { level: Level.NONE, reason: 'document_deleted' };
 
   let level = Level.NONE;
+  let blocked: { reason: string; message: string } | null = null;
+  // Downloads need an approval unless a usable share that allows
+  // downloading does not ask for one, or the owner gave an exception.
+  let freeDownload = Boolean(facts.overrideUntil && new Date(facts.overrideUntil) > now);
   for (const g of facts.grants) {
     if (g.expiresAt && new Date(g.expiresAt) <= now) continue;          // expired grant
     if (g.viaGroup && user.role === 'EXTERNAL') continue;               // externals never get access through groups
+    const why = grantBlocked(g, facts, now, origin);
+    if (why) { blocked ??= why; continue; }                             // outside its time window or network
     level = Math.max(level, GRANT_LEVEL[g.level]);
+    // VIEW never downloads, so a VIEW share without approval frees nothing.
+    if (!g.downloadApproval && GRANT_LEVEL[g.level] >= Level.READ) freeDownload = true;
   }
-  const reason = level > Level.NONE ? 'grant' : 'no_grant';
   if (user.role === 'EXTERNAL') level = Math.min(level, Level.READ);    // externals: read at most
-  return { level, reason };
+  if (level === Level.NONE && blocked) return { level, reason: blocked.reason, policyMessage: blocked.message };
+  return { level, reason: level > Level.NONE ? 'grant' : 'no_grant', approvalRequired: level >= Level.READ && !freeDownload };
 }
 
 /** Is `action` allowed? Pure: same facts, same answer. */
-export function evaluate(facts: AccessFacts, userId: string, action: DocAction, now: Date = new Date()): Decision {
-  const { level, reason } = effectiveLevel(facts, userId, now);
-  if (level === Level.NONE) return { allowed: false, level, reason };
+export function evaluate(facts: AccessFacts, userId: string, action: DocAction, now: Date = new Date(), origin: RequestOrigin = { ip: null }): Decision {
+  const { level, reason, approvalRequired, policyMessage } = effectiveLevel(facts, userId, now, origin);
+  if (level === Level.NONE) return { allowed: false, level, reason, ...(policyMessage ? { policyMessage } : {}) };
   if (facts.document?.status === 'DELETED' && !TRASH_ACTIONS.has(action)) {
     return { allowed: false, level, reason: 'document_in_trash' };
   }
   const needed = REQUIRED_LEVEL[action];
   if (level < needed) return { allowed: false, level, reason: `needs_${Level[needed].toLowerCase()}` };
-  return { allowed: true, level, reason };
+  return { allowed: true, level, reason, approvalRequired: approvalRequired === true };
 }
 
 @Injectable()
@@ -136,11 +201,14 @@ export class AccessService {
              EXISTS (SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id
                       WHERE s.id = ${actor.sessionId}::uuid AND s.user_id = ${actor.userId}::uuid AND s.revoked_at IS NULL
                         AND s.expires_at > clock_timestamp() AND s.created_at >= u.password_changed_at) AS session_live`;
-    let decision = evaluate(state!.facts, actor.userId, action);
+    // Time windows and network rules need the client address (THREATS.md P5).
+    const origin: RequestOrigin = { ip: normalizeIp(currentContext()?.ip) };
+    let decision = evaluate(state!.facts, actor.userId, action, new Date(), origin);
     // The session was checked before the lock; a password reset or sign-out
     // everywhere that committed since then ends it here too.
     if (decision.allowed && !state!.session_live) decision = { allowed: false, level: Level.NONE, reason: 'session_ended' };
     if (!decision.allowed) {
+      const policy = POLICY_REASONS.has(decision.reason);
       await this.audit.record({
         action: `document.${action}`,
         outcome: 'DENIED',
@@ -148,7 +216,11 @@ export class AccessService {
         targetType: 'document',
         targetId: documentId,
         documentId: decision.reason === 'no_such_document' ? undefined : documentId,
+        ...(policy ? { details: { ip: origin.ip } } : {}),
       });
+      // Someone who holds a share, refused only by its time window or
+      // network, is told why: they already know the document exists.
+      if (policy) throw new ForbiddenException({ message: decision.policyMessage, code: decision.reason });
       throw new NotFoundException('Document not found');
     }
     return decision;

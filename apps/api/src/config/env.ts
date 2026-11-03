@@ -8,6 +8,13 @@ const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4100),
+  /**
+   * Proxies whose X-Forwarded-For is believed (Express "trust proxy"): a
+   * comma-separated list of addresses, CIDR ranges or the names loopback,
+   * linklocal, uniquelocal. Default: nginx on the same machine only. Access
+   * policies' network rules depend on this being exactly right (THREATS.md P6).
+   */
+  TRUSTED_PROXIES: z.string().regex(/^[0-9A-Za-z.:/,\s]+$/).default('loopback'),
   /** The only browser origin allowed to make state-changing requests. */
   PUBLIC_ORIGIN: z.url(),
   DATABASE_URL: z.string().startsWith('postgresql://'),

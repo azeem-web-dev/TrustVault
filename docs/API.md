@@ -163,3 +163,56 @@ Mail is sent after the change it reports is committed. It never delays or fails 
 ## Passkeys from the Android app
 
 The app uses Android's Credential Manager. Android reports the origin as `android:apk-key-hash:<base64url SHA-256 of the app's signing certificate>`, so the API accepts the origins listed in `PASSKEY_ANDROID_ORIGINS` (comma separated, checked at startup) as well as `PUBLIC_ORIGIN`. The RP id is always the website's host name, so one passkey works in both. Android only offers it to the app after reading `https://vault.rayyanazeem.cloud/.well-known/assetlinks.json` (served by the web app from `apps/web/public/.well-known/`), which names the package and the release certificate's fingerprint.
+## Access policies: download approval, working hours, networks
+
+Conditions an owner can put on a share, and rules administrators can set per role (THREATS.md P1-P15, design in `docs/ACCESS_POLICIES.md`). Both locks enforce them: `decide()` in the API and `tv_doc_level()` / the `blobs_release` row-level security policy in Postgres.
+
+**On a share.** `PUT /documents/:id/access` takes an optional `policy`:
+
+```json
+{ "userId": "…", "level": "READ",
+  "policy": { "downloadApproval": true, "approverId": "<a manager, optional>",
+              "window": { "days": [1,2,3,4,5], "start": "09:00", "end": "18:00", "timeZone": "Europe/London" },
+              "networks": ["10.0.0.0/8", "2001:db8::/32"] } }
+```
+
+- `days` are ISO (1 Monday … 7 Sunday) of the **local** date; `start` inclusive, `end` exclusive, `24:00` allowed as an end; windows over midnight are refused (use two days). `timeZone` must be a named IANA zone (`UTC+5` style offsets are refused). Daylight-saving changes follow the zone's rules.
+- `networks`: up to 32 IPv4/IPv6 CIDR ranges; a bare address is a /32 or /128; a range with host bits set (`10.0.0.1/8`) is refused with the range you probably meant.
+- Omitting `policy` when changing an existing share keeps its conditions. Only the owner may change conditions a share already has (`403`); anyone who may share can put conditions on a new share.
+- `GET /documents/:id/access` returns each grant's `policy` and, for the owner, the `overrides` in force.
+
+Outside its window or network a share gives nothing. If that leaves the caller with no access, document routes answer `403 {"code":"outside_time_window" | "network_not_allowed", "message": "…"}` (the person holds a share, so they are told why) and the refusal is audited with the client IP. Owners are never limited on their own documents.
+
+**Client IP.** Express derives it from the socket and believes `X-Forwarded-For` only from `TRUSTED_PROXIES` (default `loopback`, i.e. nginx on the same machine, which overwrites the header). It takes the right-most address not set by a trusted proxy. An IP allowlist checks the network, not the device: do not use it as the only control.
+
+| Method | Path | Who may call | Notes |
+|---|---|---|---|
+| GET | `/documents/:id` | READ or better | Now also returns `downloadNeedsApproval`. |
+| GET | `/documents/:id/download`, `/documents/:id/versions/:n/download` | READ or better | When downloads need approval: uses one approved download **of that exact version** (oldest-expiring approval first), in the same transaction that reads the bytes. None: `403 {"code":"approval_required","versionNo":n}`, audited `document.download` DENIED `approval_required`. |
+| POST | `/documents/:id/download-requests` | READ or better, on a share that needs approval | `{reason (10-500 chars), versionNo?}` (default: current version). `201 {id, status:"PENDING", versionNo}`. `400` if no approval is needed; `409` if you already have a pending request for that version. The owner and any nominated approver are emailed (never demo accounts). 30 per hour per user. |
+| GET | `/documents/:id/download-requests` | READ or better | Your own requests on the document (`mine: true`); all of them for the owner or the nominated approver. Expired ones are marked first. |
+| GET | `/download-requests` | signed in | Pending requests you may decide: on documents you own, or shares where the owner nominated you (and you still have MANAGE). |
+| POST | `/download-requests/:rid/approve` | the owner, or the nominated approver; **never the requester** | `{hours 1-72 (default 24), uses 1-10 (default 1), note?}`. The requester is emailed. `403` for your own request (audited `self_approval`); `404` for a request you cannot see (audited `no_such_request`); `409` if already decided or older than 7 days (then marked expired). |
+| POST | `/download-requests/:rid/reject` | same | `{note?}`. Recorded and the requester is told. |
+| POST | `/documents/:id/overrides` | owner only | Emergency exception: `{userId, reason (10-500), hours 1-24 (default 4)}`. Lifts the time window, network and download-approval conditions of that person's share on this document until it ends; never raises the level, never lifts role rules. The person is emailed, and the owner gets a receipt. |
+| DELETE | `/documents/:id/overrides/:overrideId` | owner only | Ends an exception early. |
+| GET | `/admin/access-policies` | ADMIN | Role rules in force. |
+| PUT | `/admin/access-policies/:role` | ADMIN | `role` = `OWNER`, `VIEWER` or `EXTERNAL`. `{window?, networks?}` (at least one). Applies on top of every share held by people with that role; an owner's exception does not lift it; owners' own documents are not affected. |
+| DELETE | `/admin/access-policies/:role` | ADMIN | Removes the role's rules. |
+
+**Emails.** Download requested → the owner and any nominated approver. Approved / not approved → the requester. Emergency exception → the person, plus a receipt to the owner. Demo accounts never get mail.
+
+**Audit actions.**
+
+| Action | Outcome and reason |
+|---|---|
+| `download_approval.request` | `ALLOWED`, with `versionNo` and `reason` |
+| `download_approval.approve` / `.reject` | `ALLOWED` with the terms (`hours`, `uses`, `validUntil`, `note`); or `DENIED` with `self_approval`, `not_approver`, `no_such_request` or `database_refused` |
+| `download_approval.use` | `ALLOWED`, one per download released, with `use` of `of` |
+| `download_approval.expire` | `ALLOWED` by `system`: `pending_too_long` (7 days) or `approval_window_ended` (hourly job, and on listing) |
+| `document.download` | also `DENIED` `approval_required`; an `ALLOWED` row names the `approvalId` used |
+| `document.<action>` | also `DENIED` `outside_time_window` / `network_not_allowed`, with the client `ip` |
+| `access.grant` / `access.change` | `details.policy` when conditions were set |
+| `access.revoke` | `details.approvalsCancelled`: open requests and approvals of that person cancelled with the share |
+| `access.override` / `access.override_end` | `ALLOWED`, with the person, reason and end time |
+| `policy.role_set` / `policy.role_clear` | `ALLOWED`, with the new and previous rules |

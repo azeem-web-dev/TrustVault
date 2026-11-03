@@ -5,6 +5,7 @@ import type { Actor } from '../common/request-context.js';
 import type { GrantLevel } from '../generated/prisma/enums.js';
 import { AccessService, Level } from './access.js';
 import { NotifyService } from '../mail/notify.service.js';
+import { listOrNull, networkColumns, type SharePolicyInput, windowColumns, windowOut } from './policy-input.js';
 
 export interface GrantInput {
   userId?: string | undefined;
@@ -13,6 +14,8 @@ export interface GrantInput {
   expiresAt?: Date | null | undefined;
   /** Set when the owner confirmed an access suggestion; recorded in the audit. */
   fromSuggestion?: boolean | undefined;
+  /** Conditions on the share (THREATS.md P1-P12). Omitted on an existing share: unchanged. */
+  policy?: SharePolicyInput | undefined;
 }
 
 const MAX_GRANT_DAYS = 366;
@@ -56,13 +59,28 @@ export class SharingService {
           group: { select: { id: true, name: true, _count: { select: { members: true } } } },
           _count: { select: { coveredMembers: true } },
           grantedBy: { select: { displayName: true } },
+          downloadApproval: true, windowDays: true, windowStartMin: true, windowEndMin: true, windowTz: true, allowedCidrs: true,
+          downloadApprover: { select: { id: true, displayName: true } },
         },
+      });
+      // Emergency exceptions: visible to the owner (row-level security).
+      const overrides = await tx.accessOverride.findMany({
+        where: { documentId, revokedAt: null, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, reason: true, createdAt: true, expiresAt: true, user: { select: { id: true, displayName: true, email: true } } },
       });
       return {
         owner: doc.owner,
+        overrides,
         grants: grants.map((g) => ({
           id: g.id, level: g.level, expiresAt: g.expiresAt, createdAt: g.createdAt, grantedBy: g.grantedBy.displayName,
           expired: g.expiresAt !== null && g.expiresAt <= new Date(),
+          policy: {
+            downloadApproval: g.downloadApproval,
+            approver: g.downloadApprover ? { id: g.downloadApprover.id, name: g.downloadApprover.displayName } : null,
+            window: windowOut(listOrNull(g.windowDays), g.windowStartMin, g.windowEndMin, g.windowTz),
+            networks: listOrNull(g.allowedCidrs),
+          },
           subject: g.user
             ? { type: 'user' as const, id: g.user.id, name: g.user.displayName, email: g.user.email, role: g.user.role, active: g.user.status === 'ACTIVE' }
             : { type: 'group' as const, id: g.group!.id, name: g.group!.name, members: g.group!._count.members, covered: g._count.coveredMembers, pending: Math.max(0, g.group!._count.members - g._count.coveredMembers) },
@@ -73,6 +91,15 @@ export class SharingService {
 
   async grant(actor: Actor, documentId: string, input: GrantInput) {
     if (Boolean(input.userId) === Boolean(input.groupId)) throw new BadRequestException('Share with exactly one person or one group');
+    // Validated before any transaction: clear messages, nothing half-written.
+    const policy = input.policy ? {
+      downloadApproval: input.policy.downloadApproval,
+      approverId: input.policy.downloadApproval ? (input.policy.approverId ?? null) : null,
+      window: windowColumns(input.policy.window),
+      networks: networkColumns(input.policy.networks),
+    } : null;
+    if (input.policy?.approverId && !input.policy.downloadApproval) throw new BadRequestException('Nominate an approver only when downloads need approval');
+    if (policy?.approverId && policy.approverId === input.userId) throw new BadRequestException('The person receiving the share cannot approve their own downloads');
     if (input.expiresAt) {
       if (input.expiresAt.getTime() <= Date.now()) throw new BadRequestException('Expiry must be in the future');
       if (input.expiresAt.getTime() > Date.now() + MAX_GRANT_DAYS * 86_400_000) throw new BadRequestException('Expiry can be at most one year away');
@@ -115,16 +142,34 @@ export class SharingService {
 
       const existing = await tx.grant.findFirst({
         where: { documentId, ...(input.userId ? { userId: input.userId } : { groupId: input.groupId }) },
-        select: { id: true, level: true, expiresAt: true },
+        select: { id: true, level: true, expiresAt: true, downloadApproval: true, windowDays: true, allowedCidrs: true },
       });
       // Only the owner may change or replace a MANAGE grant.
       if (existing?.level === 'MANAGE' && decision.level < Level.OWNER) throw new ForbiddenException('Only the owner can change MANAGE access');
+      // Only the owner may change the conditions on an existing share; a
+      // manager could otherwise lift what the owner set (THREATS.md P11).
+      const hadConditions = Boolean(existing && (existing.downloadApproval || listOrNull(existing.windowDays) || listOrNull(existing.allowedCidrs)));
+      if (hadConditions && policy && decision.level < Level.OWNER) throw new ForbiddenException('Only the owner can change the conditions on a share');
+      if (policy?.approverId) {
+        const approverLevel = await tx.$queryRaw<{ l: number }[]>`SELECT tv_doc_level(${documentId}::uuid, ${policy.approverId}::uuid) AS l`;
+        if ((approverLevel[0]?.l ?? 0) < Level.MANAGE) throw new BadRequestException('The approver must be someone who can manage this document');
+      }
 
       const saved = existing
         ? await tx.grant.update({ where: { id: existing.id }, data: { level: input.level, expiresAt, grantedById: actor.userId } })
         : await tx.grant.create({
             data: { documentId, userId: input.userId ?? null, groupId: input.groupId ?? null, level: input.level, expiresAt, grantedById: actor.userId },
           });
+
+      if (policy) {
+        // Raw SQL: a NULL list means "no rule", which the client cannot express for list columns.
+        await tx.$executeRaw`
+          UPDATE grants SET download_approval = ${policy.downloadApproval}, download_approver_id = ${policy.approverId}::uuid,
+                 window_days = ${policy.window.days}::smallint[], window_start_min = ${policy.window.start}::smallint,
+                 window_end_min = ${policy.window.end}::smallint, window_tz = ${policy.window.tz},
+                 allowed_cidrs = ${policy.networks}::text[]
+           WHERE id = ${saved.id}::uuid`;
+      }
 
       // A group share covers the members there now; anyone added later waits
       // for the owner or a manager to confirm (THREATS.md A19).
@@ -137,6 +182,7 @@ export class SharingService {
           subject: subject as never, level: input.level, expiresAt: expiresAt?.toISOString() ?? null,
           previous: existing ? { level: existing.level, expiresAt: existing.expiresAt?.toISOString() ?? null } : null,
           source: input.fromSuggestion ? 'suggestion_confirmed_by_owner' : 'manual',
+          ...(policy ? { policy: { downloadApproval: policy.downloadApproval, approverId: policy.approverId, window: policy.window.days ? { days: policy.window.days, start: policy.window.start, end: policy.window.end, tz: policy.window.tz } : null, networks: policy.networks } } : {}),
           ...(covered !== null ? { membersCovered: covered } : {}),
         },
       }, tx);
@@ -161,13 +207,18 @@ export class SharingService {
       if (grant.level === 'MANAGE' && decision.level < Level.OWNER && grant.userId !== actor.userId) {
         throw new ForbiddenException('Only the owner can remove MANAGE access');
       }
+      // Open download requests and approvals of this person on this document
+      // are cancelled with the share (trigger grants_cancel_approvals).
+      const approvalsCancelled = grant.userId
+        ? await tx.downloadApproval.count({ where: { documentId, requesterId: grant.userId, status: { in: ['PENDING', 'APPROVED'] } } })
+        : 0;
       await tx.grant.delete({ where: { id: grant.id } });
       // Revoking a person's own grant does not touch group grants that also
       // cover them. Say so instead of claiming their access is gone (R7).
       const stillHas = grant.userId ? await remainingLevel(tx, documentId, grant.userId) : null;
       await this.audit.record({
         action: 'access.revoke', outcome: 'ALLOWED', targetType: 'grant', targetId: grant.id, documentId,
-        details: { level: grant.level, stillHas, subject: grant.userId ? { type: 'user', id: grant.userId, email: grant.user?.email ?? null } : { type: 'group', id: grant.groupId, name: grant.group?.name ?? null } },
+        details: { level: grant.level, stillHas, approvalsCancelled, subject: grant.userId ? { type: 'user', id: grant.userId, email: grant.user?.email ?? null } : { type: 'group', id: grant.groupId, name: grant.group?.name ?? null } },
       }, tx);
       return { stillHas };
     });
