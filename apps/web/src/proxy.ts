@@ -11,7 +11,11 @@ export function proxy(request: NextRequest) {
   const csp = [
     `default-src 'self'`,
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
-    `style-src 'self' 'unsafe-inline'`,
+    // Production: no 'unsafe-inline' for styles. Next emits stylesheets as
+    // <link>s and React sets style props through the CSSOM (not affected);
+    // the few server-rendered style attributes became classes. Development
+    // keeps 'unsafe-inline': the dev server injects <style> tags for hot reload.
+    dev ? `style-src 'self' 'unsafe-inline'` : `style-src 'self' 'nonce-${nonce}'`,
     `img-src 'self' data: blob:`,
     `font-src 'self'`,
     `connect-src 'self'`,
@@ -33,6 +37,8 @@ export function proxy(request: NextRequest) {
   response.headers.set('Referrer-Policy', 'no-referrer');
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  // Every page is per-user and dynamic: never stored by a browser or proxy.
+  response.headers.set('Cache-Control', 'no-store');
   return response;
 }
 

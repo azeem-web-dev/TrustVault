@@ -41,7 +41,7 @@ export function VaultHero({ className }: { className?: string }) {
       </g>
 
       {/* floating document cards */}
-      <g className="animate-float" style={{ animationDelay: '-1s' }}>
+      <g className="animate-float-1">
         <g transform="translate(52 92) rotate(-10)">
           <rect width="92" height="116" rx="12" fill={`url(#${g('card')})`} stroke="#ffffff" strokeOpacity="0.35" />
           <rect x="14" y="18" width="38" height="6" rx="3" fill="#fda4af" />
@@ -52,7 +52,7 @@ export function VaultHero({ className }: { className?: string }) {
           <text x="29" y="93" textAnchor="middle" fontSize="9" fontWeight="700" fill="#fff" fontFamily="sans-serif">PDF</text>
         </g>
       </g>
-      <g className="animate-float" style={{ animationDelay: '-3.5s' }}>
+      <g className="animate-float-2">
         <g transform="translate(338 70) rotate(9)">
           <rect width="92" height="116" rx="12" fill={`url(#${g('card')})`} stroke="#ffffff" strokeOpacity="0.35" />
           <rect x="14" y="18" width="44" height="6" rx="3" fill="#86efac" />
@@ -65,7 +65,7 @@ export function VaultHero({ className }: { className?: string }) {
           <text x="29" y="96" textAnchor="middle" fontSize="9" fontWeight="700" fill="#fff" fontFamily="sans-serif">XLS</text>
         </g>
       </g>
-      <g className="animate-float" style={{ animationDelay: '-5s' }}>
+      <g className="animate-float-3">
         <g transform="translate(350 214) rotate(-6)">
           <rect width="78" height="96" rx="11" fill={`url(#${g('card')})`} stroke="#ffffff" strokeOpacity="0.3" />
           <rect x="12" y="16" width="34" height="5" rx="2.5" fill="#93c5fd" />
@@ -114,7 +114,7 @@ export function VaultHero({ className }: { className?: string }) {
         ))}
         <g transform="translate(334 -6)">
           <circle r="9" fill="#a78bfa" />
-          <circle r="9" fill="none" stroke="#a78bfa" className="animate-pulse-ring" style={{ transformOrigin: 'center', transformBox: 'fill-box' }} />
+          <circle r="9" fill="none" stroke="#a78bfa" className="animate-pulse-ring origin-center [transform-box:fill-box]" />
         </g>
       </g>
     </svg>
@@ -174,8 +174,8 @@ export function SpotArt({ icon, tone = 'brand' }: { icon: ReactNode; tone?: keyo
         <rect x="38" y="38" width="52" height="52" rx="16" fill={`url(#${id}-tile)`} />
         <rect x="38" y="38" width="52" height="26" rx="16" fill="#fff" fillOpacity="0.12" />
         <circle cx="22" cy="40" r="4" fill={b} fillOpacity="0.5" className="animate-float" />
-        <rect x="100" y="28" width="10" height="10" rx="3" fill={a} fillOpacity="0.45" transform="rotate(20 105 33)" className="animate-float" style={{ animationDelay: '-2s' }} />
-        <circle cx="104" cy="98" r="5" fill={a} fillOpacity="0.35" className="animate-float" style={{ animationDelay: '-4s' }} />
+        <rect x="100" y="28" width="10" height="10" rx="3" fill={a} fillOpacity="0.45" transform="rotate(20 105 33)" className="animate-float-4" />
+        <circle cx="104" cy="98" r="5" fill={a} fillOpacity="0.35" className="animate-float-5" />
         <path d="M20 92 l4 4 m0 -4 l-4 4" stroke={b} strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-white">{icon}</span>

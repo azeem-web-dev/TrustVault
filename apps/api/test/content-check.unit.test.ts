@@ -108,6 +108,13 @@ describe('PDF: structural inspection (pdf-lib, inside compressed object streams)
     expect(await refused(p, 'x.pdf')).toBe('The PDF has a compressed stream that expands beyond the limit');
   });
 
+  it('the limits apply only inside the check: other pdf-lib users in the process are unaffected', async () => {
+    const p = B.pdf({ extra: [B.bombObjStm(4, 40 * 1024 * 1024)] });
+    expect(await refused(p, 'x.pdf')).toBe('The PDF has a compressed stream that expands beyond the limit');
+    // The same bytes through pdf-lib directly (as download stamping would) decode in full.
+    await expect(PDFDocument.load(p, { throwOnInvalidObject: false })).resolves.toBeDefined();
+  });
+
   it('refuses encrypted PDFs (their streams cannot be inspected)', async () => {
     expect(await refused(B.pdf({ trailerExtra: '/Encrypt<</Filter/Standard/V 2/R 3/O(x)/U(y)/P -4>>' }), 'x.pdf'))
       .toBe('Encrypted PDFs cannot be checked; remove the password and upload again');

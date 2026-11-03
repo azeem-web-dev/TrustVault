@@ -153,6 +153,16 @@ export default function DocumentPage() {
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               {current.quarantine ? (
                 <Button disabled icon={<Prohibit size={18} />}>Download blocked</Button>
+              ) : current.mimeType.startsWith('text/csv') ? (
+                // CSV: by default a copy with spreadsheet formulas disabled
+                // (cells starting = + - @ get a leading '), so opening it in
+                // Excel cannot run anything. The original bytes stay available.
+                <>
+                  <ButtonLink href={`/api/documents/${doc.id}/download?variant=formulas-disabled`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
+                    Download (formulas disabled)
+                  </ButtonLink>
+                  <ButtonLink href={`/api/documents/${doc.id}/download`} size="lg" icon={<DownloadSimple size={18} />}>Original file</ButtonLink>
+                </>
               ) : (
                 <ButtonLink href={`/api/documents/${doc.id}/download`} variant="primary" size="lg" icon={<DownloadSimple size={18} />}>
                   Download <span className="hidden max-w-[12rem] truncate font-normal opacity-80 md:inline">{current.fileName}</span>

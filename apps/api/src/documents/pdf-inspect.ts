@@ -56,6 +56,9 @@ let collected: PDFObject[] | null = null;
 
 const originalEnsure = DecodeStream.prototype.ensureBuffer;
 DecodeStream.prototype.ensureBuffer = function ensureBuffer(this: { buffer: Uint8Array }, requested: number) {
+  // Only while inspectPdf() runs: other pdf-lib users in this process
+  // (e.g. download stamping) are left alone.
+  if (!collected) return originalEnsure.call(this, requested);
   const before = this.buffer?.byteLength ?? 0;
   if (requested > PDF_LIMITS.maxStreamBytes) overLimit('The PDF has a compressed stream that expands beyond the limit');
   const out = originalEnsure.call(this, requested);

@@ -64,6 +64,9 @@ export class ErrorsFilter implements ExceptionFilter {
       const body = exception.getResponse();
       const payload: Record<string, unknown> =
         typeof body === 'string' ? { message: body } : { ...(body as Record<string, unknown>) };
+      // Express/Nest's own 404 for an unknown route says 'Cannot GET /the/path':
+      // never echo the request back (THREATS.md W6).
+      if (exception instanceof NotFoundException && /^Cannot [A-Z]+ /.test(String(payload.message))) payload.message = 'Not found';
       delete payload.error;
       delete payload.statusCode;
       res.status(status).json({ ...payload, requestId });
