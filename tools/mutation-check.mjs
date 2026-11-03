@@ -456,7 +456,7 @@ const MUTATIONS = [
   code('reset: per-IP limit on using links', 'src/auth/password-reset.service.ts',
     "await this.limits.hit(`reset-use:ip:${currentContext()?.ip ?? 'unknown'}`, 20, 900, 'Too many attempts. Try again in a few minutes.');", '', ['test/auth-abuse.test.ts']),
   code('forgot: padded to the failure floor (timing)', 'src/auth/password-reset.service.ts',
-    'if (wait > 0) await sleep(wait);', '', ['test/timing.test.ts']),
+    'for (let wait = until - performance.now(); wait > 0; wait = until - performance.now()) await sleep(Math.ceil(wait));', '', ['test/timing.test.ts']),
   code('login: failures padded to the floor (timing)', 'src/auth/auth.service.ts',
     'if (err instanceof UnauthorizedException) await pad();', '', ['test/timing.test.ts']),
   // --- upload content checks (THREATS.md C1-C8) ------------------------------
