@@ -66,6 +66,7 @@ describe('step-up for risky actions', () => {
     const a = as(t, s);
     const risky: [string, () => request.Test][] = [
       ['role change', () => a.patch(`/api/admin/users/${id}`, { role: 'OWNER' })],
+      ['extend access window', () => a.patch(`/api/admin/users/${id}`, { accessExpiresAt: new Date(Date.now() + 365 * 86_400_000).toISOString() })],
       ['deactivate', () => a.post(`/api/admin/users/${id}/deactivate`)],
       ['MFA reset', () => a.post(`/api/admin/users/${id}/mfa/reset`)],
       ['ask a second admin', () => a.post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: id, reason: 'x'.repeat(30) })],

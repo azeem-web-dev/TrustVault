@@ -65,9 +65,13 @@ export class UsersController {
     return { ok: true, ...(await this.invites.send(actor, id, true)) };
   }
 
-  /** A role change needs a fresh second factor (THREATS.md S20); other edits do not. */
+  /**
+   * A role change or a change to someone's access window (`accessExpiresAt`,
+   * which grants or restores an external's access) needs a fresh second factor
+   * (THREATS.md S20); a cosmetic edit such as the display name does not.
+   */
   @Patch(':id')
-  @StepUp((req) => typeof req.body === 'object' && req.body !== null && 'role' in req.body)
+  @StepUp((req) => typeof req.body === 'object' && req.body !== null && ('role' in req.body || 'accessExpiresAt' in req.body))
   async update(@CurrentActor() actor: Actor, @Param('id', uuid) id: string, @Body(new ZodPipe(UpdateUserSchema)) body: z.infer<typeof UpdateUserSchema>) {
     return { user: await this.users.update(actor, id, body) };
   }
