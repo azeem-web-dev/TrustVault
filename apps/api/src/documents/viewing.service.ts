@@ -5,7 +5,8 @@ import { AuditService } from '../audit/audit.service.js';
 import { KEY_PROVIDER, type KeyProvider } from '../crypto/key-provider.js';
 import { blobAad, openFile, sha256 } from '../crypto/file-crypto.js';
 import { issueUnwrapTicket, isTicketRefusal, keyServiceRefusal, ticketRefusalReason } from '../crypto/tickets.js';
-import type { Actor } from '../common/request-context.js';
+import { currentContext, type Actor } from '../common/request-context.js';
+import { ipPrefix } from '../risk/net.js';
 import { AccessService } from './access.js';
 import { countPages, drawPage, pageKind, traceCode, watermark, type PageKind } from './pages.js';
 
@@ -78,6 +79,11 @@ export class ViewingService {
         action: 'document.page_view', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
         details: { page: n, pages: total, versionNo: src.versionNo, trace, at: at.toISOString() },
       }, tx);
+      // A page view is a fact for the insider rules too (bulk_page_views).
+      const ip = currentContext()?.ip ?? null;
+      await tx.$executeRaw`
+        INSERT INTO download_facts (user_id, session_id, document_id, version_no, ip, ip_prefix, kind)
+        VALUES (${actor.userId}::uuid, ${actor.sessionId}::uuid, ${id}::uuid, ${src.versionNo}, ${ip}, ${ipPrefix(ip)}, 'page_view')`;
     }).catch((err: unknown) => this.refused(err, id, 'document.page_view'));
     return { png, trace };
   }

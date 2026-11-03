@@ -13,6 +13,7 @@ import { remainingLevel } from './sharing.service.js';
 import { detectType, RejectedFile, safeFileName } from './content-check.js';
 import { MALWARE_SCANNER, ScannerUnavailable, type MalwareScanner } from '../scanning/malware-scanner.js';
 import { pageKind, stampDownload, traceCode } from './pages.js';
+import { DownloadLimitsService } from '../risk/download-limits.service.js';
 
 export interface UploadedFile {
   buffer: Buffer;
@@ -92,6 +93,7 @@ export class DocumentsService {
     @Inject(KEY_PROVIDER) private readonly keys: KeyProvider,
     @Inject(MALWARE_SCANNER) private readonly scanner: MalwareScanner,
     @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
+    @Inject(DownloadLimitsService) private readonly limits: DownloadLimitsService,
   ) {}
 
   // ------------------------------------------------------------------ search
@@ -240,6 +242,11 @@ export class DocumentsService {
         });
         throw new ForbiddenException(`This version was quarantined: the malware scanner found ${version.quarantine.signature} in it`);
       }
+      // Hard download limits (THREATS.md U9): counted and enforced here,
+      // after the access decision and before an approval is used or
+      // anything is audited or sent. The per-person quota lock is taken
+      // after the user and document locks (lock order in THREATS.md R11).
+      await this.limits.enforce(tx, actor, id, version.versionNo);
       // Downloads that need approval use one approved download of exactly
       // this version, in this transaction. The database releases the blob
       // row only to the transaction that used the approval (blobs_release).
@@ -259,12 +266,15 @@ export class DocumentsService {
       }
       // Audited and committed BEFORE any byte leaves the server: if the
       // audit write fails, nothing is sent. The database refuses this row if
-      // the grant or account expired since the check (R11).
+      // the grant or account expired since the check (R11). This is the
+      // "authorized" step of the download lifecycle; completion is recorded
+      // after the response (DownloadLifecycleService), same downloadId.
+      const downloadId = randomUUID();
       const event = await this.audit.record({
         action: 'document.download', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id,
         details: {
           versionNo: version.versionNo, fileName: version.fileName, sha256: Buffer.from(version.sha256).toString('hex'), level: Level[decision.level],
-          ...(approvalId ? { approvalId } : {}),
+          ...(approvalId ? { approvalId } : {}), downloadId,
           // What the copy carries: 'pdf' or 'image' stamp, or 'none' (sent unchanged).
           trace, stamp: ['pdf', 'image'].includes(pageKind(version.mimeType) ?? '') ? pageKind(version.mimeType) : 'none',
         },
@@ -273,7 +283,7 @@ export class DocumentsService {
       // only for this user, version and audit event (docs/KEYS.md). Same
       // transaction, so a refusal here also rolls back the ALLOWED event.
       const ticket = await issueUnwrapTicket(tx, version.id, 'download', event.id);
-      return { ...version, blob, ticket };
+      return { ...version, blob, ticket, downloadId };
     }).catch(async (err: unknown) => {
       if (String((err as Error)?.message).includes('access ended during the request')) {
         await this.audit.record({ action: 'document.download', outcome: 'DENIED', reason: 'access_ended_during_request', targetType: 'document', targetId: id, documentId: id });
@@ -301,11 +311,11 @@ export class DocumentsService {
         if (refusal === 'rate_limited') throw new HttpException('Too many files opened in a short time. Try again in a minute.', HttpStatus.TOO_MANY_REQUESTS);
         throw new ServiceUnavailableException('The key service did not release this file. Try again shortly.');
       }
-      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
+      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'decryption_failed', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo, downloadId: found.downloadId } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
     if (!sha256(plaintext).equals(Buffer.from(found.sha256))) {
-      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'hash_mismatch', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo } });
+      await this.audit.record({ action: 'document.integrity', outcome: 'FAILED', reason: 'hash_mismatch', targetType: 'document', targetId: id, documentId: id, details: { versionNo: found.versionNo, downloadId: found.downloadId } });
       throw new InternalServerErrorException('This file failed its integrity check and was not sent');
     }
     let stamped: Buffer | null = null;
@@ -318,7 +328,7 @@ export class DocumentsService {
     }
     return {
       data: stamped ?? plaintext, fileName: found.fileName, mimeType: found.mimeType, sha256: Buffer.from(found.sha256).toString('hex'),
-      trace, stamped: stamped !== null,
+      trace, stamped: stamped !== null, downloadId: found.downloadId, documentId: id, versionNo: found.versionNo,
     };
   }
 

@@ -44,6 +44,13 @@ import { ClamdScanner, MALWARE_SCANNER, NoScanner, type MalwareScanner } from '.
 import { HealthController } from './health.controller.js';
 import { KeyLedgerService } from './keys/key-ledger.service.js';
 import { KeydAdminController, KeydWitnessController } from './keys/key-ledger.controller.js';
+import { RiskController } from './risk/risk.controller.js';
+import { AlertStoreService } from './risk/alert-store.service.js';
+import { AlertGeneratorService } from './risk/alert-generator.service.js';
+import { RiskSettingsService } from './risk/risk-settings.service.js';
+import { DownloadLimitsService } from './risk/download-limits.service.js';
+import { RiskNotifyService } from './risk/risk-notify.service.js';
+import { DownloadLifecycleService } from './risk/download-lifecycle.service.js';
 
 export function createKeyProvider(env: Env): KeyProvider {
   return env.KEY_PROVIDER === 'keyd'
@@ -66,6 +73,7 @@ export class AppModule {
         SessionsController, SettingsController,
         DownloadRequestsController, RolePoliciesController,
         KeydAdminController, KeydWitnessController,
+        RiskController,
       ],
       providers: [
         { provide: ENV, useValue: env },
@@ -96,6 +104,13 @@ export class AppModule {
         NotifyService,
         PasswordResetService,
         InviteService,
+        // Insider-extraction detection: alerts, thresholds, download limits.
+        AlertStoreService,
+        AlertGeneratorService,
+        RiskSettingsService,
+        DownloadLimitsService,
+        RiskNotifyService,
+        DownloadLifecycleService,
         // Global: runs before every route. Deny-by-default authentication.
         { provide: APP_GUARD, useClass: SecurityGuard },
       ],

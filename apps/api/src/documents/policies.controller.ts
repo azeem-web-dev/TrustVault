@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Inject, NotFoundException, Par
 import { z } from 'zod';
 import { ZodPipe } from '../common/zod.pipe.js';
 import type { Actor } from '../common/request-context.js';
-import { CurrentActor, Roles } from '../auth/decorators.js';
+import { CurrentActor, Roles, StepUp } from '../auth/decorators.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { AccessPolicyService } from './access-policy.service.js';
 import { RolePolicySchema } from './policy-input.js';
@@ -59,11 +59,13 @@ export class RolePoliciesController {
   }
 
   @Put(':role')
+  @StepUp()
   set(@CurrentActor() actor: Actor, @Param('role', new ZodPipe(RoleParam)) role: z.infer<typeof RoleParam>, @Body(new ZodPipe(RolePolicySchema)) body: z.infer<typeof RolePolicySchema>) {
     return this.policies.setRolePolicy(actor, role, body);
   }
 
   @Delete(':role')
+  @StepUp()
   @HttpCode(204)
   async clear(@CurrentActor() actor: Actor, @Param('role', new ZodPipe(RoleParam)) role: z.infer<typeof RoleParam>) {
     await this.policies.clearRolePolicy(actor, role);

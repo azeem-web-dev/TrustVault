@@ -282,6 +282,20 @@ describe('bulk copying is noticed and slowed (THREATS.md V7)', () => {
     expect(alert?.message).toContain('viewed 6 pages of 1 document within 10 minutes');
   });
 
+  it('page views also feed the persistent alert queue (insider rules)', async () => {
+    const busy = await createUser({ email: `busy-q-${Date.now()}@v.io`, role: 'VIEWER' });
+    const U = await login(t, busy);
+    const doc = await upload(A, await twoPagePdf(), 'minutes.pdf');
+    await grant(A, doc, { userId: busy.id, level: 'VIEW' }).expect(200);
+    for (let i = 0; i < 6; i++) await as(t, U).get(`/api/documents/${doc}/pages/${(i % 2) + 1}`).expect(200);
+    const facts = await withDb(ownerDb(), (db) => db.query(`SELECT count(*)::int AS n FROM download_facts WHERE user_id = $1 AND kind = 'page_view'`, [busy.id]));
+    expect(facts.rows[0].n).toBe(6);
+    const { AlertGeneratorService } = await import('../src/risk/alert-generator.service.js');
+    await t.app.get(AlertGeneratorService).run();
+    const alerts = await withDb(ownerDb(), (db) => db.query(`SELECT rule, severity FROM security_alerts WHERE subject_user_id = $1`, [busy.id]));
+    expect(alerts.rows).toContainEqual({ rule: 'bulk_page_views', severity: 'high' });
+  });
+
   it('a few pages do not alert', async () => {
     // A fresh address: the audit log (and so the alert window) outlives each test.
     const quiet = await createUser({ email: `quiet-${Date.now()}@v.io`, role: 'VIEWER' });

@@ -7,6 +7,7 @@ import { AuditAdminService } from '../audit/audit-admin.service.js';
 import { RescanService } from '../scanning/rescan.service.js';
 import { DownloadApprovalsService } from '../documents/download-approvals.service.js';
 import { KeyLedgerService } from '../keys/key-ledger.service.js';
+import { AlertGeneratorService } from '../risk/alert-generator.service.js';
 import { logger } from '../common/logger.js';
 
 const QUEUE = 'maintenance';
@@ -15,8 +16,9 @@ const QUEUE = 'maintenance';
  * Scheduled maintenance, run through BullMQ so each job runs once even if
  * the API is restarted mid-way:
  *  - every minute: sign the audit chain head if it moved (checkpoint);
- *                  trustvault-anchor.timer publishes it to Sigstore's log
- *                  copy keyd's key-use ledger and its signed head (also anchored)
+ *                  trustvault-anchor.timer publishes it to Sigstore's log;
+ *                  copy keyd's key-use ledger and its signed head (also anchored);
+ *                  evaluate the alert rules (alerts)
  *  - every hour:   delete expired sessions; verify the full audit chain;
  *                  expire download requests and approvals that ran out;
  *                  reconcile keyd's ledger with the audit log
@@ -36,6 +38,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     @Inject(RescanService) private readonly rescan: RescanService,
     @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
     @Inject(KeyLedgerService) private readonly keyLedger: KeyLedgerService,
+    @Inject(AlertGeneratorService) private readonly alerts: AlertGeneratorService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -45,6 +48,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     const prefix = `${this.env.REDIS_PREFIX}bull`;
     this.queue = new Queue(QUEUE, { connection, prefix });
     await this.queue.upsertJobScheduler('checkpoint', { every: 60_000 }, { name: 'checkpoint' });
+    await this.queue.upsertJobScheduler('alerts', { every: 60_000 }, { name: 'alerts' });
     await this.queue.upsertJobScheduler('sessions', { every: 60 * 60_000 }, { name: 'sessions' });
     await this.queue.upsertJobScheduler('verify', { every: 60 * 60_000 }, { name: 'verify' });
     await this.queue.upsertJobScheduler('download-approvals', { every: 60 * 60_000 }, { name: 'download-approvals' });
@@ -78,6 +82,8 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         return { expired: await this.approvals.expire() };
       case 'rescan':
         return this.rescan.run();
+      case 'alerts':
+        return this.alerts.run();
       default:
         throw new Error(`unknown job ${name}`);
     }

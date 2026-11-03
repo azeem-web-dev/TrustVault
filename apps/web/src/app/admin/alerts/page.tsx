@@ -10,6 +10,8 @@ import { useToast } from '@/components/toast';
 import { SpotArt } from '@/components/art';
 import { Alert, Button, Card, EmptyState, Input, Label, PageTitle, Segmented, SkeletonRows, StatCard, Textarea, cx, relativeTime } from '@/components/ui';
 import { api, errorText, formatDate } from '@/lib/api';
+import { AlertQueue } from './queue';
+import { RiskPolicy } from './policy';
 
 interface AlertItem {
   severity: 'critical' | 'high' | 'medium' | 'info';
@@ -49,6 +51,32 @@ const RANGES = [
 ];
 
 export default function AlertsPage() {
+  const [tab, setTab] = useState<'queue' | 'live' | 'policy'>('queue');
+  // Escalation emails link to /admin/alerts?alert=<id>.
+  const [openId, setOpenId] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('alert');
+    if (id && /^[0-9a-f-]{36}$/i.test(id)) setOpenId(id);
+  }, []);
+
+  return (
+    <Shell>
+      <PageTitle
+        title="Alerts"
+        icon={<BellRinging size={26} />}
+        subtitle="Every alert is kept: the queue shows all of them, highest severity first, with who acknowledged, assigned and resolved each one. Rules cover slow extraction over days and weeks, unusual sign-ins, refusals, integrity and malware."
+        actions={<Segmented value={tab} onChange={setTab} options={[{ id: 'queue', label: 'Queue' }, { id: 'live', label: 'Live view' }, { id: 'policy', label: 'Thresholds and limits' }]} />}
+      />
+      {tab === 'queue' && <AlertQueue key={openId ?? 'queue'} openId={openId} />}
+      {tab === 'live' && <LiveAlerts />}
+      {tab === 'policy' && <RiskPolicy />}
+      <div className="mt-6"><BreakGlass onDone={() => undefined} /></div>
+    </Shell>
+  );
+}
+
+/** The earlier view, computed from the audit log on each visit. Kept for a quick look; the queue is the record. */
+function LiveAlerts() {
   const [hours, setHours] = useState('24');
   const [alerts, setAlerts] = useState<AlertItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,14 +98,8 @@ export default function AlertsPage() {
   const count = (s: AlertItem['severity']) => alerts?.filter((a) => a.severity === s).length ?? '–';
 
   return (
-    <Shell>
-      <PageTitle
-        title="Alerts"
-        icon={<BellRinging size={26} />}
-        subtitle="Activity worth a second look, computed from the audit log: repeated refusals, access attempts after revocation, bulk downloads, external sharing, break-glass use, blocked sign-ins, malware, and any integrity failure."
-        actions={<Segmented value={hours} onChange={setHours} options={RANGES} />}
-      />
-
+    <>
+      <div className="mb-4 flex justify-end"><Segmented value={hours} onChange={setHours} options={RANGES} /></div>
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatCard label="Critical" value={count('critical')} icon={<WarningOctagon size={22} />} tone="red" hint="Act now" />
         <StatCard label="High" value={count('high')} icon={<Warning size={22} />} tone="amber" hint="Look today" delay={60} />
@@ -87,7 +109,7 @@ export default function AlertsPage() {
 
       {error && <div className="mb-4"><Alert onDismiss={() => setError(null)}>{error}</Alert></div>}
 
-      <Card title="What to notice" icon={<BellRinging size={20} />} description={`Last ${RANGES.find((r) => r.id === hours)?.label.toLowerCase()}`} padded={false}>
+      <Card title="What to notice" icon={<BellRinging size={20} />} description={`Last ${RANGES.find((r) => r.id === hours)?.label.toLowerCase()}, recomputed now (up to 20 per kind; the queue keeps every alert)`} padded={false}>
         {!alerts ? <SkeletonRows rows={4} /> : alerts.length === 0 ? (
           <EmptyState art={<SpotArt icon={<ShieldCheck size={30} />} tone="green" />} title="All clear">Nothing unusual in this period.</EmptyState>
         ) : (
@@ -115,8 +137,7 @@ export default function AlertsPage() {
           </ul>
         )}
       </Card>
-      <div className="mt-6"><BreakGlass onDone={load} /></div>
-    </Shell>
+    </>
   );
 }
 

@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../core/theme.dart';
 import '../widgets/approvals.dart';
 import '../widgets/ui.dart';
+import 'alert_queue.dart';
 import 'shell.dart';
 
 class _Sev {
@@ -47,6 +48,8 @@ class AlertsScreen extends StatefulWidget {
 
 class _AlertsScreenState extends State<AlertsScreen> {
   final _approvals = GlobalKey<ApprovalsCardState>();
+  String _tab = 'queue';
+  Key _queueKey = UniqueKey();
   String _hours = '24';
   List<Map>? _alerts;
   String? _error;
@@ -73,49 +76,28 @@ class _AlertsScreenState extends State<AlertsScreen> {
     final p = Pal.of(context);
     final a = _alerts;
     return PageBody(
-      onRefresh: _load,
+      onRefresh: () async {
+        if (_tab == 'queue') {
+          setState(() => _queueKey = UniqueKey());
+        } else {
+          await _load();
+        }
+      },
       children: [
         const PageTitle(
           title: 'Alerts',
           icon: PhosphorIconsDuotone.bellRinging,
-          subtitle: 'Activity worth a second look, computed from the audit log: repeated refusals, access after revocation, bulk downloads, external sharing, break-glass use, blocked sign-ins, malware, and any integrity failure.',
+          subtitle: 'Every alert is kept: the queue shows all of them, highest severity first, with who acknowledged, assigned and resolved each one.',
         ),
         Segmented<String>(
-          value: _hours,
+          value: _tab,
           expand: true,
-          onChanged: (h) {
-            setState(() {
-              _hours = h;
-              _alerts = null;
-            });
-            _load();
-          },
-          options: [for (final (id, label) in _ranges) SegOption(id, label)],
+          onChanged: (t) => setState(() => _tab = t),
+          options: const [SegOption('queue', 'Queue'), SegOption('live', 'Live view')],
         ),
         gap16,
-        StatGrid(
-          children: [
-            StatCard(label: 'Critical', value: _count('critical'), icon: PhosphorIconsDuotone.warningOctagon, tone: Tone.red, hint: 'Act now'),
-            StatCard(label: 'High', value: _count('high'), icon: PhosphorIconsDuotone.warning, tone: Tone.amber, hint: 'Look today', delay: 60),
-            StatCard(label: 'Medium', value: _count('medium'), icon: PhosphorIconsDuotone.fire, tone: Tone.violet, hint: 'Worth a check', delay: 120),
-            StatCard(label: 'Info', value: _count('info'), icon: PhosphorIconsDuotone.info, tone: Tone.blue, hint: 'For the record', delay: 180),
-          ],
-        ),
-        gap16,
-        if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
-        TvCard(
-          title: 'What to notice',
-          icon: PhosphorIconsDuotone.bellRinging,
-          description: 'Last ${_ranges.firstWhere((r) => r.$1 == _hours).$2.toLowerCase()}',
-          padded: false,
-          child: a == null
-              ? const SkeletonRows(rows: 4)
-              : a.isEmpty
-              ? const EmptyState(icon: PhosphorIconsDuotone.shieldCheck, tone: Tone.green, title: 'All clear', body: 'Nothing unusual in this period.')
-              : RowList(
-                  children: [for (var i = 0; i < a.length; i++) Rise(delay: i * 30, child: _alertRow(context, p, a[i]))],
-                ),
-        ),
+        if (_tab == 'queue') AlertQueueView(key: _queueKey),
+        if (_tab == 'live') ..._live(context, p, a),
         gap16,
         ApprovalsCard(key: _approvals),
         gap16,
@@ -125,6 +107,47 @@ class _AlertsScreenState extends State<AlertsScreen> {
         }),
       ],
     );
+  }
+
+  List<Widget> _live(BuildContext context, Pal p, List<Map>? a) {
+    return [
+      Segmented<String>(
+        value: _hours,
+        expand: true,
+        onChanged: (h) {
+          setState(() {
+            _hours = h;
+            _alerts = null;
+          });
+          _load();
+        },
+        options: [for (final (id, label) in _ranges) SegOption(id, label)],
+      ),
+      gap16,
+      StatGrid(
+        children: [
+          StatCard(label: 'Critical', value: _count('critical'), icon: PhosphorIconsDuotone.warningOctagon, tone: Tone.red, hint: 'Act now'),
+          StatCard(label: 'High', value: _count('high'), icon: PhosphorIconsDuotone.warning, tone: Tone.amber, hint: 'Look today', delay: 60),
+          StatCard(label: 'Medium', value: _count('medium'), icon: PhosphorIconsDuotone.fire, tone: Tone.violet, hint: 'Worth a check', delay: 120),
+          StatCard(label: 'Info', value: _count('info'), icon: PhosphorIconsDuotone.info, tone: Tone.blue, hint: 'For the record', delay: 180),
+        ],
+      ),
+      gap16,
+      if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
+      TvCard(
+        title: 'What to notice',
+        icon: PhosphorIconsDuotone.bellRinging,
+        description: 'Last ${_ranges.firstWhere((r) => r.$1 == _hours).$2.toLowerCase()}',
+        padded: false,
+        child: a == null
+            ? const SkeletonRows(rows: 4)
+            : a.isEmpty
+            ? const EmptyState(icon: PhosphorIconsDuotone.shieldCheck, tone: Tone.green, title: 'All clear', body: 'Nothing unusual in this period.')
+            : RowList(
+                children: [for (var i = 0; i < a.length; i++) Rise(delay: i * 30, child: _alertRow(context, p, a[i]))],
+              ),
+      ),
+    ];
   }
 
   Widget _alertRow(BuildContext context, Pal p, Map a) {
@@ -266,7 +289,11 @@ class _BreakGlassState extends State<_BreakGlass> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: p.dark ? C.amber500.withValues(alpha: .3) : C.amber300.withValues(alpha: .7)),
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [p.dark ? C.amber500.withValues(alpha: .10) : C.amber50, p.card, p.card]),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [p.dark ? C.amber500.withValues(alpha: .10) : C.amber50, p.card, p.card],
+        ),
         boxShadow: p.shadow,
       ),
       clipBehavior: Clip.antiAlias,

@@ -560,3 +560,134 @@ model DownloadApproval {
   @@index([requesterId, versionId])
   @@map("download_approvals")
 }
+
+// ---------------------------------------------------------------------------
+// Insider-extraction detection (migration 20261103500000). The service uses
+// raw SQL for these tables; the models are here so the schema stays the
+// single description of the database. Triggers and column grants are in the
+// migration.
+// ---------------------------------------------------------------------------
+
+/// One authorised download (or rendered page view), written in the same
+/// transaction as its audit event. The database sets occurred_at.
+model DownloadFact {
+  id         BigInt   @id @default(autoincrement())
+  userId     String   @map("user_id") @db.Uuid
+  sessionId  String?  @map("session_id") @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  versionNo  Int?     @map("version_no")
+  ip         String?
+  ipPrefix   String?  @map("ip_prefix")
+  kind       String   @default("download")
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([userId, occurredAt], map: "download_facts_user_time_idx")
+  @@index([sessionId], map: "download_facts_session_idx")
+  @@index([ipPrefix, occurredAt], map: "download_facts_prefix_time_idx")
+  @@index([occurredAt], map: "download_facts_time_idx")
+  @@map("download_facts")
+}
+
+/// Admin-tunable detection thresholds and hard download limits.
+model RiskSetting {
+  key       String   @id
+  value     Decimal  @db.Decimal
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  @@map("risk_settings")
+}
+
+/// A time-boxed, reasoned exception to the hard download limits.
+model DownloadLimitOverride {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  dailyLimit   Int       @map("daily_limit")
+  sessionLimit Int       @map("session_limit")
+  reason       String
+  grantedBy    String    @map("granted_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedBy    String?   @map("revoked_by") @db.Uuid
+
+  @@index([userId, expiresAt], map: "download_limit_overrides_user_idx")
+  @@map("download_limit_overrides")
+}
+
+/// A persistent alert. Append-only; its review state is SecurityAlertStatus.
+model SecurityAlert {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  rule          String
+  category      String
+  severity      String
+  severityRank  Int       @default(0) @map("severity_rank") @db.SmallInt
+  dedupKey      String    @unique @map("dedup_key")
+  subjectUserId String?   @map("subject_user_id") @db.Uuid
+  subjectEmail  String?   @map("subject_email")
+  documentId    String?   @map("document_id") @db.Uuid
+  sessionId     String?   @map("session_id") @db.Uuid
+  observed      Decimal?  @db.Decimal
+  threshold     Decimal?  @db.Decimal
+  windowStart   DateTime? @map("window_start") @db.Timestamptz(6)
+  windowEnd     DateTime? @map("window_end") @db.Timestamptz(6)
+  message       String
+  details       Json?
+  auditSeq      BigInt?   @map("audit_seq")
+
+  status SecurityAlertStatus?
+  events SecurityAlertEvent[]
+
+  @@index([severityRank(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "security_alerts_rank_time_idx")
+  @@index([createdAt(sort: Desc)], map: "security_alerts_time_idx")
+  @@index([subjectUserId, createdAt], map: "security_alerts_subject_idx")
+  @@index([documentId, createdAt], map: "security_alerts_document_idx")
+  @@map("security_alerts")
+}
+
+/// Current review state of an alert, derived by trigger from its events.
+model SecurityAlertStatus {
+  alertId       String   @id @map("alert_id") @db.Uuid
+  status        String
+  assigneeId    String?  @map("assignee_id") @db.Uuid
+  assigneeEmail String?  @map("assignee_email")
+  resolution    String?
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  alert SecurityAlert @relation(fields: [alertId], references: [id])
+
+  @@index([status], map: "security_alert_status_status_idx")
+  @@map("security_alert_status")
+}
+
+/// One review step on an alert (append-only history).
+model SecurityAlertEvent {
+  id            BigInt   @id @default(autoincrement())
+  alertId       String   @map("alert_id") @db.Uuid
+  at            DateTime @default(now()) @db.Timestamptz(6)
+  action        String
+  statusAfter   String   @default("open") @map("status_after")
+  actorId       String?  @map("actor_id") @db.Uuid
+  actorEmail    String?  @map("actor_email")
+  assigneeId    String?  @map("assignee_id") @db.Uuid
+  assigneeEmail String?  @map("assignee_email")
+  resolution    String?
+  note          String?
+
+  alert SecurityAlert @relation(fields: [alertId], references: [id])
+
+  @@index([alertId, id], map: "security_alert_events_alert_idx")
+  @@map("security_alert_events")
+}
+
+/// How far the alert generator has read the audit log.
+model AlertGeneratorState {
+  id        Int       @id @db.SmallInt
+  lastSeq   BigInt    @map("last_seq")
+  lastRunAt DateTime? @map("last_run_at") @db.Timestamptz(6)
+  lastOkAt  DateTime? @map("last_ok_at") @db.Timestamptz(6)
+  lastError String?   @map("last_error")
+
+  @@map("alert_generator_state")
+}

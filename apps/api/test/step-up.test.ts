@@ -76,6 +76,11 @@ describe('step-up for risky actions', () => {
       ['reset link', () => a.post(`/api/admin/users/${id}/reset-link`)],
       ['break-glass', () => a.post('/api/admin/break-glass', { documentId: id, approvalId: id })],
       ['MFA policy', () => a.put('/api/admin/settings/mfa-policy', { requiredRoles: ['ADMIN', 'OWNER'] })],
+      ['access rules for a role', () => a.put('/api/admin/access-policies/VIEWER', { networks: ['10.0.0.0/8'] })],
+      ['clear access rules for a role', () => a.delete('/api/admin/access-policies/VIEWER')],
+      ['detection thresholds', () => a.put('/api/admin/risk-settings', { values: {}, reason: 'testing step-up' })],
+      ['raise a download limit', () => a.post('/api/admin/download-limits/overrides', { userId: id })],
+      ['end a raised download limit', () => a.post(`/api/admin/download-limits/overrides/${id}/revoke`)],
       ['remove passkey', () => a.delete(`/api/auth/mfa/passkeys/${id}`)],
       ['remove authenticator', () => a.delete('/api/auth/mfa/totp')],
       ['sign out a device', () => a.delete(`/api/auth/sessions/${id}`)],
@@ -99,6 +104,7 @@ describe('step-up for risky actions', () => {
     const id = randomUUID();
     expectStepUp(await as(t, o).post(`/api/documents/${id}/transfer`, { newOwnerId: other.id }));
     expectStepUp(await as(t, o).delete(`/api/documents/${id}`));
+    expectStepUp(await as(t, o).post(`/api/documents/${id}/overrides`, { userId: other.id, reason: 'an emergency exception' }));
   });
 
   it('a used code cannot be replayed for a step-up, and wrong codes are audited and rate limited', async () => {

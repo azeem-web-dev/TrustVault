@@ -15,6 +15,7 @@ import { ENV, type Env } from '../config/env.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { AccessPolicyService } from './access-policy.service.js';
 import { SharePolicySchema } from './policy-input.js';
+import { DownloadLifecycleService } from '../risk/download-lifecycle.service.js';
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 25) * 1024 * 1024;
 
@@ -95,6 +96,7 @@ export class DocumentsController {
     @Inject(ENV) private readonly env: Env,
     @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
     @Inject(AccessPolicyService) private readonly policies: AccessPolicyService,
+    @Inject(DownloadLifecycleService) private readonly lifecycle: DownloadLifecycleService,
   ) {}
 
   /** Search documents I own or hold a live grant on. */
@@ -261,6 +263,7 @@ export class DocumentsController {
 
   /** Owner only: an emergency exception to one person's share conditions (at most 24 hours). */
   @Post(':id/overrides')
+  @StepUp()
   createOverride(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(OverrideSchema)) body: z.infer<typeof OverrideSchema>) {
     return this.policies.createOverride(actor, docId(id), body);
   }
@@ -277,7 +280,7 @@ export class DocumentsController {
    * Files are always sent as attachments with a locked-down CSP, so even a
    * file that slipped past validation can never run as a page on our origin.
    */
-  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string; trace: string; stamped: boolean }) {
+  private send(res: Response, file: { data: Buffer; fileName: string; mimeType: string; sha256: string; trace: string; stamped: boolean; downloadId?: string; documentId?: string; versionNo?: number }) {
     const ascii = file.fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     res.setHeader('Content-Type', file.mimeType);
     res.setHeader('Content-Length', String(file.data.length));
@@ -290,6 +293,8 @@ export class DocumentsController {
     res.setHeader('X-Document-SHA256', file.sha256);
     res.setHeader('X-Stamped', file.stamped ? 'yes' : 'no');
     res.setHeader('X-Trace-Code', file.trace);
+    // Completed / interrupted are recorded after the bytes go (or don't).
+    if (file.downloadId) this.lifecycle.track(res, { downloadId: file.downloadId, documentId: file.documentId!, versionNo: file.versionNo!, bytes: file.data.length });
     res.end(file.data);
   }
 }

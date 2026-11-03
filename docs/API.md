@@ -237,3 +237,65 @@ See [KEYS.md](KEYS.md). Downloads now obtain a database-issued unwrap ticket ins
 | `keys.reencrypt_version` | `ALLOWED`: one version re-encrypted in a run (backs the maintenance ticket) |
 
 Alerts: `GET /api/admin/alerts` adds `key_ledger_mismatch` (critical) for failed reconciliations and ledger problems.
+## Alerts, detection thresholds and download limits (role ADMIN, second factor passed)
+
+Alerts are **persistent** (THREATS.md L15-L19): a job evaluates the rules every minute and inserts alerts that are never updated or deleted. Review is a separate, append-only history. `GET /admin/alerts` (above) is kept as the old live view.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/admin/alert-queue` | `status` (`active` = not resolved, default; `open`, `acknowledged`, `assigned`, `resolved`, `all`), `severity` (comma list), `minSeverity`, `category` (`extraction`, `access`, `auth`, `session`, `integrity`, `policy`, `system`), `rule`, `subject` (email contains), `subjectUserId`, `documentId`, `assignee` (`me` or a user id), `from`, `to`, `sort` (`severity` first, default; or `newest`), `cursor`, `limit` (1-200, default 50). Returns `{alerts, total, bySeverity, nextCursor}`; `total` and `bySeverity` count **every** matching alert, not just the page. |
+| GET | `/admin/alert-queue/summary` | Unresolved counts per severity, counts per status, top rules and people, and the generator's health (`lastOkAt`, `lastError`, `stale` after 10 minutes). |
+| GET | `/admin/alert-queue/reviewers` | Active admins (for assigning). |
+| POST | `/admin/alert-queue/evaluate` | Run the rules now. `{run: {scannedEvents, raised, bySeverity, escalated, backlog}}`, or `{run: null}` if a run is already going. |
+| GET | `/admin/alert-queue/:id` | The alert, its full review history and how many other alerts the same person had in 30 days. |
+| POST | `/admin/alert-queue/:id/acknowledge` | `{note?}`. Only from `open`. |
+| POST | `/admin/alert-queue/:id/assign` | `{assigneeId, note?}`: an active admin, not the person the alert is about. |
+| POST | `/admin/alert-queue/:id/resolve` | `{resolution, note}`: `true_positive`, `false_positive`, `benign` or `duplicate`; note 5+ chars. |
+| POST | `/admin/alert-queue/:id/reopen` | `{note}`. Only a resolved alert. |
+| POST | `/admin/alert-queue/:id/comment` | `{note}`. Status unchanged. |
+| GET | `/admin/risk-settings` | Every threshold and hard limit: value, default, allowed range, who changed it last. |
+| PUT | `/admin/risk-settings` | `{values: {key: number}, reason}` (reason 10+ chars). Out-of-range values are `400`. Audited as `alert.policy_change` with before and after; raises an `alert_policy_changed` alert. |
+| GET | `/admin/download-limits/overrides` | `userId?`. Newest first, with `active`. |
+| POST | `/admin/download-limits/overrides` | `{userId, dailyLimit, sessionLimit, reason, expiresAt}`: raises one person's limits until `expiresAt` (at most 14 days; reason 20+ chars; not yourself, not an admin). Audited as `download.limit_override`; raises a `download_limit_override` alert. |
+| POST | `/admin/download-limits/overrides/:id/revoke` | `204`. Once. Audited as `download.limit_override_revoke`. |
+| GET | `/admin/download-limits/usage/:userId` | Effective limits (with any override) and downloads in the last 24 hours and 7 days. |
+
+A review step that does not fit the current status is `409`; an alert about yourself cannot be resolved or assigned by you (`403`). Every step is audited as `alert.acknowledge`, `alert.assign`, `alert.resolve`, `alert.reopen` or `alert.comment`.
+
+**Rules** (defaults; all adjustable within bounds through `/admin/risk-settings`):
+
+| Rule | Severity | When |
+|---|---|---|
+| `bulk_download_hour` | medium (high at 3x) | 20+ downloads by one person within an hour |
+| `bulk_download_day` / `_week` / `_long` | high | 100+ in 24 h / 300+ in 7 days / 1000+ in 30 days (`long_window_days`) |
+| `above_baseline` | medium | 24 h above 5x the person's median day over the previous 30 days (and 30+); needs 5 active days of history |
+| `above_peers` | medium | 7 days above 5x the median of active accounts with the same role (and 50+); needs 3 peers |
+| `document_coverage` | high | 50% or more of the documents the person can open downloaded within the long window (when they can open 20+) |
+| `unusual_hours` | medium | 20+ downloads in 24 h at UTC hours of the day the person never used in 30 days (needs 7 active days) |
+| `session_download_volume` | medium | 50+ downloads in one session |
+| `session_network_changed` | medium | downloads in one session from two networks |
+| `shared_network_extraction` | high | 2+ accounts each with 25+ downloads in 24 h from one network, 100+ together |
+| `download_limit_hit` | medium | a hard limit refused someone (one per person, kind and day) |
+| `unusual_sign_in` | medium (both new) / low | a device kind or network not used by the account in 90 days; the person is emailed |
+| `concurrent_sessions` | medium (same device kind) / low | the account live from two networks at once |
+| `alert_flood`, `alert_flood_document`, `alert_flood_global` | high | 10+ alerts about one person or document in 24 h; 50+ alerts in an hour |
+| `alert_policy_changed`, `download_limit_override` | medium | thresholds changed; a limit raised for someone |
+| `alert_generator_failed` | high | the alert job failed (raised once it works again) |
+| from the audit log | as in `/admin/alerts` | `audit_verification_failed`, `file_integrity`, `malware_found`, `rescan_failed`, `reset_then_sign_in`, `ended_session_used`, `access_after_revoke`, `repeated_denials`, `break_glass`, `external_share`, `login_blocked` (one per account per hour) |
+
+High and critical alerts are emailed to every active admin (never demo accounts): up to 10 one by one per run, the rest in one summary mail. Each escalation is recorded in the alert's history.
+
+**Hard download limits.** Per person per rolling 24 hours (`download_daily_limit`, default 200) and per sign-in session (`download_session_limit`, default 100). Checked after the access decision and before the download is audited or any byte is sent. Over the limit: `429 {message, code: "download_limit_daily" | "download_limit_session"}`, audited as `document.download` `DENIED` with that reason.
+
+## Download lifecycle
+
+Every download has a `downloadId` in its audit details:
+
+| Step | Audit action | Meaning |
+|---|---|---|
+| authorized (= started) | `document.download` `ALLOWED` | Access checked, limits checked, committed **before the first byte**. If this cannot be written, nothing is sent. Bytes start right after. |
+| completed | `document.download_completed` `ALLOWED`, reason `all_bytes_handed_to_network` | Every byte was handed to the server's network stack. It does **not** prove the person received, saved or read the file. |
+| interrupted | `document.download_interrupted` `FAILED`, reason `connection_closed_early` | The connection closed first; `bytesSent` says roughly how far it got. Part of the file may have been received. |
+| failed | `document.integrity` `FAILED` | Decryption or the hash check failed after authorization; nothing was sent. |
+
+Completion and interruption are written after the response and never delay it. An authorized download with neither (for example the server restarted mid-transfer) should be read as "may have been received". The web app and the Android app use the same routes, so the events are the same.
