@@ -16,7 +16,7 @@ flowchart LR
     N["nginx<br/>TLS, HSTS, rate limits<br/>overwrites X-Forwarded-For"]
     subgraph TVUser["Unix user: trustvault (systemd sandbox, loopback only)"]
       W["Next.js web"]
-      API["NestJS API<br/>guard → decide() (lock 1)<br/>no outbound internet"]
+      API["NestJS API<br/>guard → decide() (lock 1)<br/>no outbound internet<br/>except the SMTP host"]
     end
     subgraph KeydUser["Unix user: tvkeyd (no network, mlockall)"]
       K["keyd (Rust)<br/>master key → wrap key + audit signing key<br/>signs only tv-checkpoint-v1, forward only"]
