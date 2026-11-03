@@ -56,6 +56,19 @@ const TYPES = {
 
 export const ALLOWED_DESCRIPTION = 'PDF, PNG, JPEG, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), plain text, CSV or Markdown';
 
+/**
+ * Largest image we will accept, in pixels (width x height), whatever the file
+ * size. A decoder allocates width*height*channels bytes the instant it reads
+ * the header, so a tiny file that DECLARES enormous dimensions (a few KB of
+ * solid colour deflates ~1000:1) is a decompression bomb: it never reaches
+ * the worker's own heap cap, because the render and download-stamp paths
+ * (pages.ts) decode the stored image on the API process, not in the worker.
+ * Capping the declared dimensions here - in the worker, before the file is
+ * stored - keeps every later decode bounded (THREATS.md C12). 40 MP covers a
+ * 600 dpi A4 scan and ordinary photos; the view is downscaled to ~5 MP anyway.
+ */
+export const MAX_IMAGE_PIXELS = 40_000_000;
+
 const startsWith = (buf: Buffer, sig: number[]): boolean => sig.every((b, i) => buf[i] === b);
 
 /** "%PDF-" anywhere a PDF reader would still accept it (the first 1 KB). */
@@ -207,6 +220,13 @@ function detectOoxml(buf: Buffer): DetectedType {
   return TYPES[kind];
 }
 
+/** Refuses an image whose declared pixel count would make the decoder allocate without bound. */
+function refuseHugeImage(width: number, height: number): void {
+  if (width * height > MAX_IMAGE_PIXELS) {
+    throw new RejectedFile('The image is too large (too many pixels) and was not accepted');
+  }
+}
+
 /** PNG: every chunk well-formed with a correct CRC, IHDR first, nothing after IEND. */
 function checkPng(buf: Buffer): void {
   const bad = (): never => { throw new RejectedFile('The PNG image is damaged or has data appended after its end'); };
@@ -218,7 +238,14 @@ function checkPng(buf: Buffer): void {
     const len = buf.readUInt32BE(p);
     const type = buf.toString('latin1', p + 4, p + 8);
     if (len > 0x7fffffff || p + 12 + len > buf.length || !/^[A-Za-z]{4}$/.test(type)) bad();
-    if (first && type !== 'IHDR') bad();
+    if (first && (type !== 'IHDR' || len < 13)) bad();
+    if (first) {
+      // IHDR data starts at p+8: width then height, 4 bytes each.
+      const width = buf.readUInt32BE(p + 8);
+      const height = buf.readUInt32BE(p + 12);
+      if (width === 0 || height === 0) bad();
+      refuseHugeImage(width, height);
+    }
     first = false;
     if ((crc32(buf.subarray(p + 4, p + 8 + len)) >>> 0) !== buf.readUInt32BE(p + 8 + len)) bad();
     p += 12 + len;
@@ -245,6 +272,15 @@ function checkJpeg(buf: Buffer): void {
     if (p + 2 > buf.length) bad();
     const len = buf.readUInt16BE(p);
     if (len < 2 || p + len > buf.length) bad();
+    // Start-of-frame markers (0xC0-0xCF, excluding DHT/JPG/DAC) carry the image
+    // dimensions: [len(2)][precision(1)][height(2)][width(2)]...
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      if (len < 7) bad();
+      const height = buf.readUInt16BE(p + 3);
+      const width = buf.readUInt16BE(p + 5);
+      if (width === 0 || height === 0) bad();
+      refuseHugeImage(width, height);
+    }
     p += len;
     if (marker === 0xda) {
       // Entropy-coded data runs to the next marker that is not a stuffed

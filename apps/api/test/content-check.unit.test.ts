@@ -220,6 +220,28 @@ describe('images: structure and polyglots', () => {
     expect(await refused(j.subarray(0, 30), 'a.jpg')).toBe('The JPEG image is damaged');
   });
 
+  // THREATS.md C12 (DoS): a tiny file that DECLARES enormous dimensions is a
+  // decompression bomb - the render and download-stamp paths (pages.ts) decode
+  // the stored image on the API process, where it would allocate GBs. The
+  // declared pixel count is capped at upload, in the worker, before storage.
+  it('refuses images that declare too many pixels (decompression bomb)', async () => {
+    const tooBig = 'The image is too large (too many pixels) and was not accepted';
+    // ~40 KB PNG declaring a 25000x25000 (625 MP, ~2.5 GB RGBA) bitmap.
+    expect(await refused(B.png([], { width: 25000, height: 25000 }), 'bomb.png')).toBe(tooBig);
+    expect(await refused(B.png([], { width: 65535, height: 65535 }), 'bomb.png')).toBe(tooBig);
+    // A JPEG whose SOF0 declares 65535x65535.
+    expect(await refused(B.jpeg({ width: 65535, height: 65535 }), 'bomb.jpg')).toBe(tooBig);
+    // Just over the 40 MP cap is refused; a large-but-sane image is still accepted.
+    expect(await refused(B.png([], { width: 6400, height: 6400 }), 'over.png')).toBe(tooBig); // 40.96 MP
+    expect(await accepted(B.png([], { width: 6000, height: 6000 }), 'ok.png')).toBe('png'); // 36 MP
+    expect(await accepted(B.jpeg({ width: 4000, height: 3000 }), 'ok.jpg')).toBe('jpg'); // 12 MP
+  });
+
+  it('refuses images that declare a zero dimension', async () => {
+    expect(await refused(B.png([], { width: 0, height: 100 }), 'z.png')).toBe('The PNG image is damaged or has data appended after its end');
+    expect(await refused(B.jpeg({ width: 0, height: 100 }), 'z.jpg')).toBe('The JPEG image is damaged');
+  });
+
   it('refuses images that are also ZIPs or PDFs', async () => {
     const z = B.zip([{ name: 'a.txt', data: 'x' }]);
     expect(await refused(Buffer.concat([B.jpeg(), z]), 'a.jpg')).toBe('Files that are also ZIP archives (polyglots) are not accepted');
