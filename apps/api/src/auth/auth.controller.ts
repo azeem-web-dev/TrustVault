@@ -7,7 +7,8 @@ import { NotifyService } from '../mail/notify.service.js';
 import { PasswordResetService } from './password-reset.service.js';
 import { InviteService } from './invite.service.js';
 import { CurrentActor, PartialAuth, Public } from './decorators.js';
-import { AuthService } from './auth.service.js';
+import { AuthService, type LoginResult } from './auth.service.js';
+import { DeviceTrustService } from './device-trust.service.js';
 import { PasswordSchema } from './password.service.js';
 import { SESSION_COOKIE, type NewSession } from './session.service.js';
 
@@ -25,12 +26,20 @@ const ChangePasswordSchema = z.strictObject({
 
 const ForgotSchema = z.strictObject({ email: z.string().trim().min(3).max(254) });
 const ResetSchema = z.strictObject({ token: z.string().max(100), newPassword: z.string().min(1).max(1024) });
+const SignInLinkSchema = z.strictObject({ token: z.string().max(100) });
 const InviteCheckSchema = z.strictObject({ token: z.string().max(100) });
 const InviteAcceptSchema = z.strictObject({
   token: z.string().max(100),
   displayName: z.string().trim().min(1).max(100),
   password: z.string().min(1).max(1024),
 });
+
+/**
+ * The one answer to a sign-in from an untrusted device while the account is
+ * under attack, whatever the email and password were (THREATS.md S19).
+ */
+export const STEP_UP_MESSAGE =
+  'For your security, this sign-in needs one more step. If the email and password are right, we have emailed you a link to finish signing in. Signing in from a device you have used before skips this step.';
 
 const COOKIE_BASE = { httpOnly: true, secure: true, sameSite: 'strict' as const, path: '/' };
 
@@ -49,12 +58,15 @@ export class AuthController {
     @Inject(NotifyService) private readonly notify: NotifyService,
     @Inject(PasswordResetService) private readonly resets: PasswordResetService,
     @Inject(InviteService) private readonly invites: InviteService,
+    @Inject(DeviceTrustService) private readonly devices: DeviceTrustService,
   ) {}
 
   /**
    * Who may call: anyone (this is how a session is obtained). If the account
    * needs a second factor, the session returned can only reach the MFA
-   * routes until it is presented (`mfaRequired: true`).
+   * routes until it is presented (`mfaRequired: true`). While the account is
+   * under attack, an untrusted device gets `202 { signInLinkSent: true }`
+   * instead, whatever the password: the right one emails a one-time link.
    */
   @Public()
   @Post('login')
@@ -65,11 +77,39 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const previous = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
-    const { session, user, mfa } = await this.auth.login(body.email, body.password, previous);
+    const result = await this.auth.login(body.email, body.password, previous);
+    if ('stepUp' in result) {
+      res.status(202);
+      return { signInLinkSent: true, message: STEP_UP_MESSAGE };
+    }
+    return this.signedIn(res, result);
+  }
+
+  /**
+   * Who may call: anyone holding a valid, unused, unexpired sign-in link
+   * (emailed by the step above). Same answer as a successful login; `400`
+   * with one message for any bad link.
+   */
+  @Public()
+  @Post('login/link')
+  @HttpCode(200)
+  async loginWithLink(
+    @Body(new ZodPipe(SignInLinkSchema)) body: z.infer<typeof SignInLinkSchema>,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const previous = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
+    return this.signedIn(res, await this.auth.loginWithLink(body.token, previous));
+  }
+
+  private signedIn(res: Response, { session, user, mfa }: LoginResult) {
     setSessionCookie(res, session);
-    // Without a second step this is the moment of signing in; with one, the
-    // notice goes out when the second step succeeds.
-    if (!mfa.required) this.notify.signIn(user.id, currentContext()?.ip ?? null, currentContext()?.userAgent ?? null);
+    // Without a second step this is the moment of signing in (and this
+    // browser becomes trusted); with one, both happen when it succeeds.
+    if (!mfa.required) {
+      this.devices.setCookie(res, user.id);
+      this.notify.signIn(user.id, currentContext()?.ip ?? null, currentContext()?.userAgent ?? null);
+    }
     return { user, csrfToken: session.csrfToken, mfaRequired: mfa.required, mfaEnrolled: mfa.enrolled, mfaMethods: mfa.methods };
   }
 

@@ -44,6 +44,18 @@ ${l.button ? `<p style="margin:22px 0"><a href="${esc(l.button.url)}" style="dis
 const when = (d: Date) => d.toUTCString();
 
 export const mailTemplates = {
+  signInLink(name: string, url: string, minutes: number, ip: string | null, at: Date) {
+    return {
+      subject: 'Confirm your TrustVault sign-in',
+      ...render(name, {
+        title: 'Confirm it’s you signing in',
+        intro: 'Someone signed in to your TrustVault account with the right password from a device it has not used before. Your account has had many failed sign-in attempts recently, so we need one more step.',
+        lines: [`When: ${when(at)}`, `From: ${ip ?? 'unknown address'}`, `If this was you, open the link on the device you are signing in on. It works once and expires in ${minutes} minutes.`],
+        button: { label: 'Finish signing in', url },
+        footer: 'If this was not you, do not open the link: someone knows your password. Reset it now from the sign-in page (Forgot password?).',
+      }),
+    };
+  },
   resetLink(name: string, url: string, minutes: number, byAdmin: boolean) {
     return {
       subject: 'Reset your TrustVault password',

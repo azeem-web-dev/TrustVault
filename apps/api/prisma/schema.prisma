@@ -32,6 +32,7 @@ enum UserStatus {
 enum LinkPurpose {
   RESET
   INVITE
+  SIGNIN
 }
 
 enum AuditOutcome {
@@ -368,7 +369,7 @@ model PasswordResetToken {
   expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
   usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
   requestedBy String?   @map("requested_by") @db.Uuid
-  /// RESET (forgot password) or INVITE (new account). Each flow accepts only its own.
+  /// RESET (forgot password), INVITE (new account) or SIGNIN (confirm a sign-in while the account is under attack). Each flow accepts only its own.
   purpose     LinkPurpose @default(RESET)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 

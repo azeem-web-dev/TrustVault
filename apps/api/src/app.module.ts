@@ -12,6 +12,9 @@ import { WitnessController } from './audit/witness.controller.js';
 import { PasswordService } from './auth/password.service.js';
 import { SessionService } from './auth/session.service.js';
 import { AuthService } from './auth/auth.service.js';
+import { DeviceTrustService } from './auth/device-trust.service.js';
+import { LoginThrottleService } from './auth/login-throttle.service.js';
+import { SignInLinkService } from './auth/signin-link.service.js';
 import { AuthController } from './auth/auth.controller.js';
 import { MfaService } from './auth/mfa.service.js';
 import { MfaController } from './auth/mfa.controller.js';
@@ -65,6 +68,9 @@ export class AppModule {
         PasswordService,
         SessionService,
         AuthService,
+        DeviceTrustService,
+        LoginThrottleService,
+        SignInLinkService,
         MfaService,
         UsersService,
         AccessService,

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../db/prisma.service.js';
@@ -10,6 +11,7 @@ import { currentContext, type Actor } from '../common/request-context.js';
 import { PasswordSchema, PasswordService } from './password.service.js';
 import { SessionService } from './session.service.js';
 import { normaliseEmail } from './auth.service.js';
+import { clientNetwork } from './client-network.js';
 
 const sha256 = (v: string) => new Uint8Array(createHash('sha256').update(v).digest());
 const INVALID = 'This link is invalid or has expired. Ask for a new one.';
@@ -40,11 +42,28 @@ export class PasswordResetService {
     @Inject(SessionService) private readonly sessions: SessionService,
   ) {}
 
-  /** Anyone: "email me a link". Same answer whatever happens. */
+  /**
+   * Anyone: "email me a link". Same answer whatever happens, and — like a
+   * failed login — never faster than LOGIN_FAILURE_FLOOR_MS, so the extra
+   * work of issuing a link for a real account does not show in the response
+   * time (checked by test/timing.test.ts).
+   */
   async request(rawEmail: string): Promise<void> {
-    const email = normaliseEmail(rawEmail);
-    const ip = currentContext()?.ip ?? 'unknown';
-    await this.limits.hit(`reset:ip:${ip}`, 10, 900, 'Too many reset requests. Try again in a few minutes.');
+    const net = clientNetwork(currentContext()?.ip);
+    // Per IP and per network (/24, /48): a 429 here depends only on the
+    // caller, never on the address asked about.
+    await this.limits.hit(`reset:ip:${net.ip}`, 10, 900, 'Too many reset requests. Try again in a few minutes.');
+    await this.limits.hit(`reset:net:${net.network}`, 30, 900, 'Too many reset requests. Try again in a few minutes.');
+    const started = performance.now();
+    try {
+      await this.requestInner(normaliseEmail(rawEmail));
+    } finally {
+      const wait = started + this.env.LOGIN_FAILURE_FLOOR_MS - performance.now();
+      if (wait > 0) await sleep(wait);
+    }
+  }
+
+  private async requestInner(email: string): Promise<void> {
     // Per address: quietly stop sending (a 429 here would reveal that the address exists).
     let underLimit = true;
     try {
@@ -88,6 +107,8 @@ export class PasswordResetService {
 
   /** Anyone holding a valid link: set a new password. */
   async reset(token: string, newPassword: string): Promise<void> {
+    // Each try costs an Argon2 hash: bound it per IP (a 256-bit token cannot be guessed anyway).
+    await this.limits.hit(`reset-use:ip:${currentContext()?.ip ?? 'unknown'}`, 20, 900, 'Too many attempts. Try again in a few minutes.');
     const parsed = PasswordSchema.safeParse(newPassword);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues[0]!.message);
     if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) {

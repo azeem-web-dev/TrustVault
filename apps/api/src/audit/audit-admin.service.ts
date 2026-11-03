@@ -1,6 +1,7 @@
 import { verify as edVerify } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../db/prisma.service.js';
+import { authAbuseAlerts } from './auth-abuse-alerts.js';
 import { KEY_PROVIDER, ed25519PublicKeyObject, type KeyProvider } from '../crypto/key-provider.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import type { Actor } from '../common/request-context.js';
@@ -248,6 +249,8 @@ export class AuditAdminService {
         ...breakGlass.map((r) => ({ severity: 'medium', kind: 'break_glass', at: r.occurred_at, message: `${r.actor_email} used break-glass access: "${r.reason ?? ''}"`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...externalGrants.map((r) => ({ severity: 'info', kind: 'external_share', at: r.occurred_at, message: `${r.actor_email} shared a document with external ${r.subject} until ${r.expires_at ?? '?'}`, documentId: r.document_id, documentTitle: t(r.document_id) })),
         ...lockouts.map((r) => ({ severity: 'info', kind: 'login_blocked', at: r.occurred_at, message: `Sign-in blocked for ${r.actor_email ?? 'unknown'} (${r.reason}) from ${r.ip ?? '?'}` })),
+        // Sign-in abuse rules (credential stuffing, distributed guessing): auth-abuse-alerts.ts.
+        ...(await authAbuseAlerts(this.prisma, since)),
       ],
     };
   }
