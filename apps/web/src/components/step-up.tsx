@@ -108,7 +108,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
           {(sentTo || (methods?.totp ?? true)) && (
             <form onSubmit={submitCode} className="space-y-3">
               <label className="block">
-                <span className="mb-2 flex items-center gap-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">
+                <span className="mb-2 flex items-center gap-2 text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">
                   {sentTo ? <><EnvelopeSimple size={16} />6-digit code we emailed to {sentTo}</> : <><DeviceMobile size={16} />6-digit code from your authenticator app</>}
                 </span>
                 <input

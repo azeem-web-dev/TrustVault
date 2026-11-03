@@ -77,7 +77,7 @@ export default function ResetPasswordPage() {
           <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
             <CheckCircle size={28} />
           </span>
-          <h1 className="text-[28px] font-semibold tracking-tight">All set</h1>
+          <h1 className="text-[1.75rem] font-semibold tracking-tight">All set</h1>
         </div>
         <div className="space-y-4">
           <Alert tone="green">Password changed. You&apos;ve been signed out everywhere.</Alert>
@@ -96,7 +96,7 @@ export default function ResetPasswordPage() {
           <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
             <LinkBreak size={28} />
           </span>
-          <h1 className="text-[28px] font-semibold tracking-tight">This link is incomplete</h1>
+          <h1 className="text-[1.75rem] font-semibold tracking-tight">This link is incomplete</h1>
           <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
             Open the link from your email again, or ask for a new one. Each link works once and expires in 30 minutes.
           </p>
@@ -119,7 +119,7 @@ export default function ResetPasswordPage() {
         <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
           <Password size={28} />
         </span>
-        <h1 className="text-[28px] font-semibold tracking-tight">Choose a new password</h1>
+        <h1 className="text-[1.75rem] font-semibold tracking-tight">Choose a new password</h1>
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">Setting it signs you out on every device.</p>
       </div>
 

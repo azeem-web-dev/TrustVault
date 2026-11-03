@@ -126,7 +126,7 @@ export default function AdminUsersPage() {
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Input className="min-w-[220px] flex-1" icon={<MagnifyingGlass size={18} />} placeholder="Search by name or email" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
+        <Input className="min-w-[13.75rem] flex-1" icon={<MagnifyingGlass size={18} />} placeholder="Search by name or email" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
         <Segmented
           value={filter}
           onChange={setFilter}
@@ -142,7 +142,7 @@ export default function AdminUsersPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
+              <thead className="border-b border-slate-100 bg-slate-50/70 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
                 <tr>
                   <th className="px-5 py-3">Name</th>
                   <th className="px-4 py-3">Role</th>
@@ -280,7 +280,7 @@ function CreateUser({ open, onClose, onCreated }: { open: boolean; onClose: () =
       <form id="create-user" onSubmit={submit} className="space-y-5">
         <Label label="Email"><Input icon={<Envelope size={18} />} type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.com" /></Label>
         <div>
-          <p className="mb-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">Role</p>
+          <p className="mb-2 text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">Role</p>
           <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Role">
             {ROLES.map((r) => (
               <button

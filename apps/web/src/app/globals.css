@@ -57,8 +57,18 @@
 :root { color-scheme: light; }
 :root.dark { color-scheme: dark; }
 
+/* Fluid root font size: every rem-based size (typography, spacing, radii,
+   control heights — Tailwind's scale is rem) scales smoothly with the
+   viewport, from small phones up to large displays. */
+html {
+  font-size: clamp(0.9rem, 0.85rem + 0.3vw, 1.05rem);
+}
+
 body {
   @apply bg-slate-50 font-sans text-slate-900 antialiased dark:bg-ink-950 dark:text-slate-100;
+  /* Never scroll sideways on a phone; content reflows instead. `clip` (not
+     `hidden`) adds no scroll container, so the sticky header is unaffected. */
+  overflow-x: clip;
 }
 
 /* Soft brand glow behind every signed-in page. */

@@ -138,7 +138,7 @@ export default function AuditPage() {
           <Prohibit size={15} />Refused only
         </button>
         <Button size="sm" variant="ghost" className="ml-auto" icon={<FunnelSimple size={16} />} onClick={() => setShowFilters((s) => !s)}>
-          More filters{advanced > 0 && <span className="rounded-md bg-brand-600 px-1.5 text-[11px] text-white">{advanced}</span>}
+          More filters{advanced > 0 && <span className="rounded-md bg-brand-600 px-1.5 text-[0.6875rem] text-white">{advanced}</span>}
           <CaretDown size={12} className={cx('transition', showFilters && 'rotate-180')} />
         </Button>
       </div>
@@ -167,7 +167,7 @@ export default function AuditPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
+              <thead className="border-b border-slate-100 bg-slate-50/70 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
                 <tr>
                   <th className="px-5 py-3">Event</th>
                   <th className="hidden px-4 py-3 md:table-cell">Who</th>
@@ -188,7 +188,7 @@ export default function AuditPage() {
                             <ActionIcon action={e.action} outcome={e.outcome} />
                             <div className="min-w-0">
                               <p className="truncate font-semibold">{actionMeta(e.action).label}</p>
-                              <p className="truncate font-mono text-[11px] text-slate-400">#{e.seq} · {e.action}</p>
+                              <p className="truncate font-mono text-[0.6875rem] text-slate-400">#{e.seq} · {e.action}</p>
                             </div>
                           </div>
                         </td>
@@ -203,7 +203,7 @@ export default function AuditPage() {
                         </td>
                         <td className="px-4 py-3">
                           <Badge dot tone={OUTCOME_TONE[e.outcome]}>{e.outcome === 'ALLOWED' ? 'Allowed' : e.outcome === 'DENIED' ? 'Refused' : 'Failed'}</Badge>
-                          {e.reason && <span className="mt-0.5 block max-w-[12rem] truncate text-[11px] text-slate-500">{e.reason.replace(/_/g, ' ')}</span>}
+                          {e.reason && <span className="mt-0.5 block max-w-[12rem] truncate text-[0.6875rem] text-slate-500">{e.reason.replace(/_/g, ' ')}</span>}
                         </td>
                         <td className="hidden whitespace-nowrap px-4 py-3 text-slate-500 sm:table-cell dark:text-slate-400" title={formatDate(e.occurredAt)}>{relativeTime(e.occurredAt)}</td>
                         <td className="px-3 py-3 text-slate-400"><CaretDown size={14} className={cx('transition', isOpen && 'rotate-180')} /></td>
@@ -226,7 +226,7 @@ export default function AuditPage() {
                                 <button className="font-medium text-brand-600 hover:underline dark:text-brand-300" onClick={() => apply({ ...EMPTY, actor: e.actorEmail! })}>Everything by {e.actorEmail} →</button>
                               )}
                             </div>
-                            {e.details !== null && <pre className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px] leading-5 dark:border-white/10 dark:bg-ink-950">{JSON.stringify(e.details, null, 2)}</pre>}
+                            {e.details !== null && <pre className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 font-mono text-[0.6875rem] leading-5 dark:border-white/10 dark:bg-ink-950">{JSON.stringify(e.details, null, 2)}</pre>}
                           </td>
                         </tr>
                       )}
@@ -247,7 +247,7 @@ function Detail({ icon, label, value, mono }: { icon: ReactNode; label: string; 
   return (
     <div className="min-w-0 rounded-xl border border-slate-200/80 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
       <p className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">{icon}{label}</p>
-      <p className={cx('mt-1 break-all text-slate-800 dark:text-slate-200', mono && 'font-mono text-[11px]')}>{value}</p>
+      <p className={cx('mt-1 break-all text-slate-800 dark:text-slate-200', mono && 'font-mono text-[0.6875rem]')}>{value}</p>
     </div>
   );
 }
@@ -257,7 +257,7 @@ function IntegrityPanel({ verify, busy, onVerify }: { verify: Verify | null; bus
     return (
       <section className="mb-7 grid animate-rise gap-5 overflow-hidden rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft md:grid-cols-[1fr_auto] dark:border-white/[0.08] dark:bg-white/[0.03]">
         <div>
-          <p className="text-[15px] font-semibold">Three independent protections keep this log honest</p>
+          <p className="text-[0.9375rem] font-semibold">Three independent protections keep this log honest</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <Protect icon={<GitCommit size={18} />} title="Hash chain" text="Each event includes the hash of the one before. Change one and every later hash breaks." />
             <Protect icon={<Key size={18} />} title="Signed every minute" text="A separate key service signs the chain head. The database cannot forge it." />

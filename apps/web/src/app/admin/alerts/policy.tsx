@@ -59,7 +59,7 @@ export function RiskPolicy() {
                 <div key={s.key} className="grid items-center gap-2 py-2.5 sm:grid-cols-[1fr_8rem]">
                   <div className="min-w-0">
                     <p className="text-sm">{s.label}</p>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-[0.6875rem] text-slate-500">
                       <code>{s.key}</code> · default {s.default} · {s.min}–{s.max}
                       {s.updatedBy && <> · changed by {s.updatedBy} {relativeTime(s.updatedAt)}</>}
                     </p>

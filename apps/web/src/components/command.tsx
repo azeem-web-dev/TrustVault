@@ -70,16 +70,16 @@ export function CommandPalette({ open, onClose, links }: { open: boolean; onClos
               else if (e.key === 'Enter' && items[active]) go(items[active].href);
             }}
             placeholder="Search documents or jump to a page…"
-            className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-slate-400"
+            className="h-14 flex-1 bg-transparent text-[0.9375rem] outline-none placeholder:text-slate-400"
             aria-label="Search"
           />
           <Kbd>Esc</Kbd>
         </div>
         <div className="max-h-[50vh] overflow-y-auto p-2">
-          {docs.length > 0 && <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Documents</p>}
+          {docs.length > 0 && <p className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400">Documents</p>}
           {items.map((it, i) => (
             <div key={it.key}>
-              {i === docs.length && pages.length > 0 && <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Go to</p>}
+              {i === docs.length && pages.length > 0 && <p className="px-3 pb-1 pt-3 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400">Go to</p>}
               <button
                 onMouseEnter={() => setActive(i)}
                 onClick={() => go(it.href)}
@@ -92,7 +92,7 @@ export function CommandPalette({ open, onClose, links }: { open: boolean; onClos
           ))}
           {items.length === 0 && <p className="px-3 py-10 text-center text-sm text-slate-500">{q.trim().length < 2 ? 'Type to search.' : 'Nothing you can access matches.'}</p>}
         </div>
-        <div className="flex items-center gap-4 border-t border-slate-100 px-4 py-2.5 text-[11px] text-slate-400 dark:border-white/[0.06]">
+        <div className="flex items-center gap-4 border-t border-slate-100 px-4 py-2.5 text-[0.6875rem] text-slate-400 dark:border-white/[0.06]">
           <span className="flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
           <span className="flex items-center gap-1"><Kbd>Enter</Kbd> open</span>
           <span className="ml-auto">Results only include documents you can access</span>

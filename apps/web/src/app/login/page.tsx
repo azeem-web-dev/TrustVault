@@ -52,7 +52,7 @@ export default function LoginPage() {
   return (
     <AuthLayout>
       <div className="mb-8">
-        <h1 className="text-[28px] font-semibold tracking-tight">Welcome back</h1>
+        <h1 className="text-[1.75rem] font-semibold tracking-tight">Welcome back</h1>
         <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">Sign in to reach the documents shared with you.</p>
       </div>
 
@@ -61,7 +61,7 @@ export default function LoginPage() {
           <Input icon={<Envelope size={18} />} type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
         </Label>
         <label className="block text-sm">
-          <span className="mb-1.5 block text-[13px] font-medium text-slate-700 dark:text-slate-300">Password</span>
+          <span className="mb-1.5 block text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">Password</span>
           <span className="relative block">
             <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400"><LockSimple size={18} /></span>
             <input
@@ -105,8 +105,8 @@ export default function LoginPage() {
               >
                 <Avatar name={d.name} size="sm" />
                 <span className="min-w-0">
-                  <span className="block truncate text-[13px] font-semibold">{d.name.split(' ')[0]}</span>
-                  <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{d.role}</span>
+                  <span className="block truncate text-[0.8125rem] font-semibold">{d.name.split(' ')[0]}</span>
+                  <span className="block truncate text-[0.6875rem] text-slate-500 dark:text-slate-400">{d.role}</span>
                 </span>
               </button>
             );

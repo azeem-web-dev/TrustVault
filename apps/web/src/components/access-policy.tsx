@@ -48,7 +48,7 @@ export function PolicyFields({ value, onChange, managers }: { value: SharePolicy
   const w = p.window ?? null;
   return (
     <div className="rounded-xl border border-slate-200 p-3 dark:border-white/10">
-      <button type="button" className="flex w-full items-center gap-2 text-left text-[13px] font-medium" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+      <button type="button" className="flex w-full items-center gap-2 text-left text-[0.8125rem] font-medium" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <ShieldCheck size={16} className="text-brand-600 dark:text-brand-300" />
         Conditions (optional)
         <span className="ml-auto text-xs font-normal text-slate-500">{value ? 'set' : 'none'}</span>

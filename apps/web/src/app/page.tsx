@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react';
 import {
-  CaretLeft, CaretRight, CloudArrowUp, Files, FolderSimple, FolderSimplePlus, FunnelSimple, MagnifyingGlass, Plus, ShareNetwork,
+  CaretLeft, CaretRight, CloudArrowUp, Files, FolderSimple, FolderSimplePlus, FunnelSimple, GearSix, MagnifyingGlass, Plus, ShareNetwork,
   SquaresFour, Rows, Tag, Trash, User, UsersThree, X, FileMagnifyingGlass, Vault, Stack,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
+import { FolderTree } from '@/components/folder-tree';
 import { useSession } from '@/components/session';
 import { useToast } from '@/components/toast';
 import { removedNotice, type UploadResult } from '@/lib/sanitized';
@@ -59,6 +60,7 @@ export default function DocumentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(false);
+  const [treeDrawer, setTreeDrawer] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [view, setView] = useState<View>('list');
 
@@ -130,6 +132,15 @@ export default function DocumentsPage() {
     setPage(1);
   };
   const clearAll = () => { setFilters(EMPTY_FILTERS); setApplied(EMPTY_FILTERS); setPage(1); };
+  // Picking a folder in the explorer filters the list to it (folders only
+  // apply to your own documents, so switch scope accordingly).
+  const selectFolder = (id: string | null) => {
+    setPage(1);
+    if (id) setScope('mine');
+    setFilters((f) => ({ ...f, folderId: id ?? '' }));
+    setApplied((a) => ({ ...a, folderId: id ?? '' }));
+    setTreeDrawer(false);
+  };
 
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const activeChips = [
@@ -154,10 +165,7 @@ export default function DocumentsPage() {
         icon={<Files size={26} />}
         subtitle="Only documents you own or have been given access to appear here. Search never shows anything else."
         actions={isOwnerRole && (
-          <>
-            <Button icon={<FolderSimple size={18} />} onClick={() => setFoldersOpen(true)}>Folders</Button>
-            <Button variant="primary" icon={<CloudArrowUp size={18} />} onClick={() => setUploading(true)}>Upload document</Button>
-          </>
+          <Button variant="primary" icon={<CloudArrowUp size={18} />} onClick={() => setUploading(true)}>Upload document</Button>
         )}
       />
 
@@ -170,8 +178,26 @@ export default function DocumentsPage() {
         <StatCard label="Categories" value={categories.length} icon={<Tag size={22} />} tone="amber" hint={categories.slice(0, 3).join(', ') || 'None yet'} delay={180} />
       </div>
 
+      <div className="flex gap-6">
+        {isOwnerRole && (
+          <aside className="hidden w-[16.5rem] shrink-0 lg:block">
+            <div className="sticky top-24 flex max-h-[calc(100vh-7rem)] flex-col rounded-2xl border border-slate-200/80 bg-white p-2 shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <div className="flex items-center justify-between px-2 py-1.5">
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400">Explorer</p>
+                <IconButton label="Create and manage folders" className="size-7" onClick={() => setFoldersOpen(true)}><GearSix size={15} /></IconButton>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <FolderTree folders={folders} selectedFolderId={applied.folderId || null} onSelectFolder={selectFolder} />
+              </div>
+            </div>
+          </aside>
+        )}
+        <div className="min-w-0 flex-1">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Segmented value={scope} onChange={(s) => { setScope(s); setPage(1); }} options={scopeOptions} />
+        <div className="flex items-center gap-2">
+          {isOwnerRole && <Button className="lg:hidden" icon={<FolderSimple size={18} />} onClick={() => setTreeDrawer(true)}>Folders</Button>}
+          <Segmented value={scope} onChange={(s) => { setScope(s); setPage(1); }} options={scopeOptions} />
+        </div>
         <div className="flex items-center gap-1 rounded-xl border border-slate-200/80 bg-white p-1 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04]">
           <IconButton label="List view" onClick={() => changeView('list')} className={cx('size-8', view === 'list' && 'bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white')}><Rows size={18} /></IconButton>
           <IconButton label="Grid view" onClick={() => changeView('grid')} className={cx('size-8', view === 'grid' && 'bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white')}><SquaresFour size={18} /></IconButton>
@@ -181,7 +207,7 @@ export default function DocumentsPage() {
       <form onSubmit={search} className="mb-4 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
         <div className="flex flex-wrap gap-2">
           <Input
-            className="min-w-[220px] flex-1"
+            className="min-w-[13.75rem] flex-1"
             icon={<MagnifyingGlass size={18} />}
             value={filters.q}
             onChange={(e) => setFilters({ ...filters, q: e.target.value })}
@@ -189,7 +215,7 @@ export default function DocumentsPage() {
             aria-label="Name or description"
           />
           <Button type="button" icon={<FunnelSimple size={18} />} onClick={() => setShowFilters((s) => !s)} className={cx(showFilters && 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-400/40 dark:bg-brand-500/15 dark:text-brand-200')}>
-            Filters{activeChips.length > 0 && <span className="rounded-md bg-brand-600 px-1.5 text-[11px] text-white">{activeChips.length}</span>}
+            Filters{activeChips.length > 0 && <span className="rounded-md bg-brand-600 px-1.5 text-[0.6875rem] text-white">{activeChips.length}</span>}
           </Button>
         </div>
         {showFilters && (
@@ -280,6 +306,26 @@ export default function DocumentsPage() {
           </div>
         </div>
       )}
+        </div>
+      </div>
+
+      {treeDrawer && isOwnerRole && (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <div className="absolute inset-0 animate-fade-in bg-slate-950/50 backdrop-blur-sm" onClick={() => setTreeDrawer(false)} />
+          <aside className="absolute inset-y-0 left-0 flex w-[17.5rem] animate-drawer flex-col border-r border-slate-200 bg-white shadow-lift dark:border-white/10 dark:bg-ink-900">
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-white/[0.06]">
+              <p className="text-sm font-semibold">Folders</p>
+              <IconButton label="Close folders" onClick={() => setTreeDrawer(false)}><X size={18} weight="bold" /></IconButton>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              <FolderTree folders={folders} selectedFolderId={applied.folderId || null} onSelectFolder={selectFolder} />
+            </div>
+            <div className="border-t border-slate-100 p-3 dark:border-white/[0.06]">
+              <Button className="w-full" icon={<GearSix size={16} />} onClick={() => { setTreeDrawer(false); setFoldersOpen(true); }}>Manage folders</Button>
+            </div>
+          </aside>
+        </div>
+      )}
 
       <UploadModal
         open={uploading}
@@ -305,7 +351,7 @@ function DocTable({ docs, trash }: { docs: DocItem[]; trash: boolean }) {
     <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
+          <thead className="border-b border-slate-100 bg-slate-50/70 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-500 dark:border-white/[0.06] dark:bg-white/[0.02] dark:text-slate-400">
             <tr>
               <th className="px-5 py-3">Document</th>
               <th className="hidden px-4 py-3 md:table-cell">Category</th>

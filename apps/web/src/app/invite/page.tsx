@@ -87,7 +87,7 @@ export default function AcceptInvitePage() {
           <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
             <CheckCircle size={28} />
           </span>
-          <h1 className="text-[28px] font-semibold tracking-tight">Welcome to TrustVault</h1>
+          <h1 className="text-[1.75rem] font-semibold tracking-tight">Welcome to TrustVault</h1>
         </div>
         <div className="space-y-4">
           <Alert tone="green">Your account is ready. Sign in with your email and the password you just chose.</Alert>
@@ -107,7 +107,7 @@ export default function AcceptInvitePage() {
           <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
             <LinkBreak size={28} />
           </span>
-          <h1 className="text-[28px] font-semibold tracking-tight">{token ? 'This invitation no longer works' : 'This link is incomplete'}</h1>
+          <h1 className="text-[1.75rem] font-semibold tracking-tight">{token ? 'This invitation no longer works' : 'This link is incomplete'}</h1>
           <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
             {token
               ? 'It may have been used already, replaced by a newer one, or expired. Ask your administrator to send the invitation again.'
@@ -127,7 +127,7 @@ export default function AcceptInvitePage() {
         <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
           <EnvelopeOpen size={28} />
         </span>
-        <h1 className="text-[28px] font-semibold tracking-tight">Set up your account</h1>
+        <h1 className="text-[1.75rem] font-semibold tracking-tight">Set up your account</h1>
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
           {invitation
             ? <>Joining as <span className="font-semibold text-slate-700 dark:text-slate-200">{invitation.email}</span> ({ROLE_LABEL[invitation.role]}).</>

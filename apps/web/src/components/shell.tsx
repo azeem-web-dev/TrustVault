@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   BellRinging, CaretUpDown, Clock, Desktop, Files, GearSix, HandPalm, List, ListMagnifyingGlass, MagnifyingGlass, Moon, ShieldCheck, SignOut, Sun, UserCheck, UserCircleGear, UsersFour, UsersThree, X,
 } from '@phosphor-icons/react';
@@ -10,7 +10,7 @@ import { useSession } from './session';
 import { useTheme, type ThemeChoice } from './theme';
 import { Logo, Wordmark } from './brand';
 import { CommandPalette, type CommandLink } from './command';
-import { Avatar, IconButton, Kbd, cx } from './ui';
+import { Avatar, IconButton, Kbd, Menu, MenuHeading, MenuItem, MenuSeparator, cx } from './ui';
 
 export { Logo };
 
@@ -71,7 +71,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </nav>
       <div className="space-y-3 p-3">
         <div className="relative overflow-hidden rounded-2xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-teal-50 p-3.5 dark:border-emerald-500/20 dark:from-emerald-500/10 dark:to-teal-500/5">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-emerald-800 dark:text-emerald-200">
+          <div className="flex items-center gap-2 text-[0.8125rem] font-semibold text-emerald-800 dark:text-emerald-200">
             <span className="relative flex size-2"><span className="absolute inset-0 animate-pulse-ring rounded-full bg-emerald-500" /><span className="relative size-2 rounded-full bg-emerald-500" /></span>
             Audit trail protected
           </div>
@@ -85,18 +85,18 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-backdrop min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] border-r border-slate-200/80 bg-white/70 backdrop-blur-xl lg:block dark:border-white/[0.06] dark:bg-ink-950/60">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[16.5rem] border-r border-slate-200/80 bg-white/70 backdrop-blur-xl lg:block dark:border-white/[0.06] dark:bg-ink-950/60">
         {sidebar}
       </aside>
 
       {drawer && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 animate-fade-in bg-slate-950/50 backdrop-blur-sm" onClick={() => setDrawer(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[280px] animate-drawer border-r border-slate-200 bg-white shadow-lift dark:border-white/10 dark:bg-ink-900">{sidebar}</aside>
+          <aside className="absolute inset-y-0 left-0 w-[17.5rem] animate-drawer border-r border-slate-200 bg-white shadow-lift dark:border-white/10 dark:bg-ink-900">{sidebar}</aside>
         </div>
       )}
 
-      <div className="lg:pl-[264px]">
+      <div className="lg:pl-[16.5rem]">
         <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-white/[0.06] dark:bg-ink-950/70">
           <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6 lg:px-8">
             <IconButton label="Open menu" className="lg:hidden" onClick={() => setDrawer(true)}><List size={20} weight="bold" /></IconButton>
@@ -128,7 +128,7 @@ export function Shell({ children }: { children: ReactNode }) {
 function NavSection({ title, items, active }: { title: string; items: NavItem[]; active: (href: string) => boolean }) {
   return (
     <div>
-      <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">{title}</p>
+      <p className="px-3 pb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">{title}</p>
       <ul className="space-y-0.5">
         {items.map((l) => {
           const on = active(l.href);
@@ -155,35 +155,40 @@ function NavSection({ title, items, active }: { title: string; items: NavItem[];
 }
 
 function UserMenu({ name, email, role, onSignOut }: { name: string; email: string; role: string; onSignOut: () => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const { theme, setTheme } = useTheme();
   return (
-    <div ref={ref} className="relative">
-      {open && (
-        <div className="absolute inset-x-0 bottom-full mb-2 animate-pop overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-lift dark:border-white/10 dark:bg-ink-900">
-          <div className="border-b border-slate-100 px-3 py-2 dark:border-white/[0.06]">
-            <p className="truncate text-xs text-slate-500">Signed in as</p>
-            <p className="truncate text-sm font-medium">{email}</p>
-          </div>
-          <Link href="/account" className="mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-white/5"><UserCircleGear size={18} />Account &amp; security</Link>
-          <button onClick={onSignOut} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10"><SignOut size={18} />Sign out</button>
-        </div>
+    <Menu
+      label="Account menu"
+      align="start"
+      direction="up"
+      buttonClassName="flex w-full items-center gap-3 rounded-xl border border-slate-200/80 bg-white p-2 text-left shadow-sm outline-none transition hover:border-slate-300 focus-visible:ring-2 focus-visible:ring-brand-500/50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:border-white/15"
+      panelClassName="left-0 right-0"
+      button={(
+        <>
+          <Avatar name={name} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">{name}</span>
+            <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{role}</span>
+          </span>
+          <CaretUpDown size={16} className="text-slate-400" />
+        </>
       )}
-      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-3 rounded-xl border border-slate-200/80 bg-white p-2 text-left shadow-sm transition hover:border-slate-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:border-white/15">
-        <Avatar name={name} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{name}</span>
-          <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{role}</span>
-        </span>
-        <CaretUpDown size={16} className="text-slate-400" />
-      </button>
-    </div>
+    >
+      <div className="border-b border-slate-100 px-3 py-2 dark:border-white/[0.06]">
+        <p className="truncate text-xs text-slate-500">Signed in as</p>
+        <p className="truncate text-sm font-medium">{email}</p>
+      </div>
+      <div className="pt-1" />
+      <MenuItem icon={<UserCircleGear size={18} />} href="/account">Account &amp; security</MenuItem>
+      {/* Theme lives here too, so it is reachable on phones where the header switch is hidden. */}
+      <MenuSeparator />
+      <MenuHeading>Theme</MenuHeading>
+      {THEMES.map((t) => (
+        <MenuItem key={t.id} icon={t.icon} selected={theme === t.id} onSelect={() => setTheme(t.id)}>{t.label}</MenuItem>
+      ))}
+      <MenuSeparator />
+      <MenuItem danger icon={<SignOut size={18} />} onSelect={onSignOut}>Sign out</MenuItem>
+    </Menu>
   );
 }
 
@@ -217,7 +222,7 @@ export function ThemeSwitch() {
 function ShellSkeleton() {
   return (
     <div className="app-backdrop flex min-h-screen">
-      <div className="hidden w-[264px] border-r border-slate-200/80 p-5 lg:block dark:border-white/[0.06]">
+      <div className="hidden w-[16.5rem] border-r border-slate-200/80 p-5 lg:block dark:border-white/[0.06]">
         <div className="skeleton h-7 w-32" />
         <div className="mt-10 space-y-3">{Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton h-9" />)}</div>
       </div>
