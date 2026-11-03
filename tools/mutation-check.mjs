@@ -232,7 +232,7 @@ const MUTATIONS = [
   code('office: external hyperlinks only to web or mail', ZIPI,
     "if (!SAFE_LINK.test((a.Target ?? '').trim())) {", 'if (false) {', ['test/content-check.unit.test.ts']),
   code('office: OLE objects in embeddings refused', ZIPI,
-    'if (!EMBEDDED_OFFICE.test(e.name)) throw new ZipRejected(', 'if (false) throw new ZipRejected(', ['test/content-check.unit.test.ts']),
+    'if (!EMBEDDED_OFFICE.test(e.name)) throw new ZipRejected(', 'continue; if (false) throw new ZipRejected(', ['test/content-check.unit.test.ts']),
   code('office: embedded Office files checked recursively', ZIPI,
     '    inspectOoxml(inner, depth + 1, budget);', '', ['test/content-check.unit.test.ts']),
   code('office: ActiveX refused', ZIPI,
