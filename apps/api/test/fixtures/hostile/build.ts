@@ -239,9 +239,14 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([len, td, crc]);
 }
 
-/** A valid 1x1 PNG, optionally with extra chunks (e.g. tEXt) before IEND. */
-export function png(extraChunks: [string, Buffer][] = []): Buffer {
+/**
+ * A valid 1x1 PNG, optionally with extra chunks (e.g. tEXt) before IEND.
+ * `dims` overrides the IHDR width/height (the structural check never decodes
+ * IDAT, so the declared size alone drives the pixel-cap test).
+ */
+export function png(extraChunks: [string, Buffer][] = [], dims?: { width: number; height: number }): Buffer {
   const ihdr = Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+  if (dims) { ihdr.writeUInt32BE(dims.width, 0); ihdr.writeUInt32BE(dims.height, 4); }
   const idat = deflateSync(Buffer.from([0, 255, 0, 0, 255]));
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -253,7 +258,7 @@ export function png(extraChunks: [string, Buffer][] = []): Buffer {
 }
 
 /** A structurally valid baseline JPEG (markers and lengths; the pixels do not matter). */
-export function jpeg(opts: { comment?: string } = {}): Buffer {
+export function jpeg(opts: { comment?: string; width?: number; height?: number } = {}): Buffer {
   const seg = (marker: number, data: Buffer) => {
     const h = Buffer.alloc(4);
     h.writeUInt8(0xff, 0);
@@ -261,12 +266,15 @@ export function jpeg(opts: { comment?: string } = {}): Buffer {
     h.writeUInt16BE(data.length + 2, 2);
     return Buffer.concat([h, data]);
   };
+  const h = opts.height ?? 1;
+  const w = opts.width ?? 1;
+  const sof = Buffer.from([8, (h >> 8) & 0xff, h & 0xff, (w >> 8) & 0xff, w & 0xff, 1, 1, 0x11, 0]);
   return Buffer.concat([
     Buffer.from([0xff, 0xd8]),
     seg(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1')),
     ...(opts.comment ? [seg(0xfe, Buffer.from(opts.comment, 'latin1'))] : []),
     seg(0xdb, Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)])),
-    seg(0xc0, Buffer.from([8, 0, 1, 0, 1, 1, 1, 0x11, 0])),
+    seg(0xc0, sof),
     seg(0xc4, Buffer.concat([Buffer.from([0]), Buffer.alloc(16, 0), Buffer.alloc(0)])),
     seg(0xda, Buffer.from([1, 1, 0, 0, 63, 0])),
     Buffer.from([0x12, 0x34, 0xff, 0x00, 0x56, 0xff, 0xd0, 0x78]), // entropy data with a stuffed byte and a restart marker

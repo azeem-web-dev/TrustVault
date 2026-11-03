@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { createCanvas, GlobalFonts, loadImage, type Canvas, type SKRSContext2D } from '@napi-rs/canvas';
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { MAX_PIXELS, PAGE_WIDTH, fit } from './pdf-render.js';
+import { renderCountPdf, renderPdfPage } from './render-pool.js';
 
 /**
  * Page images for view-only access, and stamps on downloaded copies
@@ -22,10 +24,7 @@ const FONTS_DIR = join(PDFJS_DIR, 'standard_fonts') + '/';
 const MARK_FONT = 'TrustVaultMark';
 GlobalFonts.registerFromPath(join(FONTS_DIR, 'LiberationSans-Regular.ttf'), MARK_FONT);
 
-/** Width of a drawn page in pixels (about 150 dpi for A4). */
-const PAGE_WIDTH = 1240;
-/** Hard cap on one page's pixels, whatever shape the page claims to be. */
-const MAX_PIXELS = 1240 * 4000;
+// PAGE_WIDTH, MAX_PIXELS and fit() are shared with the render worker (pdf-render.ts).
 /** Pages beyond this are not shown. */
 export const MAX_PAGES = 500;
 const TEXT_LINES_PER_PAGE = 60;
@@ -100,18 +99,6 @@ function cachePut(key: string, png: Buffer) {
 
 // ------------------------------------------------------------------ drawing
 
-async function openPdf(bytes: Buffer) {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  // getDocument() never runs a PDF's scripts; no XFA forms, no system
-  // fonts, everything read from pdf.js's own folder (THREATS.md V8).
-  const task = getDocument({
-    data: new Uint8Array(bytes), enableXfa: false, disableFontFace: true, useSystemFonts: false,
-    standardFontDataUrl: FONTS_DIR, cMapUrl: join(PDFJS_DIR, 'cmaps') + '/', cMapPacked: true,
-    wasmUrl: join(PDFJS_DIR, 'wasm') + '/', stopAtErrors: false, verbosity: 0,
-  });
-  return { task, doc: await task.promise };
-}
-
 function textPages(bytes: Buffer): string[][] {
   const lines: string[] = [];
   for (const raw of bytes.toString('utf8').replace(/\r\n?/g, '\n').split('\n')) {
@@ -131,12 +118,9 @@ export async function countPages(versionId: string, kind: PageKind, bytes: Buffe
   if (hit) return hit.readUInt32BE(0);
   let n = 1;
   if (kind === 'text') n = textPages(bytes).length;
-  if (kind === 'pdf') {
-    n = await slot(async () => {
-      const { task, doc } = await openPdf(bytes);
-      try { return doc.numPages; } finally { await task.destroy(); }
-    });
-  }
+  // PDFs are counted off-thread (render-pool.ts): pdf.js does not yield, so a
+  // malicious page tree must not be walked on the request thread.
+  if (kind === 'pdf') n = await renderCountPdf(bytes);
   n = Math.min(n, MAX_PAGES);
   const b = Buffer.alloc(4); b.writeUInt32BE(n);
   cachePut(key, b);
@@ -148,36 +132,16 @@ export async function drawPage(versionId: string, kind: PageKind, bytes: Buffer,
   const key = `${versionId}:${n}`;
   const hit = cacheGet(key);
   if (hit) return hit;
+  // PDF pages are drawn off-thread under a deadline (render-pool.ts); image and
+  // text pages stay in-thread (bounded: images by the upload pixel cap, text by
+  // a fixed page size).
+  if (kind === 'pdf') { const png = await renderPdfPage(bytes, n); cachePut(key, png); return png; }
   const png = await slot(async () => {
-    if (kind === 'pdf') return drawPdfPage(bytes, n);
     if (kind === 'image') return drawImage(bytes);
     return drawText(textPages(bytes)[n - 1] ?? []);
   });
   cachePut(key, png);
   return png;
-}
-
-function fit(w: number, h: number): number {
-  let scale = PAGE_WIDTH / w;
-  if (w * scale * h * scale > MAX_PIXELS) scale = Math.sqrt(MAX_PIXELS / (w * h));
-  return scale;
-}
-
-async function drawPdfPage(bytes: Buffer, n: number): Promise<Buffer> {
-  const { task, doc } = await openPdf(bytes);
-  try {
-    const page = await doc.getPage(n);
-    const base = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({ scale: fit(base.width, base.height) });
-    const canvas = createCanvas(Math.max(1, Math.ceil(viewport.width)), Math.max(1, Math.ceil(viewport.height)));
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvas: canvas as never, canvasContext: ctx as never, viewport }).promise;
-    return canvas.encode('png');
-  } finally {
-    await task.destroy();
-  }
 }
 
 async function drawImage(bytes: Buffer): Promise<Buffer> {
