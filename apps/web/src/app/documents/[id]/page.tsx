@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import {
   ArrowLeft, ArrowsLeftRight, Biohazard, CalendarBlank, Check, ClockCounterClockwise, CloudArrowUp, Copy, DownloadSimple, Eye, FolderSimple,
   Fingerprint, Info, LockKey, MagnifyingGlass, PencilSimple, Prohibit, ShareNetwork, ShieldCheck, Sparkle, Stack, Tag, Trash, UserPlus,
@@ -16,7 +17,8 @@ import {
   ACCESS_LABEL, ACCESS_TONE, Alert, Avatar, Badge, Button, ButtonLink, Card, EmptyState, FileIcon, IconButton, IconTile, Input, Label,
   Modal, OUTCOME_TONE, Segmented, Select, Skeleton, SkeletonRows, Textarea, cx, fileType, relativeTime,
 } from '@/components/ui';
-import { api, ApiError, errorText, formatBytes, formatDate, type Access, type Level } from '@/lib/api';
+import { api, ApiError, beacon, errorText, formatBytes, formatDate, type Access, type Level } from '@/lib/api';
+import { CAPTURE_METHOD_LABEL, CAPTURE_VEIL_MS, CLIPBOARD_NOTICE, captureMethod, shouldReport, type CaptureMethod } from '@/lib/capture-guard';
 import { ConditionBadges, DownloadRequestCard, PolicyFields, type SharePolicy, type SharePolicyView } from '@/components/access-policy';
 
 interface Version {
@@ -73,6 +75,8 @@ export default function DocumentPage() {
       if (first.current) {
         first.current = false;
         if (d.myAccess === 'VIEW') setTab('pages');
+        // Links in owner emails (e.g. a capture attempt) open the history.
+        else if (window.location.hash === '#history' && (d.myAccess === 'MANAGE' || d.myAccess === 'OWNER')) setTab('history');
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setNotFound(true);
@@ -246,19 +250,27 @@ export default function DocumentPage() {
   );
 }
 
+/** Documents reported in this page load, for the 10-second debounce. */
+const reported = new Map<string, number>();
+
 /**
  * Server-drawn page images with the viewer's name, the time and a trace
  * code across them (THREATS.md V2-V4). The browser never gets the original
  * file. Blurring when the window loses focus, blocking print, the context
  * menu and dragging are speed bumps only: anyone who can see a page can
- * photograph it (THREATS.md V3).
+ * photograph it (THREATS.md V3). Key presses that usually start a screen
+ * capture blank the pages for a moment and are reported to the owner,
+ * silently (V11); the screenshot itself cannot be stopped from a web page.
  */
 function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
   const [info, setInfo] = useState<{ pages: number; preview: boolean; message: string | null; versionNo: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [veiled, setVeiled] = useState(false);
+  const [captureVeil, setCaptureVeil] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const pageRef = useRef(1);
+  useEffect(() => { pageRef.current = page; }, [page]);
 
   useEffect(() => {
     api.get<{ pages: number; preview: boolean; message: string | null; versionNo: number }>(`/documents/${doc.id}/pages`)
@@ -270,24 +282,42 @@ function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
     const hide = () => setVeiled(true);
     const show = () => setVeiled(document.hidden || !document.hasFocus());
     const onVisibility = () => (document.hidden ? hide() : show());
-    const stopPrint = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 's')) e.preventDefault();
+    // Likely screen captures (THREATS.md V11): blank the pages at once, keep
+    // them blank for a moment, overwrite the clipboard and quietly report it.
+    // The viewer is not told about the report (the owner asked for that).
+    let unveil: ReturnType<typeof setTimeout> | undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S')) e.preventDefault();
+      const method = captureMethod(e, navigator.platform || navigator.userAgent);
+      if (!method) return;
+      flushSync(() => setCaptureVeil(true));
+      clearTimeout(unveil);
+      unveil = setTimeout(() => setCaptureVeil(false), CAPTURE_VEIL_MS);
+      if (method === 'printscreen') {
+        const overwrite = () => { try { void navigator.clipboard?.writeText(CLIPBOARD_NOTICE).catch(() => undefined); } catch { /* best effort */ } };
+        overwrite();
+        setTimeout(overwrite, 800); // the OS may write its picture a moment later
+      }
+      if (shouldReport(reported, doc.id, Date.now())) beacon(`/documents/${doc.id}/capture-attempt`, { method, page: pageRef.current });
     };
     window.addEventListener('blur', hide);
     window.addEventListener('focus', show);
     window.addEventListener('beforeprint', hide);
     window.addEventListener('afterprint', show);
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('keydown', stopPrint);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
     return () => {
+      clearTimeout(unveil);
       window.removeEventListener('blur', hide);
       window.removeEventListener('focus', show);
       window.removeEventListener('beforeprint', hide);
       window.removeEventListener('afterprint', show);
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('keydown', stopPrint);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
     };
-  }, []);
+  }, [doc.id]);
 
   useEffect(() => setLoaded(false), [page]);
 
@@ -310,7 +340,10 @@ function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
       ) : total === 0 ? (
         <Alert tone="amber">This file has no pages to show.</Alert>
       ) : (
-        <div className="tv-protected relative select-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.02]" onContextMenu={(e) => e.preventDefault()}>
+        <div
+          className="tv-protected relative select-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.02]"
+          onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()} onCopy={(e) => e.preventDefault()}
+        >
           {!loaded && <Skeleton className="absolute inset-0 rounded-none" />}
           <img
             key={page}
@@ -320,9 +353,11 @@ function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
             onDragStart={(e) => e.preventDefault()}
             onLoad={() => setLoaded(true)}
             onError={() => setError('This page could not be shown. Your access may have changed; reload the page.')}
-            className={cx('pointer-events-none block h-auto w-full transition', veiled && 'blur-xl')}
+            className={cx('pointer-events-none block h-auto w-full transition', (veiled || captureVeil) && 'blur-xl')}
           />
-          {veiled && (
+          {/* Opaque at once, no transition: a capture right after the key press sees a blank panel. */}
+          {captureVeil && <div className="absolute inset-0 bg-slate-100 dark:bg-slate-900" aria-hidden="true" />}
+          {veiled && !captureVeil && (
             <div className="absolute inset-0 grid place-items-center bg-white/40 text-sm font-medium text-slate-700 dark:bg-black/40 dark:text-slate-200">
               <span className="flex items-center gap-2"><EyeSlash size={18} />Hidden while this window is not in front</span>
             </div>
@@ -766,6 +801,15 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
 
 interface HistoryEvent { seq: string; occurredAt: string; actorEmail: string | null; action: string; outcome: 'ALLOWED' | 'DENIED' | 'FAILED'; reason: string | null }
 
+/** A capture attempt names its method: "Tried to take a screenshot (Print Screen)" (THREATS.md V11). */
+function historyLabel(e: HistoryEvent): string {
+  if (e.action === 'document.capture_attempt') {
+    const how = CAPTURE_METHOD_LABEL[e.reason as CaptureMethod];
+    return how ? `Tried to take a screenshot (${how})` : 'Tried to take a screenshot';
+  }
+  return actionMeta(e.action).label;
+}
+
 function History({ docId }: { docId: string }) {
   const [events, setEvents] = useState<HistoryEvent[] | null>(null);
   useEffect(() => {
@@ -783,12 +827,12 @@ function History({ docId }: { docId: string }) {
               <ActionIcon action={e.action} outcome={e.outcome} />
               <div className="min-w-0 flex-1 pt-0.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold">{actionMeta(e.action).label}</p>
+                  <p className="text-sm font-semibold">{historyLabel(e)}</p>
                   {e.outcome !== 'ALLOWED' && <Badge tone={OUTCOME_TONE[e.outcome]}>{e.outcome === 'DENIED' ? 'Refused' : 'Failed'}</Badge>}
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                   {e.actorEmail ?? 'system'} · <span title={formatDate(e.occurredAt)}>{relativeTime(e.occurredAt)}</span>
-                  {e.reason && <> · {e.reason.replace(/_/g, ' ')}</>}
+                  {e.reason && e.action !== 'document.capture_attempt' && <> · {e.reason.replace(/_/g, ' ')}</>}
                 </p>
               </div>
               <span className="hidden pt-1 font-mono text-[11px] text-slate-400 sm:block">#{e.seq}</span>

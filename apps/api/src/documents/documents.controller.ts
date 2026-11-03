@@ -13,6 +13,7 @@ import { countFormulaCells, neutralizeCsv } from '../common/csv.js';
 import { sha256 } from '../crypto/file-crypto.js';
 import { SharingService } from './sharing.service.js';
 import { ViewingService } from './viewing.service.js';
+import { CAPTURE_METHODS, CaptureReportService } from './capture-report.service.js';
 import { ENV, type Env } from '../config/env.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { AccessPolicyService } from './access-policy.service.js';
@@ -68,6 +69,10 @@ const GrantSchema = z
 
 const TransferSchema = z.strictObject({ newOwnerId: Uuid });
 
+const CaptureAttemptSchema = z.strictObject({ method: z.enum(CAPTURE_METHODS), page: z.number().int().min(1).max(500).optional() });
+/** Capture reports per person per 10 minutes (THREATS.md V11). */
+const CAPTURE_REPORT_LIMIT = 20;
+
 const Reason = z.string().trim().min(10, 'Give a reason of at least 10 characters').max(500);
 const DownloadRequestSchema = z.strictObject({ reason: Reason, versionNo: z.number().int().min(1).optional() });
 const OverrideSchema = z.strictObject({ userId: Uuid, reason: Reason, hours: z.number().int().min(1).max(24).default(4) });
@@ -106,6 +111,7 @@ export class DocumentsController {
     @Inject(DownloadApprovalsService) private readonly approvals: DownloadApprovalsService,
     @Inject(AccessPolicyService) private readonly policies: AccessPolicyService,
     @Inject(DownloadLifecycleService) private readonly lifecycle: DownloadLifecycleService,
+    @Inject(CaptureReportService) private readonly captures: CaptureReportService,
   ) {}
 
   /** Search documents I own or hold a live grant on. */
@@ -190,6 +196,19 @@ export class DocumentsController {
     res.setHeader('Cache-Control', 'no-store, private');
     res.setHeader('X-Trace-Code', trace);
     res.end(png);
+  }
+
+  /**
+   * VIEW or better: the web viewer saw a key press that usually starts a
+   * screen capture. Recorded for the owner (history, alert, one email an
+   * hour); the answer is an empty 204 whatever happens after the audit row,
+   * so the viewer learns nothing (THREATS.md V11).
+   */
+  @Post(':id/capture-attempt')
+  @HttpCode(204)
+  async captureAttempt(@CurrentActor() actor: Actor, @Param('id') id: string, @Body(new ZodPipe(CaptureAttemptSchema)) body: z.infer<typeof CaptureAttemptSchema>) {
+    await this.limits.hit(`capture:${actor.userId}`, CAPTURE_REPORT_LIMIT, 600, 'Too many requests. Try again later.');
+    await this.captures.report(actor, docId(id), body);
   }
 
   /** READ or better: the key for the Android app's encrypted copy (THREATS.md V6). */

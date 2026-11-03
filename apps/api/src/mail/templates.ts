@@ -153,6 +153,24 @@ export const mailTemplates = {
     };
   },
 
+  captureAttempt(name: string, who: string, whoEmail: string, title: string, method: string, at: Date, url: string) {
+    return {
+      subject: `Someone tried to capture “${title}”`,
+      ...render(name, {
+        title: 'Someone tried to take a screenshot of your document',
+        intro: `${who} (${whoEmail}) pressed a screen-capture key while viewing “${title}”.`,
+        lines: [
+          `When: ${when(at)}`,
+          `How: ${method}`,
+          'The page was blanked for a moment, and they were not told about this report. A web page cannot block an operating-system screenshot or a camera, so a picture may still have been taken: every page carries their name, the time and a trace code.',
+          'You get at most one email an hour per person and document; every attempt is in the document’s history.',
+        ],
+        button: { label: 'See the document’s history', url },
+        footer: 'If this is unexpected, consider removing their access or talking to your security contact.',
+      }),
+    };
+  },
+
   sharedWithYou(name: string, sharer: string, title: string, level: string, expiresAt: Date | null, url: string) {
     const can = level === 'VIEW' ? 'view (but not download)' : level === 'READ' ? 'read and download' : level === 'EDIT' ? 'edit' : 'manage';
     return {

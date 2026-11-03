@@ -110,3 +110,7 @@ body {
   .tv-protected { display: none !important; }
   .tv-print-note { display: block !important; }
 }
+
+/* View-only pages: nothing to select, drag or long-press-save (speed bumps, THREATS.md V3, V11). */
+.tv-protected, .tv-protected * { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.tv-protected img { -webkit-user-drag: none; }

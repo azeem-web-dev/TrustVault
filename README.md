@@ -41,13 +41,13 @@ Demo accounts cannot reset their password and never receive email: their address
 
 | Level (on one document) | Can | Cannot |
 |---|---|---|
-| **View only** (`VIEW`) | Find it in search, see its details and versions, read its pages inside TrustVault. Every page is drawn by the server with the viewer's email, the time and a trace code; on Android screenshots and recording are blocked while it is open | Download the file, by any route: the app and the database both refuse. Word, Excel and PowerPoint files have no preview, so View only shows a note to ask the owner |
+| **View only** (`VIEW`) | Find it in search, see its details and versions, read its pages inside TrustVault. Every page is drawn by the server with the viewer's email, the time and a trace code; on Android screenshots and recording are blocked while it is open. In the browser a screenshot cannot be blocked: likely capture keys (Print Screen, Win+Shift+S, Cmd+Shift+3/4/5, Ctrl+P) blank the page for a moment and are reported to the owner (history, alert, email) without telling the viewer | Download the file, by any route: the app and the database both refuse. Word, Excel and PowerPoint files have no preview, so View only shows a note to ask the owner |
 | **Download** (`READ`) | Also download. PDFs and images are stamped with who downloaded, when and a trace code; the Android app keeps the file only encrypted, with a key it must fetch from the server on every open | Change anything |
 | **Edit** (`EDIT`) | Also rename, describe and upload new versions | Share |
 | **Manage** (`MANAGE`) | Also share View only, Download or Edit, revoke, see who has access and the history | Give Manage, trash, transfer |
 | **Owner** | Everything, including Manage grants, trash, restore, delete and transfer | |
 
-Anyone who can see a page can photograph it. View only keeps originals off devices, Android blocks screenshots, and watermarks make leaks traceable ([THREATS.md](THREATS.md) V1 to V10).
+Anyone who can see a page can photograph it. View only keeps originals off devices, Android blocks screenshots, the web viewer reports likely screenshot attempts to the owner (deterrence, not prevention), and watermarks make leaks traceable ([THREATS.md](THREATS.md) V1 to V11).
 
 Accounts are created by invitation. An admin enters an email, a role and, if needed, an access end date; the person gets an email with a link (it works once and expires after 72 hours) and chooses their own name and password. Until then the account is **Invited** and can do nothing. The admin never knows the password. Admins can resend or cancel an invitation from the Users screen (THREATS.md S18).
 
@@ -140,6 +140,7 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | `rls.test.ts` | the database alone (no API code): RLS policies and guard triggers |
 | `search-filter.test.ts` | the search access filter alone (run where RLS does not apply) |
 | `view-only.test.ts` | View only: pages yes, original no (both locks), watermark and trace code in the audit row, stamped downloads, revoke stops pages and the Android key, externals, break-glass, bulk-viewing alert and rate limit |
+| `capture-attempt.test.ts`, `capture-guard.unit.test.ts` | Screenshot attempts on view-only pages: reported silently to the owner (history, one alert and one email an hour), nothing for people without access, rate limit, the web key detection and its debounce |
 | `documents.test.ts` | end to end: 13 document routes refused for 4 kinds of outsider, search leaks nothing, revocation is immediate, uploads validated and malware-scanned (fails closed), files encrypted, blob swaps detected, break-glass, suggestions |
 | `auth.test.ts` | sessions, lockout, rate limits, CSRF, Origin, session death on deactivate / role / password change |
 | `admin-mfa.test.ts` | second factor, replay, protected demo accounts, admin audit view, alerts, export verified by the offline tool |

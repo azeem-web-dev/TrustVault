@@ -29,6 +29,7 @@ export enum Level {
 export const REQUIRED_LEVEL = {
   view: Level.VIEW,          // metadata and version list
   view_pages: Level.VIEW,    // watermarked page images (THREATS.md V2)
+  capture_attempt: Level.VIEW, // report a likely screen capture of those pages (V11)
   download: Level.READ,      // the original bytes: never VIEW (THREATS.md V1)
   offline_key: Level.READ,   // key for the Android app's encrypted copy (V6)
   edit: Level.EDIT,          // title, category, description
@@ -50,7 +51,7 @@ export type DocAction = keyof typeof REQUIRED_LEVEL;
 const TRASH_ACTIONS: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'download', 'restore', 'purge', 'view_history']);
 
 /** Actions that only read: they share the document's lock (see require()). */
-const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'download', 'offline_key']);
+const READ_ONLY: ReadonlySet<DocAction> = new Set(['view', 'view_pages', 'capture_attempt', 'download', 'offline_key']);
 
 /** Conditions a share (or a role) puts on access: THREATS.md P1-P12. */
 export interface AccessConditions {

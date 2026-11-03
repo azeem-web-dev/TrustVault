@@ -554,6 +554,18 @@ const MUTATIONS = [
     "response.headers.set('X-Frame-Options', 'DENY');", '', ['test/web-headers.unit.test.ts']),
   code('web: pages are not cached', WEB_PROXY,
     "response.headers.set('Cache-Control', 'no-store');", '', ['test/web-headers.unit.test.ts']),
+  // --- screen-capture reports (THREATS.md V11) ------------------------------
+  code('capture reports: the access check before anything is recorded', 'src/documents/capture-report.service.ts',
+    "const decision = await this.access.require(tx, actor, id, 'capture_attempt');", "const decision = { reason: 'grant' };",
+    ['test/capture-attempt.test.ts']),
+  code('capture reports: the owner is not alerted or mailed about their own document', 'src/documents/capture-report.service.ts',
+    'if (found.ownerId === actor.userId) return;', '', ['test/capture-attempt.test.ts']),
+  code('capture reports: one alert and one email per viewer and document per hour', 'src/documents/capture-report.service.ts',
+    'if (row) return row.id;', '', ['test/capture-attempt.test.ts']),
+  code('capture reports: rate limited per person', 'src/documents/documents.controller.ts',
+    "await this.limits.hit(`capture:${actor.userId}`, CAPTURE_REPORT_LIMIT, 600, 'Too many requests. Try again later.');", '', ['test/capture-attempt.test.ts']),
+  code('web: Print Screen is detected as a capture attempt', '../web/src/lib/capture-guard.ts',
+    "if (e.key === 'PrintScreen' || e.code === 'PrintScreen') return 'printscreen';", '', ['test/capture-guard.unit.test.ts']),
 ];
 
 function loadEnv() {

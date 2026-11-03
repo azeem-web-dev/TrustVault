@@ -84,7 +84,24 @@ export const api = {
   upload: <T>(path: string, form: FormData) => call<T>('POST', path, form),
 };
 
-export const errorText = (err: unknown, fallback = 'Something went wrong'): string =>
+/**
+ * Fire-and-forget POST that survives the page closing (keepalive). Never
+ * throws and never tells the user anything: used for silent reports such as
+ * a detected screen-capture attempt.
+ */
+export function beacon(path: string, body: unknown): void {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    void fetch(`/api${path}`, {
+      method: 'POST', headers, body: JSON.stringify(body), credentials: 'same-origin', cache: 'no-store', keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // Nothing to do: the report is best effort.
+  }
+}
+
+export const errorText =(err: unknown, fallback = 'Something went wrong'): string =>
   err instanceof ApiError ? err.message : err instanceof Error && err.name === 'NotAllowedError' ? 'Cancelled' : fallback;
 
 export function formatBytes(n: number): string {

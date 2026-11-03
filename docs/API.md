@@ -17,7 +17,7 @@ Base URL: `https://vault.rayyanazeem.cloud/api`. JSON in and out, except uploads
 | **Database rules on accounts** | Besides the API's checks, the database itself refuses account changes from the app's database role unless an active admin's request makes them (role, status, end date, names, groups), the person themselves does (password, their own second factor), or a link used in the same request does (reset, invitation). An admin never sets a password, never changes their own role or status, and the last active admin cannot be removed. Password hashes and TOTP secrets cannot be read by that role (THREATS.md A23-A26). |
 | **Unknown fields** | Request bodies are strict: an unexpected field (`ownerId`, `role`, ...) is `400`. |
 | **Errors** | `{"message": "...", "requestId": "..."}`. Unexpected errors are `500` with no details. |
-| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes and passkey attempts: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. View-only pages: `PAGE_VIEW_RATE_LIMIT` (default 600)/10 min per user. Witness: 60/min per IP. `429` with `retryAfterSeconds`. |
+| **Rate limits** | Sign-in: 20/15 min per IP, 10/15 min per account, plus nginx 10/min per IP. Codes and passkey attempts: 5 per 5 min. Uploads: 60/10 min per user. Downloads: 300/10 min per user. View-only pages: `PAGE_VIEW_RATE_LIMIT` (default 600)/10 min per user. Capture reports: 20/10 min per user. Witness: 60/min per IP. `429` with `retryAfterSeconds`. |
 | **Uploads** | Every file is scanned by ClamAV before it is stored. Infected: `422`. Scanner unavailable: `503` and nothing is stored. Both are audited. |
 
 Levels: **VIEW** < **READ** < **EDIT** < **MANAGE** < **owner**. VIEW sees metadata, versions and watermarked page images, never the original file; READ adds downloading. Account roles: **ADMIN**, **OWNER** (may upload), **VIEWER**, **EXTERNAL** (VIEW or READ only, must have an expiry, no groups, no directory).
@@ -66,6 +66,7 @@ Levels: **VIEW** < **READ** < **EDIT** < **MANAGE** < **owner**. VIEW sees metad
 | GET | `/documents/:id/pages` | **VIEW+** | `{versionNo, pages, preview, message}` for the current version. PDF, PNG, JPEG and text files are drawn (at most 500 pages); Word, Excel and PowerPoint answer `preview: false` with "Preview is not available for this file type. Ask the owner for download access." |
 | GET | `/documents/:id/pages/:n` | **VIEW+** | Page `n` (from 1) as a PNG drawn by the server, with the viewer's email, the UTC time and a trace code tiled across it. Never the original bytes. Each page is a `document.page_view` audit row `{page, pages, versionNo, trace, at}`, committed before the image is sent. `no-store`, `nosniff`, `CSP: sandbox`, `Cross-Origin-Resource-Policy: same-origin`, `X-Trace-Code`. `404` past the last page, `422` for a type with no preview or a file that cannot be drawn. Rate limited per user. |
 | POST | `/documents/:id/offline-key` | **READ+** | `{documentId, key, algorithm: "AES-256-GCM"}`: the 32-byte key (base64) for the Android app's encrypted copy of this document. Same key on every call while access lasts; asked for on every open; refused (`404`) after a revoke, and the key is destroyed when access drops below READ, so a later re-share gets a new one. Audited as `document.offline_key`. |
+| POST | `/documents/:id/capture-attempt` | **VIEW+** | `{method: "printscreen" \| "snip_shortcut" \| "mac_shortcut" \| "print_shortcut", page?: 1-500}` (unknown fields `400`). Sent silently by the web viewer when it sees a key press that usually starts a screen capture; it does **not** block the capture (a web page cannot). `204` with no body, always the same for whoever may report. Audited as `document.capture_attempt` (`ALLOWED`, reason = method, details `{method, page, userAgent, access}`; shown in the document's history). Unless the reporter is the owner: one `capture_attempt` alert (medium) per person and document per hour, later attempts attached to it as notes, and with each new alert one email to the owner (never to the viewer, never to demo accounts). No access: the usual `404`. 20 per user per 10 minutes. THREATS.md V11. |
 | GET | `/documents/:id/history` | **MANAGE+** | Audit events for this document, including refusals and break-glass use. |
 | POST | `/documents/:id/trash` | **owner** | Hidden from everyone else at once. |
 | POST | `/documents/:id/restore` | **owner** | |
@@ -131,6 +132,7 @@ Server requirements: none beyond Node. Pages are drawn by pdf.js (`pdfjs-dist`, 
 | Action | When |
 |---|---|
 | `document.page_view` | `ALLOWED` per page sent, details `{page, pages, versionNo, trace, at}`; `FAILED` `render_failed` when a file cannot be drawn. To trace a leaked picture, search the audit log for its code |
+| `document.capture_attempt` | `ALLOWED` per report from the web viewer of a likely screen capture, reason = method, details `{method, page, userAgent, access}`; `DENIED` like any refused document request. Not proof a picture was taken, nor that none was |
 | `document.download` | Now also `{trace, stamp: "pdf" \| "image" \| "none"}` |
 | `document.download_stamp` | `FAILED` `stamp_failed`: the copy went out unstamped (e.g. an encrypted PDF), with its trace code |
 | `document.offline_key` | The Android app asked for a copy's key: `ALLOWED` `{created}`, or `DENIED` (`needs_read`, `no_grant`, ...) |
@@ -283,6 +285,7 @@ A review step that does not fit the current status is `409`; an alert about your
 | `concurrent_sessions` | medium (same device kind) / low | the account live from two networks at once |
 | `alert_flood`, `alert_flood_document`, `alert_flood_global` | high | 10+ alerts about one person or document in 24 h; 50+ alerts in an hour |
 | `alert_policy_changed`, `download_limit_override` | medium | thresholds changed; a limit raised for someone |
+| `capture_attempt` | medium | the web viewer reported a likely screen capture of a document (one per person and document per hour, later attempts attached as notes; raised by the request, not the job); the owner is emailed |
 | `alert_generator_failed` | high | the alert job failed (raised once it works again) |
 | from the audit log | as in `/admin/alerts` | `audit_verification_failed`, `file_integrity`, `malware_found`, `rescan_failed`, `reset_then_sign_in`, `ended_session_used`, `access_after_revoke`, `repeated_denials`, `break_glass`, `external_share`, `login_blocked` (one per account per hour) |
 

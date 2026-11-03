@@ -11,7 +11,7 @@ const FUTURE = '2026-12-01T00:00:00Z';
 const PAST = '2026-10-01T00:00:00Z';
 
 const ALL_ACTIONS = Object.keys(REQUIRED_LEVEL) as DocAction[];
-const VIEW_ACTIONS: DocAction[] = ['view', 'view_pages'];
+const VIEW_ACTIONS: DocAction[] = ['view', 'view_pages', 'capture_attempt'];
 const READ_ACTIONS: DocAction[] = [...VIEW_ACTIONS, 'download', 'offline_key'];
 const EDIT_ACTIONS: DocAction[] = ['edit', 'upload_version'];
 const MANAGE_ACTIONS: DocAction[] = ['view_access', 'share', 'view_history'];

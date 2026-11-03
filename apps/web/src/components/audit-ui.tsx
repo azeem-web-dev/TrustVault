@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import {
-  ArrowCounterClockwise, ArrowsLeftRight, Biohazard, Bug, Certificate, DownloadSimple, Eye, Fingerprint, Fire, FolderSimple, Key, LockKeyOpen,
+  ArrowCounterClockwise, ArrowsLeftRight, Biohazard, Bug, Camera, Certificate, DownloadSimple, Eye, Fingerprint, Fire, FolderSimple, Key, LockKeyOpen,
   Password, PencilSimple, Prohibit, Pulse, SealCheck, ShieldWarning, SignIn, SignOut, Siren, Trash, UploadSimple, UserGear, UserMinus, UserPlus, UsersFour,
 } from '@phosphor-icons/react';
 
@@ -12,6 +12,7 @@ const EXACT: Record<string, Meta> = {
   'document.download': { icon: <DownloadSimple size={16} />, label: 'Downloaded' },
   'document.view': { icon: <Eye size={16} />, label: 'Viewed' },
   'document.page_view': { icon: <Eye size={16} />, label: 'Page viewed' },
+  'document.capture_attempt': { icon: <Camera size={16} />, label: 'Tried to take a screenshot' },
   'document.offline_key': { icon: <Key size={16} />, label: 'Opened offline copy' },
   'document.download_stamp': { icon: <ShieldWarning size={16} />, label: 'Download not stamped' },
   'document.upload': { icon: <UploadSimple size={16} />, label: 'Uploaded' },

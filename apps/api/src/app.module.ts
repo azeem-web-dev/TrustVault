@@ -32,6 +32,7 @@ import { AccessService } from './documents/access.js';
 import { DocumentsService } from './documents/documents.service.js';
 import { SharingService } from './documents/sharing.service.js';
 import { ViewingService } from './documents/viewing.service.js';
+import { CaptureReportService } from './documents/capture-report.service.js';
 import { DocumentsController } from './documents/documents.controller.js';
 import { FoldersController } from './documents/folders.controller.js';
 import { DownloadApprovalsService } from './documents/download-approvals.service.js';
@@ -102,6 +103,7 @@ export class AppModule {
         DocumentsService,
         SharingService,
         ViewingService,
+        CaptureReportService,
         DownloadApprovalsService,
         AccessPolicyService,
         JobsService,

@@ -62,6 +62,21 @@ export class NotifyService {
     });
   }
 
+  /**
+   * Tells a document's owner that someone viewing it pressed a screen-capture
+   * key (THREATS.md V11). Never sent to the viewer; never to a demo owner
+   * (MailService refuses protected accounts).
+   */
+  captureAttempt(ownerId: string, viewerId: string, documentId: string, title: string, method: string, at: Date): void {
+    if (ownerId === viewerId) return;
+    this.fire(async () => {
+      const [o, v] = await Promise.all([this.person(ownerId), this.person(viewerId)]);
+      if (o && v && o.status === 'ACTIVE') {
+        this.mail.send(o, mailTemplates.captureAttempt(o.displayName, v.displayName, v.email, title, method, at, `${this.env.PUBLIC_ORIGIN}/documents/${documentId}#history`));
+      }
+    });
+  }
+
   /** Tells the person a document was shared with them (named people only, not groups). */
   sharedWithYou(granteeId: string, sharerName: string, documentId: string, title: string, level: string, expiresAt: Date | null): void {
     this.fire(async () => {
