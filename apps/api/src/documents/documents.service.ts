@@ -9,7 +9,7 @@ import { currentContext, markRefusalAudited, type Actor } from '../common/reques
 import { logger } from '../common/logger.js';
 import { RedisService } from '../redis/redis.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
-import { AccessService, Level } from './access.js';
+import { AccessService, downloadView, Level } from './access.js';
 import { DownloadApprovalsService } from './download-approvals.service.js';
 import { remainingLevel } from './sharing.service.js';
 import { RejectedFile, safeFileName, type DetectedType } from './content-check.js';
@@ -180,10 +180,14 @@ export class DocumentsService {
       });
       if (!doc) throw new NotFoundException('Document not found');
       await this.audit.record({ action: 'document.view', outcome: 'ALLOWED', reason: decision.reason, targetType: 'document', targetId: id, documentId: id }, tx);
+      // The per-user download view for the web UI: can they download the
+      // current version now, and if not, may they ask the owner (THREATS.md V1)?
+      const facts = await this.access.facts(tx, id, actor.userId);
       return {
         ...this.toListItem(doc, decision.level, actor.userId),
         // Downloads need an approval from the owner (THREATS.md P8).
         downloadNeedsApproval: decision.approvalRequired === true,
+        download: downloadView(decision.level, decision.approvalRequired, facts.download),
         folder: doc.ownerId === actor.userId ? doc.folder : null,
         versions: doc.versions.map((v) => ({
           versionNo: v.versionNo, fileName: v.fileName, mimeType: v.mimeType, sizeBytes: v.sizeBytes,

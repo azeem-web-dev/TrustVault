@@ -67,6 +67,26 @@ export interface GrantFacts extends AccessConditions {
   downloadApproval?: boolean;
 }
 
+/** The contract's request state for the current version's download. */
+export type RequestStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
+
+/**
+ * Download-approval facts for this user on this document (THREATS.md V1, P8).
+ * A VIEW holder gets the original bytes only against one of these.
+ */
+export interface DownloadFacts {
+  /** A usable (approved, unexpired, use-left) approval for ANY version. */
+  usableAny: boolean;
+  /** The same, for the current version (the one the response is about). */
+  usableCurrent: boolean;
+  /** The state of this user's latest request for the current version. */
+  latestCurrentStatus: RequestStatus;
+  /** The current version is quarantined (no approval can release it). */
+  currentQuarantined: boolean;
+  /** An owner or nominated approver exists to decide a request. */
+  approverExists: boolean;
+}
+
 /** Raw facts from tv_access_facts(); no decision has been made yet. */
 export interface AccessFacts {
   document: { ownerId: string; status: 'ACTIVE' | 'DELETED' } | null;
@@ -77,6 +97,8 @@ export interface AccessFacts {
   rolePolicy?: AccessConditions | null;
   /** An owner's emergency exception for this user on this document. */
   overrideUntil?: string | null;
+  /** Download-approval state; absent in pure unit facts (treated as none). */
+  download?: DownloadFacts;
 }
 
 /** Where the request comes from: the client IP as derived by Express (trusted proxy only). */
@@ -169,8 +191,40 @@ export function evaluate(facts: AccessFacts, userId: string, action: DocAction, 
     return { allowed: false, level, reason: 'document_in_trash' };
   }
   const needed = REQUIRED_LEVEL[action];
+  // A holder below READ (a VIEW grantee) may download ONE document for which
+  // the owner approved a usable request (THREATS.md V1). The download level
+  // requirement is NOT lowered: this is a per-user+document authorisation,
+  // enforced identically in the database (tv_consume_download + blobs_release
+  // + tv_issue_unwrap_ticket). Without a usable approval the normal refusal
+  // below stands, so a VIEW holder with no approval still cannot download.
+  // Administrators are never on this path: break-glass gives VIEW for an
+  // emergency look only (THREATS.md V9), never a route to the original bytes.
+  if (action === 'download' && level < needed && level >= Level.VIEW
+      && facts.user?.role !== 'ADMIN' && facts.download?.usableAny) {
+    return { allowed: true, level, reason: 'download_approval', approvalRequired: true };
+  }
   if (level < needed) return { allowed: false, level, reason: `needs_${Level[needed].toLowerCase()}` };
   return { allowed: true, level, reason, approvalRequired: approvalRequired === true };
+}
+
+/**
+ * The per-user download view for the GET response (the contract the web agent
+ * builds against). Pure: same inputs, same answer.
+ *   allowed      — can download the current version right now (READ+ without an
+ *                  approval condition, or anyone with a usable approval for it).
+ *   requestable  — needs an approval and may ask now (not already pending or
+ *                  approved, current version not quarantined, an approver exists).
+ *   requestStatus — the state of their latest request for the current version.
+ */
+export function downloadView(level: Level, approvalRequired: boolean | undefined, d: DownloadFacts | undefined): { allowed: boolean; requestable: boolean; requestStatus: RequestStatus } {
+  const f: DownloadFacts = d ?? { usableAny: false, usableCurrent: false, latestCurrentStatus: 'NONE', currentQuarantined: false, approverExists: false };
+  const canFree = level >= Level.READ && approvalRequired !== true;        // READ+ with no approval condition
+  const needsApproval = level === Level.VIEW || (level >= Level.READ && approvalRequired === true);
+  const allowed = canFree || (needsApproval && f.usableCurrent);
+  const requestable = needsApproval && !allowed
+    && f.latestCurrentStatus !== 'PENDING' && f.latestCurrentStatus !== 'APPROVED'
+    && !f.currentQuarantined && f.approverExists;
+  return { allowed, requestable, requestStatus: f.latestCurrentStatus };
 }
 
 @Injectable()

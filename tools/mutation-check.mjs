@@ -286,14 +286,14 @@ const MUTATIONS = [
     ['test/view-only.test.ts']),
   sql('database: a VIEW grantee cannot read the original bytes (blob rows need READ)',
     `DROP POLICY blobs_select ON document_blobs; CREATE POLICY blobs_select ON document_blobs FOR SELECT TO trustvault_app USING (EXISTS (SELECT 1 FROM document_versions v WHERE v.id = version_id AND tv_doc_level(v.document_id, tv_current_user()) >= 1))`,
-    `DROP POLICY blobs_select ON document_blobs; CREATE POLICY blobs_select ON document_blobs FOR SELECT TO trustvault_app USING (EXISTS (SELECT 1 FROM document_versions v WHERE v.id = version_id AND tv_doc_level(v.document_id, tv_current_user()) >= 2))`,
+    `DROP POLICY blobs_select ON document_blobs; CREATE POLICY blobs_select ON document_blobs FOR SELECT TO trustvault_app USING (EXISTS (SELECT 1 FROM document_versions v WHERE v.id = version_id AND (tv_doc_level(v.document_id, tv_current_user()) >= 2 OR (tv_doc_level(v.document_id, tv_current_user()) >= 1 AND tv_download_approval_in_tx(version_id, tv_current_user())))))`,
     ['test/rls.test.ts', 'test/view-only.test.ts']),
   sql('database: Android keys are destroyed when access drops below READ',
     'ALTER TABLE grants DISABLE TRIGGER offline_keys_forget', 'ALTER TABLE grants ENABLE TRIGGER offline_keys_forget',
     ['test/rls.test.ts', 'test/view-only.test.ts']),
   sql('database: an ALLOWED download row needs READ live, not just VIEW',
     `CREATE OR REPLACE FUNCTION audit_download_still_allowed() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$ BEGIN IF tv_doc_level(NEW.document_id, NEW.actor_id) < 1 THEN RAISE EXCEPTION 'download refused: access ended during the request' USING ERRCODE = 'insufficient_privilege'; END IF; RETURN NEW; END $$`,
-    `CREATE OR REPLACE FUNCTION audit_download_still_allowed() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$ DECLARE needed int := CASE NEW.action WHEN 'document.page_view' THEN 1 ELSE 2 END; BEGIN IF tv_doc_level(NEW.document_id, NEW.actor_id) < needed THEN RAISE EXCEPTION 'download refused: access ended during the request' USING ERRCODE = 'insufficient_privilege'; END IF; RETURN NEW; END $$`,
+    `CREATE OR REPLACE FUNCTION audit_download_still_allowed() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$ DECLARE needed int := CASE NEW.action WHEN 'document.page_view' THEN 1 ELSE 2 END; BEGIN IF tv_doc_level(NEW.document_id, NEW.actor_id) < needed THEN IF NEW.action = 'document.download' AND NEW.actor_id IS NOT NULL AND tv_doc_level(NEW.document_id, NEW.actor_id) >= 1 AND tv_download_approval_in_tx((SELECT v.id FROM document_versions v WHERE v.document_id = NEW.document_id AND v.version_no = (NEW.details ->> 'versionNo')::int), NEW.actor_id) THEN RETURN NEW; END IF; RAISE EXCEPTION 'download refused: access ended during the request' USING ERRCODE = 'insufficient_privilege'; END IF; RETURN NEW; END $$`,
     ['test/download-order.test.ts']),
   // --- access policies: approvals, time windows, networks (THREATS.md P1-P12) --
   code('policy: a share outside its time window or network gives nothing (app)', ACCESS,
@@ -338,6 +338,65 @@ const MUTATIONS = [
   sql('database: exceptions only from the owner, at most 24 hours',
     'ALTER TABLE access_overrides DISABLE TRIGGER access_overrides_guard', 'ALTER TABLE access_overrides ENABLE TRIGGER access_overrides_guard',
     ['test/access-policy-db.test.ts']),
+
+  // --- a VIEW holder downloads one file by owner approval (THREATS.md V1) -----
+  // download allowed for a VIEW holder ONLY with a usable approval — caught in
+  // the app (decide()) and in the database (consume floor, ticket mint and the
+  // ALLOWED-download backstop).
+  code('view-download: a VIEW holder with a usable approval may download (app)', ACCESS,
+    "&& facts.user?.role !== 'ADMIN' && facts.download?.usableAny) {",
+    "&& facts.user?.role !== 'ADMIN' && false && facts.download?.usableAny) {",
+    ['test/view-download.test.ts']),
+  code('view-download: a VIEW holder may ask for download permission (app)', 'src/documents/download-approvals.service.ts',
+    'const needsApproval = decision.level === Level.VIEW\n        || (decision.level >= Level.READ && decision.approvalRequired === true);',
+    'const needsApproval = (decision.level >= Level.READ && decision.approvalRequired === true);',
+    ['test/view-download.test.ts']),
+  sql('database: a VIEW holder spends an approval, with only a live grant (consume floor is VIEW)',
+    `CREATE OR REPLACE FUNCTION tv_consume_download(p_request uuid, p_version uuid) RETURNS int
+     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public AS $MUT$
+     DECLARE me uuid := tv_current_user(); a download_approvals%ROWTYPE;
+     BEGIN
+       SELECT * INTO a FROM download_approvals WHERE id = p_request AND requester_id = me AND version_id = p_version FOR UPDATE;
+       IF NOT FOUND OR a.status <> 'APPROVED' OR a.valid_until <= clock_timestamp() OR a.uses >= a.max_uses
+          OR tv_doc_level(a.document_id, me) < 2 THEN RETURN NULL; END IF;
+       UPDATE download_approvals SET uses = uses + 1,
+              status = CASE WHEN uses + 1 >= max_uses THEN 'USED'::"DownloadApprovalStatus" ELSE status END,
+              last_use_tx = txid_current() WHERE id = p_request;
+       RETURN a.uses + 1;
+     END $MUT$`,
+    `CREATE OR REPLACE FUNCTION tv_consume_download(p_request uuid, p_version uuid) RETURNS int
+     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public AS $MUT$
+     DECLARE me uuid := tv_current_user(); a download_approvals%ROWTYPE;
+     BEGIN
+       SELECT * INTO a FROM download_approvals WHERE id = p_request AND requester_id = me AND version_id = p_version FOR UPDATE;
+       IF NOT FOUND OR a.status <> 'APPROVED' OR a.valid_until <= clock_timestamp() OR a.uses >= a.max_uses
+          OR tv_doc_level(a.document_id, me) < 1
+          OR EXISTS (SELECT 1 FROM users u WHERE u.id = me AND u.role = 'ADMIN') THEN RETURN NULL; END IF;
+       UPDATE download_approvals SET uses = uses + 1,
+              status = CASE WHEN uses + 1 >= max_uses THEN 'USED'::"DownloadApprovalStatus" ELSE status END,
+              last_use_tx = txid_current() WHERE id = p_request;
+       RETURN a.uses + 1;
+     END $MUT$`,
+    ['test/view-download-db.test.ts']),
+  sql('database: a below-READ download ticket and audit row need a consumed approval (in-tx check)',
+    `CREATE OR REPLACE FUNCTION tv_download_approval_in_tx(p_version uuid, p_user uuid) RETURNS boolean
+     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS 'SELECT false'`,
+    `CREATE OR REPLACE FUNCTION tv_download_approval_in_tx(p_version uuid, p_user uuid) RETURNS boolean
+     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $MUT$
+       SELECT EXISTS (SELECT 1 FROM download_approvals a
+         WHERE a.version_id = p_version AND a.requester_id = p_user
+           AND a.status IN ('APPROVED', 'USED') AND a.valid_until > clock_timestamp()
+           AND a.last_use_tx IS NOT NULL AND a.last_use_tx = txid_current_if_assigned()) $MUT$`,
+    ['test/view-download.test.ts', 'test/view-download-db.test.ts']),
+  sql('database: a VIEW holder may open a download request (insert policy floor is VIEW)',
+    `DROP POLICY approvals_insert ON download_approvals;
+     CREATE POLICY approvals_insert ON download_approvals FOR INSERT TO trustvault_app
+       WITH CHECK (requester_id = tv_current_user() AND tv_doc_level(document_id, tv_current_user()) >= 2)`,
+    `DROP POLICY approvals_insert ON download_approvals;
+     CREATE POLICY approvals_insert ON download_approvals FOR INSERT TO trustvault_app
+       WITH CHECK (requester_id = tv_current_user() AND tv_doc_level(document_id, tv_current_user()) >= 1
+                   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = tv_current_user() AND u.role = 'ADMIN'))`,
+    ['test/view-download-db.test.ts']),
   // --- keyd authorises decryption itself; key-use ledger (THREATS.md K1-K8) --
   code('keys: a document key needs a ticket', 'src/crypto/key-provider.ts',
     "if (ticket === undefined) this.refuse(bare, 'ticket required');", '', ['test/keyd-tickets.test.ts']),
