@@ -49,7 +49,7 @@ export default function GroupsPage() {
       />
 
       <form onSubmit={create} className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
-        <Input className="min-w-[220px] flex-1" icon={<UsersFour size={18} />} placeholder="New group name, e.g. Finance team" value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} />
+        <Input className="min-w-[13.75rem] flex-1" icon={<UsersFour size={18} />} placeholder="New group name, e.g. Finance team" value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} />
         <Button type="submit" variant="primary" icon={<Plus size={16} weight="bold" />}>Create group</Button>
       </form>
 

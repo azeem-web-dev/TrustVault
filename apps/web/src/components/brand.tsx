@@ -24,7 +24,7 @@ export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={`inline-flex items-center gap-2.5 font-semibold tracking-tight ${className ?? ''}`}>
       <Logo />
-      <span className="text-[17px]">Trust<span className="text-gradient">Vault</span></span>
+      <span className="text-[1.0625rem]">Trust<span className="text-gradient">Vault</span></span>
     </span>
   );
 }

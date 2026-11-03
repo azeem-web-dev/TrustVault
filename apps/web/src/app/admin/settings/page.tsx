@@ -88,7 +88,7 @@ export default function SettingsPage() {
                       onClick={() => toggle(role)}
                       className={cx('relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed', on ? 'bg-brand-gradient' : 'bg-slate-200 dark:bg-white/15', locked && 'opacity-70')}
                     >
-                      <span className={cx('absolute top-0.5 size-5 rounded-full bg-white shadow transition-all', on ? 'left-[22px]' : 'left-0.5')} />
+                      <span className={cx('absolute top-0.5 size-5 rounded-full bg-white shadow transition-all', on ? 'left-[1.375rem]' : 'left-0.5')} />
                     </button>
                   </li>
                 );

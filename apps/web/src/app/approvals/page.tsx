@@ -87,7 +87,7 @@ function RequestCard({ r, onDecide }: { r: Request; onDecide: (r: Request, appro
             {[1, 2, 3, 5, 10].map((n) => <option key={n} value={n}>{n === 1 ? 'Once' : `${n} times`}</option>)}
           </Select>
         </label>
-        <Input className="min-w-[200px] flex-1" placeholder="Note to them (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+        <Input className="min-w-[12.5rem] flex-1" placeholder="Note to them (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
         <Button variant="primary" icon={<Check size={16} />} onClick={() => void onDecide(r, true, { hours, uses, note })}>Approve</Button>
         <Button icon={<X size={16} />} onClick={() => void onDecide(r, false, { hours, uses, note })}>Decline</Button>
       </div>

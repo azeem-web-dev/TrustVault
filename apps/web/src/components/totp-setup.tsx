@@ -48,7 +48,7 @@ export function TotpSetupGuide({ secret, otpauthUri, children }: { secret: strin
           {qr
             // eslint-disable-next-line @next/next/no-img-element
             ? <img src={qr} alt="QR code for your authenticator app" width={168} height={168} className="mx-auto shrink-0 rounded-2xl bg-white p-2 ring-1 ring-slate-200 sm:mx-0" />
-            : <span className="mx-auto block size-[168px] shrink-0 animate-pulse rounded-2xl bg-slate-100 sm:mx-0 dark:bg-white/10" />}
+            : <span className="mx-auto block size-[10.5rem] shrink-0 animate-pulse rounded-2xl bg-slate-100 sm:mx-0 dark:bg-white/10" />}
           <div className="min-w-0 space-y-2">
             <p className="text-xs text-slate-500">On this phone already? <a href={otpauthUri} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline dark:text-brand-300">Open in authenticator app<ArrowSquareOut size={12} /></a></p>
             <p className="text-xs text-slate-500">Can’t scan? Choose <b>Enter a setup key</b>, type any name, and this key (time based):</p>

@@ -54,7 +54,7 @@ export default function SignInLinkPage() {
         <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
           <LinkBreak size={28} />
         </span>
-        <h1 className="text-[28px] font-semibold tracking-tight">This link did not work</h1>
+        <h1 className="text-[1.75rem] font-semibold tracking-tight">This link did not work</h1>
       </div>
       <div className="space-y-4">
         <Alert>{error}</Alert>

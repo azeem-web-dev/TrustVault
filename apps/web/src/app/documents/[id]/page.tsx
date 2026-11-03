@@ -7,7 +7,7 @@ import { flushSync } from 'react-dom';
 import {
   ArrowLeft, ArrowsLeftRight, Biohazard, CalendarBlank, Check, ClockCounterClockwise, CloudArrowUp, Copy, DownloadSimple, Eye, FolderSimple,
   Fingerprint, Info, LockKey, MagnifyingGlass, PencilSimple, Prohibit, ShareNetwork, ShieldCheck, Sparkle, Stack, Tag, Trash, UserPlus,
-  UsersFour, Warning, ArrowCounterClockwise, Fire, Crown, Bug, Hash, CaretLeft, CaretRight, EyeSlash,
+  UsersFour, Warning, ArrowCounterClockwise, Fire, Crown, Bug, Hash, CaretLeft, CaretRight, EyeSlash, HourglassMedium,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
 import { useToast } from '@/components/toast';
@@ -48,6 +48,13 @@ interface Doc {
   myAccess: Access;
   /** Downloads need the owner's approval (a condition on the share). */
   downloadNeedsApproval?: boolean;
+  /**
+   * Download state for the current viewer (sent by the API). `allowed`: a
+   * Download button is shown. `requestable`: a view-only viewer may ask the
+   * owner for a one-file download. `requestStatus`: where that ask stands.
+   * Absent on older responses, in which case we fall back gracefully.
+   */
+  download?: { allowed: boolean; requestable: boolean; requestStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED' };
   folder: { id: string; name: string } | null;
   versions: Version[];
 }
@@ -151,6 +158,17 @@ export default function DocumentPage() {
   const current = doc.versions[0];
   const canManage = level >= RANK.MANAGE;
   const canDownload = level >= RANK.READ;
+  // Prefer the API's download object when present; otherwise fall back to the
+  // older shape (READ access + the downloadNeedsApproval flag).
+  const dl = doc.download;
+  const canDownloadNow = dl ? dl.allowed : (canDownload && !doc.downloadNeedsApproval);
+  const requestStatus = dl?.requestStatus ?? 'NONE';
+  // The request flow is shown when the viewer cannot download yet but either
+  // may ask, or already has an ask in progress/decided.
+  const inRequestFlow = dl
+    ? (!dl.allowed && (dl.requestable || requestStatus !== 'NONE'))
+    : Boolean(doc.downloadNeedsApproval && !canDownloadNow);
+  const canAskAgain = dl ? dl.requestable : true;
   const tabs = [
     ...(current ? [{ id: 'pages' as const, label: 'View', icon: <Eye size={16} /> }] : []),
     { id: 'overview' as const, label: 'Overview', icon: <Info size={16} /> },
@@ -177,7 +195,7 @@ export default function DocumentPage() {
               {doc.folder && <Badge tone="blue" icon={<FolderSimple size={11} />}>{doc.folder.name}</Badge>}
               {current?.quarantine && <Badge tone="red" icon={<Biohazard size={11} />}>Quarantined</Badge>}
             </div>
-            <h1 className="mt-2.5 text-2xl font-semibold tracking-tight sm:text-[28px]">{doc.title}</h1>
+            <h1 className="mt-2.5 text-2xl font-semibold tracking-tight sm:text-[1.75rem]">{doc.title}</h1>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
               <span className="flex items-center gap-1.5"><Avatar name={doc.owner.displayName} size="xs" />{doc.isOwner ? 'You own this' : doc.owner.displayName}</span>
               {current && <span>{fileType(current.fileName).label} · {formatBytes(current.sizeBytes)}</span>}
@@ -188,10 +206,16 @@ export default function DocumentPage() {
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               {current.quarantine ? (
                 <Button disabled icon={<Prohibit size={18} />}>Download blocked</Button>
-              ) : !canDownload ? (
+              ) : inRequestFlow ? (
+                requestStatus === 'PENDING' ? (
+                  <ButtonLink href="#download-request" variant="soft" size="lg" icon={<HourglassMedium size={18} />} onClick={() => setTab('overview')}>Awaiting approval</ButtonLink>
+                ) : requestStatus === 'REJECTED' && !canAskAgain ? (
+                  <ButtonLink href="#download-request" variant="secondary" size="lg" icon={<Prohibit size={18} />} onClick={() => setTab('overview')}>Request declined</ButtonLink>
+                ) : (
+                  <ButtonLink href="#download-request" variant="primary" size="lg" icon={<DownloadSimple size={18} />} onClick={() => setTab('overview')}>{requestStatus === 'REJECTED' ? 'Ask again to download' : 'Ask to download'}</ButtonLink>
+                )
+              ) : !canDownloadNow ? (
                 <Button variant="soft" size="lg" icon={<Eye size={18} />} onClick={() => setTab('pages')}>View only</Button>
-              ) : doc.downloadNeedsApproval ? (
-                <ButtonLink href="#download-request" variant="primary" size="lg" icon={<DownloadSimple size={18} />} onClick={() => setTab('overview')}>Ask to download</ButtonLink>
               ) : current.mimeType.startsWith('text/csv') ? (
                 // CSV: by default a copy with spreadsheet formulas disabled
                 // (cells starting = + - @ get a leading '), so opening it in
@@ -221,7 +245,7 @@ export default function DocumentPage() {
           {tab === 'pages' && current && <PageViewer doc={doc} canDownload={canDownload} />}
           {tab === 'overview' && (
             <>
-              {doc.downloadNeedsApproval && current && !current.quarantine && <div id="download-request"><DownloadRequestCard docId={doc.id} versionNo={current.versionNo} /></div>}
+              {inRequestFlow && current && !current.quarantine && <div id="download-request"><DownloadRequestCard docId={doc.id} versionNo={current.versionNo} /></div>}
               <Details doc={doc} canEdit={level >= RANK.EDIT && !trashed} onSave={(patch) => act(() => api.patch(`/documents/${doc.id}`, patch), 'Details saved')} />
               <ProtectionCard doc={doc} />
             </>
@@ -406,7 +430,7 @@ function AboutCard({ doc, canManage }: { doc: Doc; canManage: boolean }) {
             <span className="mt-0.5 text-slate-400"><Hash size={16} /></span>
             <div className="min-w-0 flex-1">
               <dt className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">SHA-256 of current version<CopyButton value={current.sha256} label="Copy SHA-256" /></dt>
-              <dd className="mt-0.5 break-all rounded-lg bg-slate-50 p-2 font-mono text-[11px] leading-4 text-slate-600 dark:bg-white/5 dark:text-slate-300">{current.sha256}</dd>
+              <dd className="mt-0.5 break-all rounded-lg bg-slate-50 p-2 font-mono text-[0.6875rem] leading-4 text-slate-600 dark:bg-white/5 dark:text-slate-300">{current.sha256}</dd>
             </div>
           </div>
         )}
@@ -519,7 +543,7 @@ function Versions({ doc, canDownload, canUpload, onUploaded, onError }: { doc: D
       </ol>
       {canUpload && (
         <form onSubmit={upload} className="mt-5 flex flex-wrap items-end gap-3 rounded-xl border border-dashed border-slate-300 p-4 dark:border-white/15">
-          <div className="min-w-[200px] flex-1"><Label label="Upload a new version" hint="Scanned for malware and encrypted before it is stored."><Input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Label></div>
+          <div className="min-w-[12.5rem] flex-1"><Label label="Upload a new version" hint="Scanned for malware and encrypted before it is stored."><Input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Label></div>
           <Button type="submit" variant="primary" icon={<CloudArrowUp size={18} />} disabled={!file} loading={busy}>{busy ? 'Uploading…' : 'Upload version'}</Button>
         </form>
       )}
@@ -664,7 +688,7 @@ function AccessPanel({ doc, onError }: { doc: Doc; onError: (m: string | null) =
           )}
 
           <div>
-            <p className="mb-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">Access level</p>
+            <p className="mb-2 text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">Access level</p>
             <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Access">
               {levels.map((l) => (
                 <button
@@ -837,7 +861,7 @@ function History({ docId }: { docId: string }) {
                 </p>
                 {removedNotice(e.details?.sanitized?.removed) && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{removedNotice(e.details?.sanitized?.removed)}</p>}
               </div>
-              <span className="hidden pt-1 font-mono text-[11px] text-slate-400 sm:block">#{e.seq}</span>
+              <span className="hidden pt-1 font-mono text-[0.6875rem] text-slate-400 sm:block">#{e.seq}</span>
             </li>
           ))}
         </ol>

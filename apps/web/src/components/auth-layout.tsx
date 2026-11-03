@@ -23,7 +23,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         <div className="relative flex flex-1 flex-col px-12 py-10 xl:px-16">
           <Wordmark className="text-white" />
           <div className="my-auto py-10">
-            <VaultHero className="mx-auto max-h-[38vh] w-full max-w-[460px] drop-shadow-2xl" />
+            <VaultHero className="mx-auto max-h-[38vh] w-full max-w-[28.75rem] drop-shadow-2xl" />
             <h2 className="mt-6 text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">
               The wrong person can&apos;t reach it.<br />
               <span className="text-gradient">You can prove who did.</span>
@@ -48,7 +48,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
           <ThemeSwitch />
         </div>
         <div className="flex flex-1 items-center justify-center px-5 pb-12 sm:px-10">
-          <div className="w-full max-w-[420px] animate-rise">{children}</div>
+          <div className="w-full max-w-[26.25rem] animate-rise">{children}</div>
         </div>
       </main>
     </div>

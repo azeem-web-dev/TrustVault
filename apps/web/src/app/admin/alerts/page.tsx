@@ -130,7 +130,7 @@ function LiveAlerts() {
                       )}
                     </p>
                   </div>
-                  <span className={cx('inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide', s.tile)}>{s.icon}{s.label}</span>
+                  <span className={cx('inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-wide', s.tile)}>{s.icon}{s.label}</span>
                 </li>
               );
             })}
@@ -174,7 +174,7 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
         <div className="flex flex-wrap items-start gap-4">
           <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg"><Siren size={26} /></span>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold">Break-glass access</h2>
+            <h2 className="text-[0.9375rem] font-semibold">Break-glass access</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
               Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of view-only access to a single document: its pages, watermarked with your name, never the original file.
               A second administrator must approve; then you open it from the Approvals page, once, within 24 hours. The owner is emailed when it is approved,

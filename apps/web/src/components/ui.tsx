@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import Link from 'next/link';
 import {
   CaretDown, CheckCircle, File, FileCsv, FileDoc, FileImage, FileMd, FilePdf, FilePpt, FileTxt, FileXls, Info, Warning, WarningOctagon, X,
 } from '@phosphor-icons/react';
@@ -97,7 +98,7 @@ export const Textarea = ({ className, ...rest }: TextareaHTMLAttributes<HTMLText
 export function Label({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1.5 block text-[13px] font-medium text-slate-700 dark:text-slate-300">{label}</span>
+      <span className="mb-1.5 block text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">{label}</span>
       {children}
       {hint && <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{hint}</span>}
     </label>
@@ -116,7 +117,7 @@ export function Card({
           <div className="flex min-w-0 items-center gap-3">
             {icon && <IconTile>{icon}</IconTile>}
             <div className="min-w-0">
-              <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
+              <h2 className="text-[0.9375rem] font-semibold tracking-tight">{title}</h2>
               {description && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{description}</p>}
             </div>
           </div>
@@ -146,7 +147,7 @@ export function IconTile({ tone = 'brand', size = 'md', children }: { tone?: Til
 
 export function StatCard({ label, value, icon, tone = 'brand', hint, delay = 0 }: { label: string; value: ReactNode; icon: ReactNode; tone?: TileTone; hint?: ReactNode; delay?: number }) {
   return (
-    <div style={{ animationDelay: `${delay}ms` }} className="group relative animate-rise overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:shadow-lift dark:border-white/[0.08] dark:bg-white/[0.03]">
+    <div style={{ animationDelay: `${delay}ms` }} className="relative animate-rise overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-4 shadow-soft dark:border-white/[0.08] dark:bg-white/[0.03]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
@@ -174,7 +175,7 @@ const DOTS: Record<Tone, string> = { neutral: 'bg-slate-400', green: 'bg-emerald
 
 export function Badge({ tone = 'neutral', dot, icon, children, className }: { tone?: Tone; dot?: boolean; icon?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <span className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ring-1 ring-inset', TONES[tone], className)}>
+    <span className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold whitespace-nowrap ring-1 ring-inset', TONES[tone], className)}>
       {dot && <span className={cx('size-1.5 rounded-full', DOTS[tone])} />}
       {icon}
       {children}
@@ -217,7 +218,7 @@ export function EmptyState({ art, title, children, action }: { art?: ReactNode; 
   return (
     <div className="flex animate-fade-in flex-col items-center px-6 py-12 text-center">
       {art && <div className="mb-4">{art}</div>}
-      {title && <p className="text-[15px] font-semibold">{title}</p>}
+      {title && <p className="text-[0.9375rem] font-semibold">{title}</p>}
       {children && <div className="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">{children}</div>}
       {action && <div className="mt-5">{action}</div>}
     </div>
@@ -256,7 +257,7 @@ export function PageTitle({ title, subtitle, actions, icon, eyebrow }: { title: 
         )}
         <div className="min-w-0">
           {eyebrow && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-brand-600 dark:text-brand-300">{eyebrow}</p>}
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-[28px]">{title}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-[1.75rem]">{title}</h1>
           {subtitle && <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">{subtitle}</p>}
         </div>
       </div>
@@ -280,7 +281,7 @@ export function initials(name: string): string {
 export function Avatar({ name, size = 'md', className }: { name: string; size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'; className?: string }) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  const s = { xs: 'size-6 text-[10px]', sm: 'size-8 text-xs', md: 'size-9 text-xs', lg: 'size-12 text-base', xl: 'size-16 text-xl' }[size];
+  const s = { xs: 'size-6 text-[0.625rem]', sm: 'size-8 text-xs', md: 'size-9 text-xs', lg: 'size-12 text-base', xl: 'size-16 text-xl' }[size];
   return (
     <span aria-hidden className={cx('inline-flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-semibold text-white ring-2 ring-white dark:ring-ink-950', AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length], s, className)}>
       {initials(name)}
@@ -294,7 +295,7 @@ export function AvatarStack({ names, max = 4 }: { names: string[]; max?: number 
     <div className="flex -space-x-2">
       {shown.map((n, i) => <Avatar key={`${n}-${i}`} name={n} size="sm" />)}
       {names.length > max && (
-        <span className="inline-flex size-8 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 ring-2 ring-white dark:bg-white/10 dark:text-slate-300 dark:ring-ink-950">+{names.length - max}</span>
+        <span className="inline-flex size-8 items-center justify-center rounded-full bg-slate-100 text-[0.6875rem] font-semibold text-slate-600 ring-2 ring-white dark:bg-white/10 dark:text-slate-300 dark:ring-ink-950">+{names.length - max}</span>
       )}
     </div>
   );
@@ -367,6 +368,118 @@ export function Modal({ open, onClose, title, description, icon, children, foote
   );
 }
 
+/* --------------------------------------------------------------------- menu */
+
+/**
+ * One accessible dropdown menu for the whole app: account menu, row action
+ * menus, sort/filter pickers. Click or Enter/Space/↓ to open, ↑/↓ to move,
+ * Enter to choose, Esc or click-outside to close. The caller passes the
+ * trigger's *contents* (not a <button>); Menu renders the button itself.
+ */
+const MenuCtx = createContext<{ close: () => void } | null>(null);
+
+export function Menu({ button, label, children, align = 'end', direction = 'down', buttonClassName, panelClassName }: {
+  button: ReactNode | ((open: boolean) => ReactNode);
+  label: string;
+  children: ReactNode;
+  align?: 'start' | 'end';
+  direction?: 'down' | 'up';
+  buttonClassName?: string;
+  panelClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const move = (dir: 1 | -1 | 0) => {
+    const items = Array.from(panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? []);
+    if (!items.length) return;
+    const idx = items.findIndex((el) => el === document.activeElement);
+    let next = dir === 0 ? 0 : idx + dir;
+    if (next < 0) next = items.length - 1;
+    if (next >= items.length) next = 0;
+    items[next]?.focus();
+  };
+
+  return (
+    <div ref={root} className="relative">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (!open && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen(true); setTimeout(() => move(0), 0); }
+        }}
+        className={buttonClassName ?? 'inline-flex items-center gap-1.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50'}
+      >
+        {typeof button === 'function' ? button(open) : button}
+      </button>
+      {open && (
+        <div
+          ref={panel}
+          role="menu"
+          aria-label={label}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+            else if (e.key === 'Home') { e.preventDefault(); move(0); }
+            else if (e.key === 'Tab') setOpen(false);
+          }}
+          className={cx(
+            'absolute z-40 min-w-[12rem] max-w-[calc(100vw-2rem)] animate-pop overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-lift dark:border-white/10 dark:bg-ink-900',
+            direction === 'up' ? 'bottom-full mb-2' : 'top-full mt-2',
+            align === 'end' ? 'right-0' : 'left-0',
+            panelClassName,
+          )}
+        >
+          <MenuCtx.Provider value={{ close: () => setOpen(false) }}>{children}</MenuCtx.Provider>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MenuItem({ icon, children, onSelect, href, danger, disabled, selected }: {
+  icon?: ReactNode; children: ReactNode; onSelect?: () => void; href?: string; danger?: boolean; disabled?: boolean; selected?: boolean;
+}) {
+  const ctx = useContext(MenuCtx);
+  const cls = cx(
+    'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm outline-none transition',
+    'hover:bg-slate-100 focus-visible:bg-slate-100 dark:hover:bg-white/5 dark:focus-visible:bg-white/10',
+    danger && 'text-red-600 hover:bg-red-50 focus-visible:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10 dark:focus-visible:bg-red-500/10',
+    selected && 'font-semibold text-brand-700 dark:text-brand-200',
+    disabled && 'pointer-events-none opacity-50',
+  );
+  const inner = <>{icon && <span className="shrink-0 text-slate-400">{icon}</span>}<span className="min-w-0 flex-1 truncate">{children}</span>{selected && <CheckCircle size={15} weight="fill" className="shrink-0 text-brand-500" />}</>;
+  if (href && !disabled) {
+    return <Link role="menuitem" href={href} className={cls} onClick={() => ctx?.close()}>{inner}</Link>;
+  }
+  return (
+    <button type="button" role="menuitem" aria-disabled={disabled} disabled={disabled} className={cls} onClick={() => { onSelect?.(); ctx?.close(); }}>
+      {inner}
+    </button>
+  );
+}
+
+export function MenuSeparator() {
+  return <div role="separator" className="my-1 h-px bg-slate-100 dark:bg-white/[0.06]" />;
+}
+
+export function MenuHeading({ children }: { children: ReactNode }) {
+  return <p className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400">{children}</p>;
+}
+
 /* ---------------------------------------------------------------- segmented */
 
 export function Segmented<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { id: T; label: string; icon?: ReactNode; count?: number }[] }) {
@@ -385,7 +498,7 @@ export function Segmented<T extends string>({ value, onChange, options }: { valu
         >
           {o.icon}
           {o.label}
-          {o.count !== undefined && <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] tabular-nums dark:bg-white/10">{o.count}</span>}
+          {o.count !== undefined && <span className="rounded-md bg-slate-200/70 px-1.5 text-[0.6875rem] tabular-nums dark:bg-white/10">{o.count}</span>}
         </button>
       ))}
     </div>
@@ -393,7 +506,7 @@ export function Segmented<T extends string>({ value, onChange, options }: { valu
 }
 
 export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-sans text-[11px] font-medium text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-400">{children}</kbd>;
+  return <kbd className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-sans text-[0.6875rem] font-medium text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-400">{children}</kbd>;
 }
 
 export function Divider({ label }: { label?: string }) {

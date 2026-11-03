@@ -216,7 +216,7 @@ export default function AccountPage() {
                   </ul>
                 )}
                 <div className="flex flex-wrap gap-2 border-t border-slate-100 bg-slate-50/50 px-5 py-4 dark:border-white/[0.05] dark:bg-white/[0.02]">
-                  <Input className="min-w-[200px] flex-1" icon={<Key size={18} />} placeholder="Name, e.g. Work laptop" value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} />
+                  <Input className="min-w-[12.5rem] flex-1" icon={<Key size={18} />} placeholder="Name, e.g. Work laptop" value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} />
                   <Button variant="primary" icon={<Plus size={16} weight="bold" />} onClick={() => void addPasskey()} loading={busy === 'passkey'}>Add passkey</Button>
                 </div>
               </>

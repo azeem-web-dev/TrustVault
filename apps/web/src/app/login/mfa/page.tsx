@@ -116,7 +116,7 @@ export default function MfaPage() {
         <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
           <ShieldCheckered size={28} />
         </span>
-        <h1 className="text-[26px] font-semibold tracking-tight">{enrolled ? 'Confirm it’s you' : 'Set up a second factor'}</h1>
+        <h1 className="text-[1.625rem] font-semibold tracking-tight">{enrolled ? 'Confirm it’s you' : 'Set up a second factor'}</h1>
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
           {enrolled
             ? <>Signed in as <span className="font-medium text-slate-700 dark:text-slate-200">{user?.email ?? ''}</span>. Your account needs a second factor.</>
@@ -147,7 +147,7 @@ export default function MfaPage() {
               </div>
             )}
             <label className="block">
-              <span className="mb-2 flex items-center gap-2 text-[13px] font-medium text-slate-700 dark:text-slate-300">
+              <span className="mb-2 flex items-center gap-2 text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">
                 {emailFlow ? <><EnvelopeSimple size={16} />6-digit code we emailed to {emailFlow.sentTo}</> : <><DeviceMobile size={16} />6-digit code from your authenticator app</>}
               </span>
               <input
@@ -217,7 +217,7 @@ function MethodButton({ icon, title, text, onClick, disabled, recommended }: { i
     >
       <IconTile size="lg">{icon}</IconTile>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2 text-sm font-semibold">{title}{recommended && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Recommended</span>}</span>
+        <span className="flex items-center gap-2 text-sm font-semibold">{title}{recommended && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[0.625rem] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Recommended</span>}</span>
         <span className="mt-0.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{text}</span>
       </span>
       <CaretRight size={18} className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-brand-500" />

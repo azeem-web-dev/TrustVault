@@ -202,7 +202,7 @@ export function AlertQueue({ openId }: { openId?: string | null }) {
                         {a.assigneeEmail && <span>→ {a.assigneeEmail}</span>}
                       </p>
                     </div>
-                    <span className={cx('inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide', s.tile)}>{s.icon}{s.label}</span>
+                    <span className={cx('inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-wide', s.tile)}>{s.icon}{s.label}</span>
                   </button>
                 </li>
               );
@@ -274,7 +274,7 @@ function AlertDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
             <div><dt className="text-slate-500">Same person, 30 days</dt><dd>{data!.relatedAlerts30d} other alerts</dd></div>
           </dl>
           {a.details && Object.keys(a.details).length > 0 && (
-            <pre className="max-h-40 overflow-auto rounded-xl bg-slate-50 p-3 text-[11px] leading-5 text-slate-600 dark:bg-white/[0.04] dark:text-slate-300">{JSON.stringify(a.details, null, 2)}</pre>
+            <pre className="max-h-40 overflow-auto rounded-xl bg-slate-50 p-3 text-[0.6875rem] leading-5 text-slate-600 dark:bg-white/[0.04] dark:text-slate-300">{JSON.stringify(a.details, null, 2)}</pre>
           )}
 
           <section>
@@ -315,7 +315,7 @@ function AlertDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
               {resolved && <Button size="sm" icon={<ArrowCounterClockwise size={14} />} disabled={note.trim().length < 5} loading={busy} onClick={() => act('reopen', { note })}>Reopen</Button>}
               <Button size="sm" variant="ghost" icon={<ChatText size={14} />} disabled={note.trim().length < 5} loading={busy} onClick={() => act('comment', { note })}>Comment</Button>
             </div>
-            <p className="text-[11px] text-slate-500">Resolving needs a note. An alert about you must be resolved by another administrator.</p>
+            <p className="text-[0.6875rem] text-slate-500">Resolving needs a note. An alert about you must be resolved by another administrator.</p>
           </section>
         </div>
       )}

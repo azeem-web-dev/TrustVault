@@ -37,7 +37,7 @@ export default function ForgotPasswordPage() {
         <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
           {sent ? <EnvelopeSimpleOpen size={28} /> : <PaperPlaneTilt size={28} />}
         </span>
-        <h1 className="text-[28px] font-semibold tracking-tight">{sent ? 'Check your inbox' : 'Reset your password'}</h1>
+        <h1 className="text-[1.75rem] font-semibold tracking-tight">{sent ? 'Check your inbox' : 'Reset your password'}</h1>
         <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
           {sent ? 'We sent the link to the address you entered, if it belongs to an account.' : 'Enter the email you sign in with and we will send you a link to choose a new password.'}
         </p>
