@@ -146,7 +146,7 @@ beforeAll(async () => {
   await apiLogin(admin2);
   const ask = await api(admin).post('/api/admin/approvals', { action: 'BREAK_GLASS', documentId: docId, reason: `Emergency review ${P.img} ${P.script} of a document` });
   if (ask.status !== 201) throw new Error(`approval request: ${ask.status} ${JSON.stringify(ask.body)}`);
-  const ok = await api(admin2).post(`/api/admin/approvals/${ask.body.approval.id}/approve`);
+  const ok = await api(admin2).post(`/api/admin/approvals/${ask.body.approval.id}/approve`, {});
   if (ok.status !== 200) throw new Error(`approve: ${ok.status} ${JSON.stringify(ok.body)}`);
   const bg = await api(admin).post('/api/admin/break-glass', { documentId: docId, approvalId: ask.body.approval.id });
   if (bg.status !== 201 && bg.status !== 200) throw new Error(`break-glass: ${bg.status} ${JSON.stringify(bg.body)}`);
