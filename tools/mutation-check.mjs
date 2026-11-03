@@ -416,6 +416,8 @@ const MUTATIONS = [
   code('insider: view-only page views feed the persistent alert queue', 'src/risk/alert-generator.service.ts',
     "WHERE f.kind = 'page_view' AND f.occurred_at > ${now}::timestamptz - interval '10 minutes'", "WHERE false AND f.occurred_at > ${now}::timestamptz - interval '10 minutes'",
     ['test/view-only.test.ts']),
+  code('database: every connection runs in UTC (non-UTC server default)', 'src/db/prisma.service.ts',
+    'max: 10, options: UTC_SESSION })', 'max: 10 })', ['test/timezone.test.ts']),
 ];
 
 function loadEnv() {

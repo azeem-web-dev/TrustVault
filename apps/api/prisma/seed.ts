@@ -16,6 +16,7 @@ import { PasswordService } from '../src/auth/password.service.js';
 import { packWrapped } from '../src/auth/mfa.service.js';
 import { base32Decode, base32Encode, newTotpSecret } from '../src/auth/totp.js';
 import { createKeyProvider } from '../src/app.module.js';
+import { UTC_SESSION } from '../src/db/prisma.service.js';
 import { loadEnv } from '../src/config/env.js';
 import { blobAad, sealFile, sha256 } from '../src/crypto/file-crypto.js';
 
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
   // second-factor-enrolled accounts (THREATS.md A23).
   const owner = process.env.DATABASE_OWNER_URL;
   if (!owner) throw new Error('DATABASE_OWNER_URL is required: demo accounts are created as the schema owner');
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: owner }) });
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: owner, options: UTC_SESSION }) });
   const keys = createKeyProvider(env);
   const hasher = new PasswordService();
   const ids: Record<string, string> = {};

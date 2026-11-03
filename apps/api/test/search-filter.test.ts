@@ -22,7 +22,7 @@ const titles = async (userId: string, role: 'OWNER' | 'VIEWER' | 'EXTERNAL', f: 
   (await prisma.document.findMany({ where: buildSearchWhere({ userId, role }, { ...base, ...f }), select: { title: true }, orderBy: { title: 'asc' } })).map((r) => r.title);
 
 beforeAll(() => {
-  prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.TEST_DATABASE_OWNER_URL! }) });
+  prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.TEST_DATABASE_OWNER_URL!, options: '-c TimeZone=UTC' }) });
 });
 afterAll(async () => {
   await prisma.$disconnect();

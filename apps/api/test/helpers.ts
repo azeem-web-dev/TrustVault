@@ -40,12 +40,12 @@ export const keys = (): LocalKeyProvider => new LocalKeyProvider(Buffer.from(tes
 
 /** Direct connection as the schema owner, for test setup/cleanup only. */
 export function ownerDb(): pg.Client {
-  return new pg.Client({ connectionString: process.env.TEST_DATABASE_OWNER_URL });
+  return new pg.Client({ connectionString: process.env.TEST_DATABASE_OWNER_URL, options: '-c TimeZone=UTC' });
 }
 
 /** Direct connection as the low-privilege app role, to prove what it cannot do. */
 export function appDb(): pg.Client {
-  return new pg.Client({ connectionString: process.env.TEST_DATABASE_URL });
+  return new pg.Client({ connectionString: process.env.TEST_DATABASE_URL, options: '-c TimeZone=UTC' });
 }
 
 export async function withDb<T>(client: pg.Client, fn: (c: pg.Client) => Promise<T>): Promise<T> {

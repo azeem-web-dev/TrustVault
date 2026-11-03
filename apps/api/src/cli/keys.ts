@@ -51,7 +51,7 @@ async function main(): Promise<number> {
     console.error('usage: DATABASE_OWNER_URL=... [KEY_PROVIDER=keyd] node dist/cli/keys.js status|rotate|verify|reencrypt|install-ticket-key');
     return 2;
   }
-  const db = new pg.Client({ connectionString: url });
+  const db = new pg.Client({ connectionString: url, options: '-c TimeZone=UTC' });
   await db.connect();
   const log = (m: string) => console.log(m);
   try {

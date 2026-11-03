@@ -2,6 +2,17 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client.js';
 import { ENV, type Env } from '../config/env.js';
+
+/**
+ * Every connection runs in UTC, whatever the database or role default is.
+ * The pg driver reads `timestamp` values (and Prisma's adapter some
+ * timestamptz ones) as if they were UTC, so a server default like
+ * Asia/Kolkata shifted session times by hours and every session looked
+ * older than its password change ("password_changed"). Set as a startup
+ * parameter, so it holds before the first query on every pooled
+ * connection. Tested in timezone.test.ts.
+ */
+export const UTC_SESSION = '-c TimeZone=UTC';
 import { currentContext } from '../common/request-context.js';
 import { normalizeIp } from '../common/ip.js';
 
@@ -16,7 +27,7 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
     // row-level security and the audit triggers always apply to it.
     // Password hashes and TOTP secrets are not readable by that role
     // (THREATS.md A26): never select them; read one through its function.
-    super({ adapter: new PrismaPg({ connectionString: env.DATABASE_URL, max: 10 }), omit: { user: { passwordHash: true, totpSecretEnc: true } } });
+    super({ adapter: new PrismaPg({ connectionString: env.DATABASE_URL, max: 10, options: UTC_SESSION }), omit: { user: { passwordHash: true, totpSecretEnc: true } } });
   }
 
   /**
