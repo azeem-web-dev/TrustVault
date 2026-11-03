@@ -201,15 +201,16 @@ void main() {
 
     // Background and return with the document on screen. This branch has no
     // app lock, so the session is kept (mfa-advanced adds the lock).
+    // No pump while hidden/paused: the engine schedules no frames then.
     for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
       binding.handleAppLifecycleStateChanged(s);
-      await tester.pump();
     }
+    await Future<void>.delayed(const Duration(seconds: 1));
     api.endAllSessions(); // e.g. the password was changed on the website meanwhile
     for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
       binding.handleAppLifecycleStateChanged(s);
-      await tester.pump();
     }
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.textContaining('Download  ·'), findsOneWidget);
 
     // The next request gets a 401: back to sign-in, everything wiped.
