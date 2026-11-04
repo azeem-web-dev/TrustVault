@@ -1,6 +1,4 @@
-'use client';
-
-import { FileMagnifyingGlass, House } from '@phosphor-icons/react';
+import { FileMagnifyingGlass, House } from '@phosphor-icons/react/dist/ssr';
 import { SpotArt } from '@/components/art';
 import { Wordmark } from '@/components/brand';
 import { ButtonLink } from '@/components/ui';
