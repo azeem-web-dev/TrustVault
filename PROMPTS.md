@@ -358,6 +358,68 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ---
 
+## 2026-11-03 — The web app on a phone, and buttons that did nothing (interface)
+
+**Asked (Claude):** the owner tried the web app on a phone and judged it poor — cramped layout, and "many are just display, they don't have any onClick" — and asked for rem units so everything scales.
+
+**Got:** a fluid root font size with every hard-coded pixel value converted to rem, horizontal scrolling removed on phones, a shared accessible dropdown menu (keyboard, Escape, click-outside) reused for the account menu, and a folder explorer (an accessible tree, a side panel on desktop, a drawer on phones).
+
+**What was wrong:** of the owner's "display-only" complaint, one element was a false click affordance — a statistics card lifted on hover but did nothing. On phones the theme switch was also unreachable.
+
+**What I did instead:** made the card plainly static rather than inventing an action for it, and moved the theme switch into the account menu so it is reachable on any screen size.
+
+**Commits:** [014f4dd](https://github.com/azeem-web-dev/TrustVault/commit/014f4dd), merged in [703caee](https://github.com/azeem-web-dev/TrustVault/commit/703caee).
+
+---
+
+## 2026-11-03 — A view-only holder asking to download one file (authorisation)
+
+**Asked (Claude):** let a person with View-only access ask the owner for permission to download one specific document.
+
+**Got:** a request-and-approve flow: an approved, unexpired, uses-remaining approval tied to that user and that version authorises exactly one download; nothing else about View access changes.
+
+**What was wrong / the risk:** the easy implementation — lowering the download requirement from Read to View — would have quietly given every View holder the original file. Administrators' emergency (break-glass) access is also View, so it could have turned into a download.
+
+**What I did instead:** kept the Read requirement and added the approval as a narrow, separate allowance, enforced identically in every lock — the application check, the database download counter, the blob-release row policy, the audit backstop and the key-service ticket mint — with administrators excluded everywhere. Mutation-check rows prove the tests fail if any of those checks is removed.
+
+**Commits:** [9b94e0e](https://github.com/azeem-web-dev/TrustVault/commit/9b94e0e), merged in [2ceca59](https://github.com/azeem-web-dev/TrustVault/commit/2ceca59).
+
+---
+
+## 2026-11-03 — Bringing the Android app level with the web (mobile)
+
+**Asked (Claude):** "everything has changed" — update the Android app to match, and keep a built app ready at all times.
+
+**Got:** the Android app gained the view-only download request, the email-code two-step toggle and the screenshot-attempt label in the history, plus a workflow that builds a release APK and app bundle on every change.
+
+**What was wrong:** without signing keys configured, that workflow produces a debug-signed build, which installs on a phone for testing but cannot be published. The workflow and docs/ANDROID_RELEASE.md say so plainly; the signing key itself stays outside the repository.
+
+**Commits:** [28bd0ca](https://github.com/azeem-web-dev/TrustVault/commit/28bd0ca), merged in [8ce28ff](https://github.com/azeem-web-dev/TrustVault/commit/8ce28ff).
+
+---
+
+## 2026-11-04 — A bug hunt across every page and screen, then a design system (interface)
+
+**Asked (Claude):** "start a bug hunt thoroughly in all pages, with max agents and one master agent to plan clean, best UI, animations, experience, proper colours and icons".
+
+**Got:** nine read-only hunters, one per area (web auth, documents, document detail, account and approvals, two admin areas, the shared design system, and two for Android), reported 227 findings — 23 high, 106 medium, 98 low. A master agent checked every high-severity claim against the code (none were false; three were downgraded), designed one set of colour, icon and motion rules, and split the fixes into eight packages that never touch the same file, so they could be fixed in parallel safely.
+
+**What was wrong (the worst of it):**
+- **No second factor could be typed in the step-up dialog.** The shared dialog re-ran its focus logic on every keystroke and moved focus to the Close button, so only the first digit landed. The same bug hit the upload, folders, invite, exception and alert dialogs. Escape also closed every stacked dialog at once.
+- **About fifteen pages showed a loading skeleton forever** when their first request failed, with no error and no retry.
+- **Double-clicking** approve, share, revoke or create-group submitted twice.
+- **The admin audit date window was shifted by 5h30**, because local dates were sent as UTC — wrong for an evidence export.
+- **Reset and invite pages called valid links invalid** on unrelated errors (a too-long password, a network blip).
+- Low-contrast grey text, hard-coded colours outside the palette, no exit animations, and tap targets under 44px on phones.
+
+**What I did instead:** the foundation package rebuilt the shared dialog (focus trap, focus restore, only the top layer closes, animated exit, bottom sheet on phones) and added shared pieces — a load-error-with-retry, a confirm dialog, a busy-action helper that ignores repeat clicks, local-time date helpers, colour tokens for light and dark, motion tokens that switch off under reduced motion, and accessible 44px buttons on Android. Seven page packages then adopted them, and a second pass applied the colours, icons and animations consistently. Type check, web build, Android analyze and all 59 Android tests passed after each pass.
+
+**Not fixed here (needs the API):** folder counts include deleted documents; passkey-only users cannot have two-step reset from the user list; the server does not yet send an explicit "session ended" code, so the Android app infers it.
+
+**Commit:** [dbd63b1](https://github.com/azeem-web-dev/TrustVault/commit/dbd63b1).
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:
