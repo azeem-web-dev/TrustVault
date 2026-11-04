@@ -49,8 +49,8 @@ class NightSky extends StatelessWidget {
         children: [
           const Positioned.fill(child: ColoredBox(color: C.night)),
           Positioned.fill(child: CustomPaint(painter: _GridPainter())),
-          Positioned(left: -120, top: -120, child: _blob(const Color(0xFF4F46E5), .35, 340)),
-          Positioned(right: -110, bottom: -140, child: _blob(const Color(0xFFC026D3), .28, 320)),
+          Positioned(left: -120, top: -120, child: _blob(C.brand600, .35, 340)),
+          Positioned(right: -110, bottom: -140, child: _blob(C.fuchsia600, .28, 320)),
         ],
       ),
     );
@@ -83,7 +83,7 @@ class _GridPainter extends CustomPainter {
         final o = (1 - d / maxD).clamp(0.0, 1.0) * 0.16;
         if (o <= 0) continue;
         final paint = Paint()
-          ..color = const Color(0xFF94A3B8).withValues(alpha: o)
+          ..color = C.slate400.withValues(alpha: o)
           ..strokeWidth = 1;
         canvas.drawLine(Offset(x, y), Offset(x + step, y), paint);
         canvas.drawLine(Offset(x, y), Offset(x, y + step), paint);
@@ -112,11 +112,14 @@ class _FloatYState extends State<FloatY> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _c,
-    builder: (_, child) => Transform.translate(offset: Offset(0, -8 * (0.5 - 0.5 * math.cos(_c.value * 2 * math.pi))), child: child),
-    child: widget.child,
-  );
+  Widget build(BuildContext context) {
+    if (Motion.reduced(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, child) => Transform.translate(offset: Offset(0, -8 * (0.5 - 0.5 * math.cos(_c.value * 2 * math.pi))), child: child),
+      child: widget.child,
+    );
+  }
 }
 
 /// Light / dark / system switch.
@@ -141,19 +144,26 @@ class ThemeSwitch extends StatelessWidget {
           for (final (id, icon, label) in items)
             Tooltip(
               message: label,
-              child: GestureDetector(
+              child: Semantics(
+                button: true,
+                selected: theme.mode == id,
+                label: '$label theme',
+                child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                excludeFromSemantics: true,
                 onTap: () => theme.set(id),
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
+                  duration: Motion.of(context, const Duration(milliseconds: 180)),
                   width: 30,
                   height: 28,
                   decoration: BoxDecoration(
                     color: theme.mode == id ? (onDark ? Colors.white.withValues(alpha: .16) : (p.dark ? Colors.white.withValues(alpha: .12) : Colors.white)) : Colors.transparent,
                     borderRadius: BorderRadius.circular(8),
-                    boxShadow: theme.mode == id && !onDark && !p.dark ? const [BoxShadow(color: Color(0x140F172A), blurRadius: 4, offset: Offset(0, 1))] : null,
+                    boxShadow: theme.mode == id && !onDark && !p.dark ? [BoxShadow(color: C.slate900.withValues(alpha: .08), blurRadius: 4, offset: const Offset(0, 1))] : null,
                   ),
                   child: Center(child: Ic(icon, size: 15, color: theme.mode == id ? (onDark ? Colors.white : p.accent) : (onDark ? C.brand100.withValues(alpha: .6) : p.muted))),
                 ),
+              ),
               ),
             ),
         ],

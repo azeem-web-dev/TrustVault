@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Envelope, Eye, EyeSlash, LockSimple, Sparkle } from '@phosphor-icons/react';
+import { ArrowRight, Envelope, Eye, EyeSlash, LockSimple, SignIn, Sparkle } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
-import { AuthLayout } from '@/components/auth-layout';
-import { Alert, Avatar, Button, Divider, Input, Label, cx } from '@/components/ui';
+import { AUTH_INLINE_LINK, AuthFootnote, AuthHeader, AuthLayout } from '@/components/auth-layout';
+import { Alert, Avatar, Button, Divider, IconButton, Input, Label, cx, staggerClass } from '@/components/ui';
 import { errorText } from '@/lib/api';
 
 // The published demo accounts (also listed in the README). They are
@@ -20,7 +20,7 @@ const DEMO = [
 ];
 
 export default function LoginPage() {
-  const { signIn } = useSession();
+  const { user, loading, mfaPending, signIn } = useSession();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -29,8 +29,14 @@ export default function LoginPage() {
   const [linkSent, setLinkSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Already signed in (A6): there is nothing to do here.
+  useEffect(() => {
+    if (!loading && user && !busy) router.replace(mfaPending ? '/login/mfa' : '/');
+  }, [loading, user, mfaPending, busy, router]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError(null);
     setLinkSent(null);
@@ -39,47 +45,49 @@ export default function LoginPage() {
       if (sent) {
         setLinkSent(sent);
         setPassword('');
+        setBusy(false);
         return;
       }
+      // Stay busy until the next page takes over, so the button can't submit twice (A6).
       router.replace(mfaRequired ? '/login/mfa' : '/');
     } catch (err) {
       setError(errorText(err, 'Could not reach the server'));
-    } finally {
       setBusy(false);
     }
   }
 
   return (
     <AuthLayout>
-      <div className="mb-8">
-        <h1 className="text-[1.75rem] font-semibold tracking-tight">Welcome back</h1>
-        <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">Sign in to reach the documents shared with you.</p>
-      </div>
+      <AuthHeader icon={<SignIn size={26} />} title="Welcome back">Sign in to reach the documents shared with you.</AuthHeader>
 
       <form onSubmit={onSubmit} className="space-y-4">
         <Label label="Email">
           <Input icon={<Envelope size={18} />} type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
         </Label>
-        <label className="block text-sm">
-          <span className="mb-1.5 block text-[0.8125rem] font-medium text-slate-700 dark:text-slate-300">Password</span>
+        <Label label="Password">
           <span className="relative block">
-            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400"><LockSimple size={18} /></span>
-            <input
+            <Input
+              icon={<LockSimple size={18} />}
               type={reveal ? 'text' : 'password'}
               autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-11 text-sm shadow-sm outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15 dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-white/20 dark:focus:border-brand-400"
+              className="pr-11"
             />
+            <IconButton
+              label={reveal ? 'Hide password' : 'Show password'}
+              aria-pressed={reveal}
+              onClick={() => setReveal((r) => !r)}
+              className="absolute right-0.5 top-1/2 -translate-y-1/2"
+            >
+              {reveal ? <EyeSlash size={18} /> : <Eye size={18} />}
+            </IconButton>
           </span>
-        </label>
-        <div className="-mt-2 flex items-center justify-end gap-4">
-          <Link href="/forgot" className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-300">Forgot password?</Link>
-          <button type="button" onClick={() => setReveal((r) => !r)} aria-pressed={reveal} className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
-            {reveal ? <EyeSlash size={15} /> : <Eye size={15} />}{reveal ? 'Hide' : 'Show'} characters
-          </button>
+        </Label>
+        <div className="-mt-2 flex justify-end">
+          <Link href="/forgot" className={cx(AUTH_INLINE_LINK, 'min-h-8 px-1 text-xs')}>Forgot password?</Link>
         </div>
         {error && <Alert>{error}</Alert>}
         {linkSent && <Alert tone="blue" title="Check your email">{linkSent}</Alert>}
@@ -91,34 +99,37 @@ export default function LoginPage() {
       <div className="mt-8 space-y-3">
         <Divider label="or try a demo account" />
         <div className="grid grid-cols-2 gap-2">
-          {DEMO.map((d) => {
+          {DEMO.map((d, i) => {
             const picked = email === d.email;
             return (
               <button
                 key={d.email}
                 type="button"
+                disabled={busy}
+                aria-pressed={picked}
                 onClick={() => { setEmail(d.email); setPassword(d.password); setError(null); setLinkSent(null); }}
                 className={cx(
-                  'group flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition',
-                  picked ? 'border-brand-400 bg-brand-50 ring-4 ring-brand-500/10 dark:border-brand-400/60 dark:bg-brand-500/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-soft dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20',
+                  'group flex min-h-11 min-w-0 animate-rise items-center gap-2.5 rounded-xl border p-2.5 text-left transition duration-150 ease-out active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:pointer-events-none disabled:opacity-60 dark:focus-visible:ring-offset-ink-950',
+                  staggerClass(i + 1),
+                  picked ? 'border-brand-400 bg-brand-50 ring-4 ring-brand-500/10 dark:border-brand-400/60 dark:bg-brand-500/10' : 'border-line bg-surface hover:-translate-y-0.5 hover:border-line-strong hover:shadow-soft',
                 )}
               >
                 <Avatar name={d.name} size="sm" />
                 <span className="min-w-0">
-                  <span className="block truncate text-[0.8125rem] font-semibold">{d.name.split(' ')[0]}</span>
-                  <span className="block truncate text-[0.6875rem] text-slate-500 dark:text-slate-400">{d.role}</span>
+                  <span className="block truncate text-[0.8125rem] font-semibold text-fg">{d.name.split(' ')[0]}</span>
+                  <span className="block truncate text-[0.6875rem] text-fg-subtle">{d.role}</span>
                 </span>
               </button>
             );
           })}
         </div>
-        <p className="flex items-start gap-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          <Sparkle size={14} className="mt-0.5 shrink-0 text-brand-500" />
+        <p className="flex items-start gap-1.5 text-xs leading-5 text-fg-subtle">
+          <Sparkle size={14} className="mt-0.5 shrink-0 text-brand-500 dark:text-brand-300" />
           Picking one fills in its login. The admin also needs a 6-digit code from the secret in the README.
         </p>
       </div>
 
-      <p className="mt-10 text-center text-xs text-slate-400">Every sign-in, download and permission change is recorded.</p>
+      <AuthFootnote />
     </AuthLayout>
   );
 }

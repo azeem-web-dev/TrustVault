@@ -45,7 +45,12 @@ export function setStepUpHandler(fn: (() => Promise<boolean>) | null): void {
   onStepUp = fn;
 }
 
-async function call<T>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
+export interface RequestOptions {
+  /** Aborts the request (see useLatest in lib/hooks). The promise then rejects with an AbortError. */
+  signal?: AbortSignal;
+}
+
+async function call<T>(method: string, path: string, body?: unknown, retried = false, opts: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
@@ -57,13 +62,14 @@ async function call<T>(method: string, path: string, body?: unknown, retried = f
     body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
     credentials: 'same-origin',
     cache: 'no-store',
+    signal: opts.signal,
   });
 
   if (res.status === 204) return undefined as T;
   const data = (await res.json().catch(() => null)) as (T & { message?: string; code?: string; csrfToken?: string }) | null;
   if (!res.ok) {
     if (res.status === 403 && data?.code === 'step_up_required' && !retried && onStepUp && (await onStepUp())) {
-      return call<T>(method, path, body, true);
+      return call<T>(method, path, body, true, opts);
     }
     if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
     const issues = (data as { issues?: { message: string }[] } | null)?.issues;
@@ -76,13 +82,59 @@ async function call<T>(method: string, path: string, body?: unknown, retried = f
 }
 
 export const api = {
-  get: <T>(path: string) => call<T>('GET', path),
+  get: <T>(path: string, opts?: RequestOptions) => call<T>('GET', path, undefined, false, opts),
   post: <T>(path: string, body?: unknown) => call<T>('POST', path, body ?? {}),
   patch: <T>(path: string, body: unknown) => call<T>('PATCH', path, body),
   put: <T>(path: string, body: unknown) => call<T>('PUT', path, body),
   delete: <T>(path: string) => call<T>('DELETE', path),
   upload: <T>(path: string, form: FormData) => call<T>('POST', path, form),
 };
+
+/**
+ * Downloads a file through fetch instead of navigating to it, so an error
+ * (403, 429, a step-up demand...) surfaces as an ApiError the page can show,
+ * instead of the browser opening raw JSON. Takes an '/api/...' URL or an
+ * API path ('/admin/audit/export'). Resolves with the saved file's name.
+ */
+export async function downloadBlob(url: string, opts: RequestOptions & { filename?: string } = {}, retried = false): Promise<{ filename: string; size: number }> {
+  const href = url.startsWith('/api/') || /^https?:/i.test(url) ? url : `/api${url.startsWith('/') ? '' : '/'}${url}`;
+  const res = await fetch(href, { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal: opts.signal });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as { message?: string; code?: string; issues?: { path: string; message: string }[] } | null;
+    if (res.status === 403 && data?.code === 'step_up_required' && !retried && onStepUp && (await onStepUp())) {
+      return downloadBlob(url, opts, true);
+    }
+    if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
+    const message = data?.issues?.length ? data.issues.map((i) => i.message).join('; ') : (data?.message ?? `Download failed (${res.status})`);
+    throw new ApiError(res.status, message, data);
+  }
+  const blob = await res.blob();
+  const filename = opts.filename ?? filenameFrom(res.headers.get('Content-Disposition')) ?? href.split('?')[0]!.split('/').pop() ?? 'download';
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Give the browser a moment to start the save before the URL goes away.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+  }
+  return { filename, size: blob.size };
+}
+
+function filenameFrom(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const star = /filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i.exec(disposition);
+  if (star?.[1]) {
+    try { return decodeURIComponent(star[1].trim().replace(/^"|"$/g, '')); } catch { /* fall through */ }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  return plain?.[1]?.trim() || null;
+}
 
 /**
  * Fire-and-forget POST that survives the page closing (keepalive). Never

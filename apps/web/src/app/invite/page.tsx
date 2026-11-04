@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, ArrowRight, CheckCircle, EnvelopeOpen, IdentificationCard, LinkBreak, LockSimple } from '@phosphor-icons/react';
-import { AuthLayout } from '@/components/auth-layout';
+import { ArrowClockwise, ArrowRight, CheckCircle, EnvelopeOpen, IdentificationCard, LinkBreak, LockSimple, WarningCircle } from '@phosphor-icons/react';
+import { AuthHeader, AuthLayout, BackToSignIn, PasswordStrength } from '@/components/auth-layout';
 import { Alert, Button, Input, Label, Skeleton } from '@/components/ui';
 import { ApiError, api, errorText, type Role } from '@/lib/api';
 
@@ -30,6 +29,22 @@ export default function AcceptInvitePage() {
   const [linkBad, setLinkBad] = useState(false);
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** Why the invitation check failed; with `linkBad` false it was not a dead link (offline, 429, 5xx). */
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const check = useCallback((t: string) => {
+    setChecking(true);
+    setCheckError(null);
+    api.post<Invitation>('/auth/invite/check', { token: t })
+      .then(setInvitation)
+      .catch((err: unknown) => {
+        setCheckError(errorText(err, 'Could not reach the server'));
+        // Only the API saying "400" means the invitation itself is dead (A2).
+        if (err instanceof ApiError && err.status === 400) setLinkBad(true);
+      })
+      .finally(() => setChecking(false));
+  }, []);
 
   useEffect(() => {
     const hash = window.location.hash.replace(/^#/, '');
@@ -39,20 +54,17 @@ export default function AcceptInvitePage() {
       // Effects can run twice in development; only the first run sees the hash.
       if (t) {
         setToken(t);
-        api.post<Invitation>('/auth/invite/check', { token: t })
-          .then(setInvitation)
-          .catch((err: unknown) => { setLinkBad(true); setError(errorText(err, 'Could not reach the server')); });
+        check(t);
       }
     }
     setChecked(true);
-  }, []);
+  }, [check]);
 
   const mismatch = pw.repeat.length > 0 && pw.next !== pw.repeat;
-  const strength = Math.min(100, (pw.next.length / 20) * 100);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!token || pw.next !== pw.repeat || !name.trim()) return;
+    if (!token || busy || pw.next !== pw.repeat || !name.trim()) return;
     setBusy(true);
     setError(null);
     setLinkBad(false);
@@ -69,11 +81,13 @@ export default function AcceptInvitePage() {
     }
   }
 
+  const checkFailed = !invitation && !linkBad && checkError !== null;
+
   if (!checked) {
     return (
-      <AuthLayout>
+      <AuthLayout stepKey="loading">
         <Skeleton className="h-8 w-56" />
-        <Skeleton className="mt-3 h-4 w-72" />
+        <Skeleton className="mt-3 h-4 w-72 max-w-full" />
         <Skeleton className="mt-8 h-10 rounded-lg" />
         <Skeleton className="mt-4 h-10 rounded-lg" />
       </AuthLayout>
@@ -82,13 +96,8 @@ export default function AcceptInvitePage() {
 
   if (done) {
     return (
-      <AuthLayout>
-        <div className="mb-8">
-          <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
-            <CheckCircle size={28} />
-          </span>
-          <h1 className="text-[1.75rem] font-semibold tracking-tight">Welcome to TrustVault</h1>
-        </div>
+      <AuthLayout stepKey="done">
+        <AuthHeader icon={<CheckCircle size={26} />} title="Welcome to TrustVault" tone="success" />
         <div className="space-y-4">
           <Alert tone="green">Your account is ready. Sign in with your email and the password you just chose.</Alert>
           {invitation?.role === 'ADMIN' && <Alert tone="blue">As an administrator you&apos;ll set up a second factor (an authenticator app or passkey) when you first sign in.</Alert>}
@@ -102,39 +111,36 @@ export default function AcceptInvitePage() {
 
   if (!token || linkBad) {
     return (
-      <AuthLayout>
-        <div className="mb-8">
-          <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
-            <LinkBreak size={28} />
-          </span>
-          <h1 className="text-[1.75rem] font-semibold tracking-tight">{token ? 'This invitation no longer works' : 'This link is incomplete'}</h1>
-          <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
+      <AuthLayout stepKey={token ? 'dead' : 'no-token'}>
+        <AuthHeader icon={<LinkBreak size={26} />} title={token ? 'This invitation no longer works' : 'This link is incomplete'} tone="warning">
             {token
               ? 'It may have been used already, replaced by a newer one, or expired. Ask your administrator to send the invitation again.'
               : 'Open the link from your invitation email again. Each link works once and expires after a few days.'}
-          </p>
-        </div>
-        <Link href="/login" className="flex w-full items-center justify-center gap-1.5 pt-2 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
-          <ArrowLeft size={14} />Back to sign in
-        </Link>
+        </AuthHeader>
+        {token && (error ?? checkError) && <Alert className="mb-4">{error ?? checkError}</Alert>}
+        <BackToSignIn />
       </AuthLayout>
     );
   }
 
   return (
-    <AuthLayout>
-      <div className="mb-8">
-        <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
-          <EnvelopeOpen size={28} />
-        </span>
-        <h1 className="text-[1.75rem] font-semibold tracking-tight">Set up your account</h1>
-        <p className="mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
+    <AuthLayout stepKey="form">
+      <AuthHeader icon={<EnvelopeOpen size={26} />} title="Set up your account">
           {invitation
-            ? <>Joining as <span className="font-semibold text-slate-700 dark:text-slate-200">{invitation.email}</span> ({ROLE_LABEL[invitation.role]}).</>
-            : <Skeleton className="inline-block h-4 w-64 align-middle" />}
+            ? <>Joining as <span className="font-semibold text-fg">{invitation.email}</span> ({ROLE_LABEL[invitation.role]}).</>
+            : checkFailed ? 'We couldn’t check your invitation yet.' : <Skeleton as="span" className="h-4 w-64 max-w-full" />}
           {' '}Only you will know your password.
-        </p>
-      </div>
+      </AuthHeader>
+
+      {checkFailed && (
+        <Alert
+          className="mb-4"
+          title="Couldn’t check your invitation"
+          action={<Button size="sm" icon={<ArrowClockwise size={14} weight="bold" />} loading={checking} onClick={() => token && check(token)}>Try again</Button>}
+        >
+          {checkError}
+        </Alert>
+      )}
 
       <form onSubmit={onSubmit} className="space-y-4">
         <Label label="Your name" hint="How others see you when you share documents.">
@@ -143,24 +149,15 @@ export default function AcceptInvitePage() {
         <Label label="Password" hint="At least 12 characters. Length matters more than symbols.">
           <Input icon={<LockSimple size={18} />} type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
         </Label>
-        {pw.next && (
-          <div className="-mt-1">
-            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
-              <div className={`h-full rounded-full transition-all ${pw.next.length < 12 ? 'bg-red-500' : pw.next.length < 16 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${strength}%` }} />
-            </div>
-            <p className="mt-1 text-xs text-slate-500">{pw.next.length < 12 ? `${12 - pw.next.length} more characters needed` : pw.next.length < 16 ? 'Good. Longer is even better.' : 'Strong'}</p>
-          </div>
-        )}
-        <Label label="Repeat password" hint={mismatch ? <span className="text-red-600 dark:text-red-400">The two passwords don&apos;t match.</span> : undefined}>
+        {pw.next && <PasswordStrength value={pw.next} />}
+        <Label label="Repeat password" hint={mismatch ? <span className="inline-flex items-center gap-1 font-medium text-danger-600 dark:text-danger-300"><WarningCircle size={14} weight="fill" />The two passwords don&apos;t match.</span> : undefined}>
           <Input icon={<LockSimple size={18} />} type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={pw.repeat} onChange={(e) => setPw({ ...pw, repeat: e.target.value })} />
         </Label>
         {error && <Alert>{error}</Alert>}
         <Button type="submit" variant="primary" size="lg" loading={busy} disabled={!name.trim() || pw.next.length < 12 || pw.next !== pw.repeat} className="w-full">
           {busy ? 'Saving…' : 'Create my account'}
         </Button>
-        <Link href="/login" className="flex w-full items-center justify-center gap-1.5 pt-2 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
-          <ArrowLeft size={14} />Back to sign in
-        </Link>
+        <BackToSignIn />
       </form>
     </AuthLayout>
   );

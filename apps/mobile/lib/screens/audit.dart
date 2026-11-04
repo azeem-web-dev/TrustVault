@@ -41,6 +41,13 @@ class _AuditScreenState extends State<AuditScreen> {
   String? _error;
   bool _busy = false;
 
+  /// "Load older events" is running (R8).
+  bool _loadingMore = false;
+
+  /// Bumped by every new filter or refresh; answers for an older one are
+  /// dropped, so a slow page never lands in a changed list (R8).
+  int _gen = 0;
+
   @override
   void initState() {
     super.initState();
@@ -57,18 +64,30 @@ class _AuditScreenState extends State<AuditScreen> {
   }
 
   Future<void> _load([String? before]) async {
+    final more = before != null;
+    if (more && (_loadingMore || _events == null)) return;
+    final gen = more ? _gen : ++_gen;
+    if (more) setState(() => _loadingMore = true);
     try {
       final r = await Api.I.get('/admin/audit?${_query(_applied, before)}') as Map;
       final ev = (r['events'] as List).cast<Map>();
-      if (mounted) {
+      if (mounted && gen == _gen) {
         setState(() {
-          _events = before != null && _events != null ? [..._events!, ...ev] : ev;
+          if (more) {
+            // Never show the same event twice, even if pages overlap.
+            final seen = {for (final e in _events!) e['seq']};
+            _events = [..._events!, ...ev.where((e) => !seen.contains(e['seq']))];
+          } else {
+            _events = ev;
+          }
           _next = r['nextBefore'] as String?;
           _error = null;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted && gen == _gen) setState(() => _error = errorText(e));
+    } finally {
+      if (more && mounted && gen == _gen) setState(() => _loadingMore = false);
     }
   }
 
@@ -76,12 +95,16 @@ class _AuditScreenState extends State<AuditScreen> {
     setState(() {
       _applied = f;
       _events = null;
+      _next = null;
       _open = null;
+      _error = null;
+      _loadingMore = false;
     });
     _load();
   }
 
   Future<void> _runVerify() async {
+    if (_busy) return;
     setState(() => _busy = true);
     try {
       await Api.I.post('/admin/audit/checkpoint');
@@ -142,24 +165,44 @@ class _AuditScreenState extends State<AuditScreen> {
           child: Btn(advanced > 0 ? 'More filters ($advanced)' : 'More filters', size: BtnSize.sm, variant: BtnVariant.ghost, icon: PhosphorIconsDuotone.funnelSimple, onPressed: _openFilters),
         ),
         const SizedBox(height: 6),
-        if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
+        if (_error != null && ev != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
         TvCard(
           padded: false,
-          child: ev == null
-              ? const SkeletonRows(rows: 8)
-              : ev.isEmpty
-              ? EmptyState(
-                  icon: PhosphorIconsDuotone.listMagnifyingGlass,
-                  title: 'No events match',
-                  body: 'Try a wider time range or another filter.',
-                  action: Btn('Show everything', onPressed: () => _apply(Map.of(_emptyF))),
-                )
-              : RowList(children: [for (final e in ev) _eventRow(context, p, e)]),
+          // Skeleton → content cross-fades; rows rise in, staggered (§2.3).
+          child: AnimatedSwitcher(
+            duration: Motion.of(context),
+            switchInCurve: Motion.curve,
+            switchOutCurve: Motion.easeIn,
+            layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+            child: KeyedSubtree(
+              key: ValueKey(ev == null ? (_error != null ? 'error' : 'loading') : (ev.isEmpty ? 'empty' : 'list')),
+              child: ev == null
+                  ? (_error != null ? ErrorState(title: 'Could not load the audit log', message: _error, onRetry: () => _load()) : const SkeletonRows(rows: 8))
+                  : ev.isEmpty
+                  ? EmptyState(
+                      icon: PhosphorIconsDuotone.listMagnifyingGlass,
+                      title: 'No events match',
+                      body: 'Try a wider time range or another filter.',
+                      action: Btn('Show everything', icon: PhosphorIconsDuotone.stack, onPressed: () => _apply(Map.of(_emptyF))),
+                    )
+                  : RowList(
+                      children: [
+                        for (var i = 0; i < ev.length; i++)
+                          Rise(key: ValueKey(ev[i]['seq']), delay: (i < 8 ? i : 8) * 40, child: _eventRow(context, p, ev[i])),
+                      ],
+                    ),
+            ),
+          ),
         ),
-        if (_next != null) ...[
+        if (_next != null && ev != null) ...[
           gap16,
           Center(
-            child: Btn('Load older events', icon: PhosphorIconsDuotone.arrowClockwise, onPressed: () => _load(_next)),
+            child: Btn(
+              _loadingMore ? 'Loading…' : 'Load older events',
+              icon: PhosphorIconsDuotone.arrowClockwise,
+              loading: _loadingMore,
+              onPressed: _loadingMore ? null : () => _load(_next),
+            ),
           ),
         ],
       ],
@@ -171,12 +214,16 @@ class _AuditScreenState extends State<AuditScreen> {
     final isOpen = _open == seq;
     final outcome = e['outcome'] as String;
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      color: isOpen ? p.selectedBg.withValues(alpha: .5) : Colors.transparent,
+      duration: Motion.of(context),
+      color: p.selectedBg.withValues(alpha: isOpen ? .5 : 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
+          Semantics(
+            button: true,
+            expanded: isOpen,
+            hint: isOpen ? 'Hide details' : 'Show details',
+            child: InkWell(
             onTap: () => setState(() => _open = isOpen ? null : seq),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
@@ -252,16 +299,17 @@ class _AuditScreenState extends State<AuditScreen> {
                   const SizedBox(width: 4),
                   AnimatedRotation(
                     turns: isOpen ? .5 : 0,
-                    duration: const Duration(milliseconds: 200),
+                    duration: Motion.of(context),
                     child: Ic(PhosphorIconsBold.caretDown, size: 14, color: p.faint),
                   ),
                 ],
               ),
             ),
           ),
+          ),
           AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
+            duration: Motion.of(context, const Duration(milliseconds: 220)),
+            curve: Motion.curve,
             child: isOpen ? _details(context, p, e) : const SizedBox(width: double.infinity),
           ),
         ],
@@ -305,33 +353,44 @@ class _AuditScreenState extends State<AuditScreen> {
           tile(PhosphorIconsDuotone.desktop, 'Browser', (e['userAgent'] as String?) ?? '—'),
           tile(PhosphorIconsDuotone.target, 'Target', '${e['targetType'] ?? '—'} ${e['targetId'] ?? ''}', mono: true),
           tile(PhosphorIconsDuotone.hash, 'Chain hash', e['hash'] as String, mono: true),
-          Text(formatDate(e['occurredAt'] as String?), style: ts(context, size: 12, color: p.muted)),
+          Row(
+            children: [
+              Ic(PhosphorIconsDuotone.calendarBlank, size: 14, color: p.muted),
+              const SizedBox(width: 5),
+              Text(formatDate(e['occurredAt'] as String?), style: ts(context, size: 12, color: p.muted)),
+            ],
+          ),
+          const SizedBox(height: 6),
           Wrap(
-            spacing: 4,
+            spacing: 8,
+            runSpacing: 4,
             children: [
               if (docId != null)
-                TextButton(
+                Btn(
+                  'All events for this document',
+                  size: BtnSize.sm,
+                  variant: BtnVariant.soft,
+                  icon: PhosphorIconsDuotone.fileText,
+                  trailing: PhosphorIconsBold.arrowRight,
                   onPressed: () => _apply({...Map.of(_emptyF), 'documentId': docId}),
-                  child: Text(
-                    'All events for this document →',
-                    style: ts(context, size: 12.5, w: FontWeight.w600, color: p.accent),
-                  ),
                 ),
               if (actor != null)
-                TextButton(
+                Btn(
+                  'Everything by $actor',
+                  size: BtnSize.sm,
+                  variant: BtnVariant.soft,
+                  icon: PhosphorIconsDuotone.user,
+                  trailing: PhosphorIconsBold.arrowRight,
                   onPressed: () => _apply({...Map.of(_emptyF), 'actor': actor}),
-                  child: Text(
-                    'Everything by $actor →',
-                    style: ts(context, size: 12.5, w: FontWeight.w600, color: p.accent),
-                  ),
                 ),
             ],
           ),
+          const SizedBox(height: 8),
           if (e['details'] != null)
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: p.dark ? C.ink950 : Colors.white,
+                color: p.surface2,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: p.border),
               ),
@@ -347,6 +406,7 @@ class _AuditScreenState extends State<AuditScreen> {
     final action = TextEditingController(text: f['action']);
     final actor = TextEditingController(text: f['actor']);
     final docId = TextEditingController(text: f['documentId']);
+    final p = Pal.of(context);
     final res = await showSheet<Map<String, String>>(
       context,
       title: 'More filters',
@@ -355,25 +415,51 @@ class _AuditScreenState extends State<AuditScreen> {
         builder: (ctx, set) {
           Future<void> pick(String key) async {
             final now = DateTime.now();
-            final d = await showDatePicker(context: ctx, firstDate: DateTime(2020), lastDate: now.add(const Duration(days: 1)), initialDate: now);
+            final last = now.add(const Duration(days: 1));
+            final cur = _localOf(f[key]!);
+            final init = cur == null || cur.isAfter(last) ? now : cur;
+            final d = await showDatePicker(context: ctx, firstDate: DateTime(2020), lastDate: last, initialDate: init);
             if (d == null || !ctx.mounted) return;
-            final t = await showTimePicker(context: ctx, initialTime: key == 'to' ? const TimeOfDay(hour: 23, minute: 59) : const TimeOfDay(hour: 0, minute: 0));
-            final dt = DateTime(d.year, d.month, d.day, t?.hour ?? 0, t?.minute ?? 0);
-            set(() => f[key] = '${isoDay(dt)}T${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}');
+            final t = await showTimePicker(
+              context: ctx,
+              initialTime: cur != null ? TimeOfDay.fromDateTime(cur) : (key == 'to' ? const TimeOfDay(hour: 23, minute: 59) : const TimeOfDay(hour: 0, minute: 0)),
+            );
+            if (!ctx.mounted) return;
+            // A missed time means the whole day: 00:00 for From, 23:59 for To.
+            final dt = t != null
+                ? DateTime(d.year, d.month, d.day, t.hour, t.minute)
+                : key == 'to'
+                ? DateTime(d.year, d.month, d.day, 23, 59, 59, 999)
+                : DateTime(d.year, d.month, d.day);
+            // Local wall time, sent as an exact UTC instant so the server
+            // does not read it in its own time zone (R8).
+            set(() => f[key] = dt.toUtc().toIso8601String());
           }
 
-          Widget when(String key, String label) => Expanded(
-            child: FieldLabel(
-              label,
-              child: Press(
-                onTap: () => pick(key),
-                child: InputDecorator(
-                  decoration: fieldDeco(icon: PhosphorIconsDuotone.calendarBlank),
-                  child: Text(f[key]!.isEmpty ? 'Any' : f[key]!.replaceAll('T', ' '), style: ts(ctx, size: 13, color: f[key]!.isEmpty ? C.slate400 : null)),
+          Widget when(String key, String label) {
+            final local = _localOf(f[key]!);
+            return Expanded(
+              child: FieldLabel(
+                label,
+                child: Press(
+                  onTap: () => pick(key),
+                  semanticLabel: '$label: ${local == null ? 'any time' : _show(local)}',
+                  child: InputDecorator(
+                    decoration: fieldDeco(
+                      icon: PhosphorIconsDuotone.calendarBlank,
+                      suffix: local == null ? null : IconBtn(PhosphorIconsBold.x, tooltip: 'Clear $label', size: 32, onPressed: () => set(() => f[key] = '')),
+                    ),
+                    child: Text(
+                      local == null ? 'Any' : _show(local),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts(ctx, size: 13, color: local == null ? p.muted : null),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          );
+            );
+          }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -446,6 +532,13 @@ class _AuditScreenState extends State<AuditScreen> {
     );
     if (res != null) _apply(res);
   }
+
+  /// A stored From/To bound (UTC ISO) as local time; null when empty or
+  /// unreadable.
+  static DateTime? _localOf(String v) => v.isEmpty ? null : DateTime.tryParse(v)?.toLocal();
+
+  /// 'YYYY-MM-DD HH:mm' in local time, for display only.
+  static String _show(DateTime d) => '${isoDay(d)} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
 class _IntegrityPanel extends StatelessWidget {
@@ -459,6 +552,7 @@ class _IntegrityPanel extends StatelessWidget {
     final v = verify;
     if (v == null) {
       return Rise(
+        key: const ValueKey('integrity-intro'),
         child: Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
@@ -470,7 +564,13 @@ class _IntegrityPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Three independent protections keep this log honest', style: ts(context, size: 15, w: FontWeight.w600)),
+              Row(
+                children: [
+                  Ic(PhosphorIconsDuotone.shieldCheck, size: 20, color: p.accent),
+                  gap8,
+                  Expanded(child: Text('Three independent protections keep this log honest', style: ts(context, size: 15, w: FontWeight.w600))),
+                ],
+              ),
               gap12,
               _protect(context, p, PhosphorIconsDuotone.gitCommit, 'Hash chain', 'Each event includes the hash of the one before. Change one and every later hash breaks.'),
               _protect(context, p, PhosphorIconsDuotone.key, 'Signed every minute', 'A separate key service signs the chain head. The database cannot forge it.'),
@@ -496,19 +596,22 @@ class _IntegrityPanel extends StatelessWidget {
     final latest = v['latestCheckpoint'] as Map?;
     final problems = (v['problems'] as List?)?.cast<String>() ?? const [];
     final key = v['signingKey'] as Map;
-    final okC = p.dark ? C.emerald300 : C.emerald800;
-    final badC = p.dark ? C.red300 : C.red800;
+    // Success / danger tone from the shared map (§2.1).
+    final t = toneOf(ok ? Tone.green : Tone.red, p.dark);
+    final okC = t.fg;
+    final badC = t.fg;
     return Rise(
+      key: ValueKey('integrity-$ok-${v['eventsChecked']}'),
       dy: 6,
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: ok ? (p.dark ? C.emerald500.withValues(alpha: .25) : C.emerald200) : (p.dark ? C.red500.withValues(alpha: .3) : C.red200)),
+          border: Border.all(color: t.ring),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [ok ? (p.dark ? C.emerald500.withValues(alpha: .10) : C.emerald50) : (p.dark ? C.red500.withValues(alpha: .10) : C.red50), p.card],
+            colors: [t.bg, p.card],
           ),
           boxShadow: p.shadow,
         ),
@@ -521,11 +624,11 @@ class _IntegrityPanel extends StatelessWidget {
                   width: 52,
                   height: 52,
                   decoration: BoxDecoration(
-                    color: ok ? C.emerald500 : C.red500,
+                    color: ok ? C.emerald600 : C.red600,
                     borderRadius: BorderRadius.circular(16),
-                    boxShadow: [BoxShadow(color: (ok ? C.emerald500 : C.red500).withValues(alpha: .35), blurRadius: 14, offset: const Offset(0, 6))],
+                    boxShadow: [BoxShadow(color: t.dot.withValues(alpha: .35), blurRadius: 14, offset: const Offset(0, 6), spreadRadius: -4)],
                   ),
-                  child: Center(child: Ic(ok ? PhosphorIconsFill.checkCircle : PhosphorIconsFill.shieldWarning, size: 28, color: Colors.white)),
+                  child: Center(child: Ic(ok ? PhosphorIconsFill.checkCircle : PhosphorIconsFill.shieldWarning, size: 26, color: severityStyle('critical').fg)),
                 ),
                 gap12,
                 Expanded(
@@ -557,7 +660,7 @@ class _IntegrityPanel extends StatelessWidget {
               gap12,
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: p.dark ? C.red500.withValues(alpha: .1) : C.red100.withValues(alpha: .6), borderRadius: BorderRadius.circular(12)),
+                decoration: BoxDecoration(color: t.bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: t.ring)),
                 child: Column(
                   children: [
                     for (final pr in problems)
@@ -576,7 +679,13 @@ class _IntegrityPanel extends StatelessWidget {
               ),
             ],
             gap12,
-            Text('Signing key (${key['keyId']}):', style: ts(context, size: 12, color: p.muted)),
+            Row(
+              children: [
+                Ic(PhosphorIconsDuotone.key, size: 14, color: p.muted),
+                const SizedBox(width: 5),
+                Expanded(child: Text('Signing key (${key['keyId']}):', style: ts(context, size: 12, color: p.muted))),
+              ],
+            ),
             Mono(key['publicKey'] as String, size: 10.5, color: p.muted),
             const SizedBox(height: 6),
             Text(
@@ -617,9 +726,9 @@ class _IntegrityPanel extends StatelessWidget {
   Widget _metric(BuildContext context, Pal p, String label, String value, String? extra) => Container(
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
-      color: p.dark ? Colors.white.withValues(alpha: .05) : Colors.white.withValues(alpha: .75),
+      color: p.dark ? p.soft : p.card.withValues(alpha: .75),
       borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: p.dark ? Colors.white.withValues(alpha: .1) : Colors.white),
+      border: Border.all(color: p.line),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -627,7 +736,7 @@ class _IntegrityPanel extends StatelessWidget {
         Text(label, style: ts(context, size: 12, color: p.muted)),
         const SizedBox(height: 4),
         Text(value, style: ts(context, size: 20, w: FontWeight.w600)),
-        if (extra != null) Text(extra, style: ts(context, size: 12, color: extra.startsWith('first') ? C.red600 : p.muted)),
+        if (extra != null) Text(extra, style: ts(context, size: 12, color: extra.startsWith('first') ? p.danger : p.muted)),
       ],
     ),
   );

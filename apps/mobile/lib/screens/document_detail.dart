@@ -14,6 +14,7 @@ import '../widgets/audit_ui.dart';
 import '../widgets/files.dart';
 import '../widgets/ui.dart';
 import 'document_pages.dart';
+import 'documents.dart' show uploadExtensions, uploadProblem;
 import 'shell.dart';
 
 const _rank = {'NONE': 0, 'VIEW': 1, 'READ': 2, 'EDIT': 3, 'MANAGE': 4, 'OWNER': 5};
@@ -32,6 +33,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   String? _policyBlock;
   String? _error;
   String _tab = 'overview';
+  /// An action (save, trash, transfer, …) is running: others wait.
+  bool _acting = false;
 
   @override
   void initState() {
@@ -67,22 +70,40 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       } else {
         setState(() => _error = e.message);
       }
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Could not load this document'));
     }
   }
 
-  Future<void> _act(Future<void> Function() fn, String success, {VoidCallback? after}) async {
+  /// Try again after the document failed to load.
+  Future<void> _retry() async {
     setState(() => _error = null);
+    await _load();
+  }
+
+  /// Runs an action once (a second tap while it runs is ignored). True when
+  /// it succeeded, so a form can close only then.
+  Future<bool> _act(Future<void> Function() fn, String success, {VoidCallback? after}) async {
+    if (_acting) return false;
+    setState(() {
+      _acting = true;
+      _error = null;
+    });
     try {
       await fn();
-      if (!mounted) return;
+      if (!mounted) return true;
       toast(context, success);
       if (after != null) {
         after();
       } else {
         await _load();
       }
+      return true;
     } catch (e) {
       if (mounted) setState(() => _error = errorText(e));
+      return false;
+    } finally {
+      if (mounted) setState(() => _acting = false);
     }
   }
 
@@ -104,6 +125,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                   child: Row(
                     children: [
                       TextButton.icon(
+                        style: TextButton.styleFrom(minimumSize: const Size(kMinTap, kMinTap), foregroundColor: p.muted),
                         onPressed: () => Navigator.pop(context),
                         icon: Ic(PhosphorIconsBold.arrowLeft, size: 16, color: p.muted),
                         label: Text(
@@ -114,7 +136,26 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                     ],
                   ),
                 ),
-                Expanded(child: _body(context, p)),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: Motion.of(context, Motion.base),
+                    switchInCurve: Motion.easeOut,
+                    child: KeyedSubtree(
+                      key: ValueKey(
+                        _policyBlock != null
+                            ? 'policy'
+                            : _notFound
+                            ? 'gone'
+                            : _doc != null
+                            ? 'doc'
+                            : _error != null
+                            ? 'error'
+                            : 'loading',
+                      ),
+                      child: _body(context, p),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -164,7 +205,10 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           if (_error != null)
-            TvAlert(_error!)
+            TvCard(
+              padded: false,
+              child: ErrorState(title: 'Could not open this document', message: _error, onRetry: _retry),
+            )
           else ...[
             const Row(
               children: [
@@ -288,22 +332,30 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                           size: BtnSize.lg,
                           expand: true,
                           icon: PhosphorIconsDuotone.eye,
-                          onPressed: () => _openPages(doc, !canDownload),
+                          // "View only" in the viewer whenever a download is not
+                          // possible right now (no READ, or it needs approval).
+                          onPressed: () => _openPages(doc, !canDownloadNow),
                         ),
                         if (canDownloadNow) ...[
                           gap8,
-                          Btn(
-                            'Download  ·  ${current['fileName']}',
-                            variant: BtnVariant.primary,
-                            size: BtnSize.lg,
-                            expand: true,
-                            icon: PhosphorIconsDuotone.downloadSimple,
-                            onPressed: () => downloadAndOpen(
-                              context,
-                              documentId: doc['id'] as String,
-                              versionNo: current['versionNo'] as int,
-                              apiPath: '/documents/${doc['id']}/download',
-                              fallbackName: current['fileName'] as String,
+                          DownloadState(
+                            apiPath: '/documents/${doc['id']}/download',
+                            builder: (context, downloading) => Btn(
+                              'Download  ·  ${current['fileName']}',
+                              variant: BtnVariant.primary,
+                              size: BtnSize.lg,
+                              expand: true,
+                              icon: PhosphorIconsDuotone.downloadSimple,
+                              loading: downloading,
+                              onPressed: downloading
+                                  ? null
+                                  : () => downloadAndOpen(
+                                      context,
+                                      documentId: doc['id'] as String,
+                                      versionNo: current['versionNo'] as int,
+                                      apiPath: '/documents/${doc['id']}/download',
+                                      fallbackName: current['fileName'] as String,
+                                    ),
                             ),
                           ),
                         ] else if (inRequestFlow) ...[
@@ -326,7 +378,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
             ),
           ),
         ),
-        if (_error != null) ...[gap16, TvAlert(_error!, onDismiss: () => setState(() => _error = null))],
+        if (_error != null) ...[gap16, Rise(key: ValueKey(_error), dy: 6, child: Semantics(liveRegion: true, child: TvAlert(_error!, onDismiss: () => setState(() => _error = null))))],
         gap16,
         Segmented<String>(
           value: _tab,
@@ -339,20 +391,35 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           ],
         ),
         gap16,
-        if (_tab == 'overview') ...[
-          _Details(doc: doc, canEdit: level >= _rank['EDIT']! && !trashed, onSave: (patch) => _act(() => Api.I.patch('/documents/${doc['id']}', patch), 'Details saved')),
-          gap16,
-          _ProtectionCard(isOwner: isOwner),
-        ],
-        if (_tab == 'versions') _Versions(doc: doc, canDownload: canDownload, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: (note) => _act(() async {}, note == null ? 'New version uploaded' : 'New version uploaded. $note'), onError: _setError),
-        if (_tab == 'access') _AccessPanel(doc: doc, onError: _setError),
-        if (_tab == 'history') _History(docId: doc['id'] as String),
+        // Tab changes fade in (key = tab).
+        AnimatedSwitcher(
+          duration: Motion.of(context, const Duration(milliseconds: 180)),
+          switchInCurve: Motion.easeOut,
+          layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+          child: KeyedSubtree(
+            key: ValueKey('tab-$_tab'),
+            child: switch (_tab) {
+              'versions' => _Versions(doc: doc, canDownload: canDownload, canDownloadNow: canDownloadNow, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: (note) => _act(() async {}, note == null ? 'New version uploaded' : 'New version uploaded. $note'), onError: _setError),
+              'access' => _AccessPanel(doc: doc, onError: _setError),
+              'history' => _History(docId: doc['id'] as String),
+              _ => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _Details(doc: doc, canEdit: level >= _rank['EDIT']! && !trashed, onSave: (patch) => _act(() => Api.I.patch('/documents/${doc['id']}', patch), 'Details saved')),
+                  gap16,
+                  _ProtectionCard(isOwner: isOwner),
+                ],
+              ),
+            },
+          ),
+        ),
         gap16,
         _AboutCard(doc: doc, canManage: canManage),
         if (isOwner) ...[
           gap16,
           _OwnerActions(
             doc: doc,
+            busy: _acting,
             onTrash: () => _act(() => Api.I.post('/documents/${doc['id']}/trash'), 'Moved to the trash. Nobody else can reach it now.'),
             onRestore: () => _act(() => Api.I.post('/documents/${doc['id']}/restore'), 'Restored'),
             onPurge: () => _act(() => Api.I.delete('/documents/${doc['id']}'), 'Deleted permanently', after: () => Navigator.pop(context)),
@@ -392,7 +459,7 @@ class _AboutCard extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 2),
-            child: Ic(icon, size: 17, color: p.faint),
+            child: Ic(icon, size: 16, color: p.subtle),
           ),
           gap12,
           Expanded(
@@ -436,7 +503,7 @@ class _AboutCard extends StatelessWidget {
               children: [
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Ic(PhosphorIconsDuotone.hash, size: 17, color: p.faint),
+                  child: Ic(PhosphorIconsDuotone.hash, size: 16, color: p.subtle),
                 ),
                 gap12,
                 Expanded(
@@ -454,7 +521,7 @@ class _AboutCard extends StatelessWidget {
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(10)),
+                        decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(10), border: Border.all(color: p.line)),
                         child: Mono(current['sha256'] as String, size: 11),
                       ),
                     ],
@@ -466,11 +533,11 @@ class _AboutCard extends StatelessWidget {
             gap16,
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(12), border: Border.all(color: p.line)),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Ic(PhosphorIconsDuotone.eye, size: 16, color: p.muted),
+                  Ic(PhosphorIconsDuotone.info, size: 16, color: p.info),
                   gap8,
                   Expanded(
                     child: Text(
@@ -510,8 +577,11 @@ class _ProtectionCard extends StatelessWidget {
       icon: PhosphorIconsDuotone.shieldCheck,
       child: Column(
         children: [
-          for (final (icon, title, text, tone) in items)
-            Container(
+          for (final (i, (icon, title, text, tone)) in items.indexed)
+            Rise(
+              delay: 40 * i,
+              dy: 6,
+              child: Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -535,6 +605,7 @@ class _ProtectionCard extends StatelessWidget {
                 ],
               ),
             ),
+            ),
         ],
       ),
     );
@@ -547,13 +618,16 @@ class _Details extends StatefulWidget {
   const _Details({required this.doc, required this.canEdit, required this.onSave});
   final Map doc;
   final bool canEdit;
-  final Future<void> Function(Map<String, dynamic>) onSave;
+  /// True when saved; the editor stays open (with the user's edits) otherwise.
+  final Future<bool> Function(Map<String, dynamic>) onSave;
   @override
   State<_Details> createState() => _DetailsState();
 }
 
 class _DetailsState extends State<_Details> {
   bool _editing = false;
+  bool _saving = false;
+  String? _invalid;
   late final _title = TextEditingController();
   late final _category = TextEditingController();
   late final _desc = TextEditingController();
@@ -573,7 +647,37 @@ class _DetailsState extends State<_Details> {
   @override
   void didUpdateWidget(covariant _Details old) {
     super.didUpdateWidget(old);
-    if (old.doc != widget.doc) _reset();
+    // A refresh while editing must not wipe what the user typed.
+    if (old.doc != widget.doc && !_editing) _reset();
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _category.dispose();
+    _desc.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final title = _title.text.trim();
+    final category = _category.text.trim();
+    if (title.isEmpty || category.isEmpty) {
+      setState(() => _invalid = title.isEmpty ? 'Give the document a title.' : 'Give the document a category.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _invalid = null;
+    });
+    final desc = _desc.text.trim();
+    final ok = await widget.onSave({'title': title, 'category': category, 'description': desc.isEmpty ? null : desc});
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (ok) _editing = false;
+    });
   }
 
   @override
@@ -583,9 +687,26 @@ class _DetailsState extends State<_Details> {
     return TvCard(
       title: 'Details',
       icon: PhosphorIconsDuotone.pencilSimple,
-      actions: widget.canEdit && !_editing ? Btn('Edit', size: BtnSize.sm, icon: PhosphorIconsDuotone.pencilSimple, onPressed: () => setState(() => _editing = true)) : null,
-      child: _editing
+      actions: widget.canEdit && !_editing
+          ? Btn(
+              'Edit',
+              size: BtnSize.sm,
+              icon: PhosphorIconsDuotone.pencilSimple,
+              onPressed: () => setState(() {
+                _reset();
+                _editing = true;
+              }),
+            )
+          : null,
+      child: AnimatedSize(
+        duration: Motion.of(context, Motion.base),
+        curve: Motion.easeOut,
+        alignment: Alignment.topCenter,
+        child: AnimatedSwitcher(
+          duration: Motion.of(context, Motion.base),
+          child: _editing
           ? Column(
+              key: const ValueKey('edit'),
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 FieldLabel(
@@ -593,6 +714,11 @@ class _DetailsState extends State<_Details> {
                   child: TextField(
                     controller: _title,
                     maxLength: 200,
+                    enabled: !_saving,
+                    textInputAction: TextInputAction.next,
+                    onChanged: (_) {
+                      if (_invalid != null) setState(() => _invalid = null);
+                    },
                     decoration: fieldDeco().copyWith(counterText: ''),
                   ),
                 ),
@@ -602,6 +728,11 @@ class _DetailsState extends State<_Details> {
                   child: TextField(
                     controller: _category,
                     maxLength: 60,
+                    enabled: !_saving,
+                    textInputAction: TextInputAction.next,
+                    onChanged: (_) {
+                      if (_invalid != null) setState(() => _invalid = null);
+                    },
                     decoration: fieldDeco().copyWith(counterText: ''),
                   ),
                 ),
@@ -612,40 +743,48 @@ class _DetailsState extends State<_Details> {
                     controller: _desc,
                     maxLines: 4,
                     maxLength: 2000,
+                    enabled: !_saving,
                     decoration: fieldDeco().copyWith(counterText: ''),
                   ),
                 ),
+                if (_invalid != null) ...[gap12, Semantics(liveRegion: true, child: TvAlert(_invalid!))],
                 gap16,
                 Row(
                   children: [
-                    Btn(
-                      'Save',
-                      variant: BtnVariant.primary,
-                      icon: PhosphorIconsBold.check,
-                      onPressed: () async {
-                        await widget.onSave({'title': _title.text.trim(), 'category': _category.text.trim(), 'description': _desc.text.trim().isEmpty ? null : _desc.text.trim()});
-                        if (mounted) setState(() => _editing = false);
-                      },
-                    ),
+                    Btn('Save', variant: BtnVariant.primary, icon: PhosphorIconsBold.check, loading: _saving, onPressed: _saving ? null : _save),
                     gap8,
                     Btn(
                       'Cancel',
                       variant: BtnVariant.ghost,
-                      onPressed: () => setState(() {
-                        _editing = false;
-                        _reset();
-                      }),
+                      icon: PhosphorIconsBold.x,
+                      onPressed: _saving
+                          ? null
+                          : () => setState(() {
+                              _editing = false;
+                              _invalid = null;
+                              _reset();
+                            }),
                     ),
                   ],
                 ),
               ],
             )
           : (desc == null || desc.isEmpty)
-          ? Text(
-              'No description.',
-              style: ts(context, size: 14, color: p.faint).copyWith(fontStyle: FontStyle.italic),
+          ? SizedBox(
+              key: const ValueKey('empty'),
+              width: double.infinity,
+              child: Text(
+                'No description.',
+                style: ts(context, size: 14, color: p.subtle).copyWith(fontStyle: FontStyle.italic),
+              ),
             )
-          : Text(desc, style: ts(context, size: 14, color: p.body, height: 1.55)),
+          : SizedBox(
+              key: ValueKey('desc-$desc'),
+              width: double.infinity,
+              child: Text(desc, style: ts(context, size: 14, color: p.body, height: 1.55)),
+            ),
+        ),
+      ),
     );
   }
 }
@@ -653,9 +792,12 @@ class _DetailsState extends State<_Details> {
 /* --------------------------------------------------------------- versions */
 
 class _Versions extends StatefulWidget {
-  const _Versions({required this.doc, required this.canDownload, required this.canUpload, required this.onUploaded, required this.onError});
+  const _Versions({required this.doc, required this.canDownload, required this.canDownloadNow, required this.canUpload, required this.onUploaded, required this.onError});
   final Map doc;
   final bool canDownload;
+  /// Allowed right now (the API's `download.allowed`); false when the share
+  /// needs the owner's approval first.
+  final bool canDownloadNow;
   final bool canUpload;
   final ValueChanged<String?> onUploaded;
   final ValueChanged<String?> onError;
@@ -667,8 +809,15 @@ class _VersionsState extends State<_Versions> {
   bool _busy = false;
 
   Future<void> _upload() async {
-    final f = await FilePicker.pickFile();
-    if (f == null) return;
+    if (_busy) return;
+    final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: uploadExtensions);
+    if (f == null || !mounted) return;
+    final problem = uploadProblem(f.name, await f.length() ?? 0);
+    if (problem != null) {
+      widget.onError(problem);
+      return;
+    }
+    if (!mounted) return;
     setState(() => _busy = true);
     try {
       final r = await Api.I.upload('/documents/${widget.doc['id']}/versions', bytes: await f.readAsBytes(), fileName: f.name);
@@ -692,7 +841,11 @@ class _VersionsState extends State<_Versions> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (var i = 0; i < versions.length; i++)
-            IntrinsicHeight(
+            Rise(
+              key: ValueKey('v-${versions[i]['versionNo']}'),
+              delay: 40 * i.clamp(0, 8),
+              dy: 6,
+              child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -712,21 +865,29 @@ class _VersionsState extends State<_Versions> {
                 ],
               ),
             ),
+            ),
           if (widget.canUpload) ...[
             gap4,
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: p.dark ? Colors.white.withValues(alpha: .15) : C.slate300),
+                border: Border.all(color: p.dashed),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Upload a new version', style: ts(context, size: 13.5, w: FontWeight.w600)),
+                  Row(
+                    children: [
+                      Ic(PhosphorIconsDuotone.cloudArrowUp, size: 16, color: p.accent),
+                      gap8,
+                      Expanded(child: Text('Upload a new version', style: ts(context, size: 13.5, w: FontWeight.w600))),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
                   Text('Scanned for malware and encrypted before it is stored.', style: ts(context, size: 12, color: p.muted)),
                   gap12,
-                  Btn(_busy ? 'Uploading…' : 'Choose file and upload', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.cloudArrowUp, loading: _busy, expand: true, onPressed: _upload),
+                  Btn(_busy ? 'Uploading…' : 'Choose file and upload', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.cloudArrowUp, loading: _busy, expand: true, onPressed: _busy ? null : _upload),
                 ],
               ),
             ),
@@ -738,16 +899,18 @@ class _VersionsState extends State<_Versions> {
 
   Widget _versionCard(BuildContext context, Pal p, Map v, bool current) {
     final q = v['quarantine'] as Map?;
+    final red = toneOf(Tone.red, p.dark);
+    final brand = toneOf(Tone.brand, p.dark);
     final border = q != null
-        ? (p.dark ? C.red500.withValues(alpha: .3) : C.red200)
+        ? red.ring
         : current
-        ? (p.dark ? C.brand400.withValues(alpha: .25) : C.brand200)
+        ? brand.ring
         : p.divider;
     final bg = q != null
-        ? (p.dark ? C.red500.withValues(alpha: .05) : C.red50.withValues(alpha: .5))
+        ? red.bg
         : current
-        ? (p.dark ? C.brand500.withValues(alpha: .05) : C.brand50.withValues(alpha: .4))
-        : Colors.transparent;
+        ? p.selectedBg
+        : p.surface.withValues(alpha: 0);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -767,16 +930,25 @@ class _VersionsState extends State<_Versions> {
                   ? const TvBadge('Download blocked', tone: Tone.red, icon: PhosphorIconsDuotone.prohibit)
                   : !widget.canDownload
                   ? const TvBadge('View only', icon: PhosphorIconsDuotone.eyeSlash)
-                  : Btn(
-                      'Download',
-                      size: BtnSize.sm,
-                      icon: PhosphorIconsDuotone.downloadSimple,
-                      onPressed: widget.doc['downloadNeedsApproval'] == true ? null : () => downloadAndOpen(
-                        context,
-                        documentId: widget.doc['id'] as String,
-                        versionNo: v['versionNo'] as int,
-                        apiPath: '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download',
-                        fallbackName: v['fileName'] as String,
+                  : !widget.canDownloadNow
+                  // Says why instead of a greyed-out button: the header has "Ask to download".
+                  ? const TvBadge('Needs approval', tone: Tone.amber, icon: PhosphorIconsDuotone.sealCheck)
+                  : DownloadState(
+                      apiPath: '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download',
+                      builder: (context, downloading) => Btn(
+                        'Download',
+                        size: BtnSize.sm,
+                        icon: PhosphorIconsDuotone.downloadSimple,
+                        loading: downloading,
+                        onPressed: downloading
+                            ? null
+                            : () => downloadAndOpen(
+                                context,
+                                documentId: widget.doc['id'] as String,
+                                versionNo: v['versionNo'] as int,
+                                apiPath: '/documents/${widget.doc['id']}/versions/${v['versionNo']}/download',
+                                fallbackName: v['fileName'] as String,
+                              ),
                       ),
                     ),
             ],
@@ -789,12 +961,12 @@ class _VersionsState extends State<_Versions> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Ic(PhosphorIconsDuotone.biohazard, size: 16, color: p.dark ? C.red300 : C.red700),
+                  Ic(PhosphorIconsDuotone.biohazard, size: 16, color: red.fg),
                   gap8,
                   Expanded(
                     child: Text(
                       'Quarantined ${formatDate(q['foundAt'] as String?)}: the malware scanner found ${q['signature']}',
-                      style: ts(context, size: 12, w: FontWeight.w500, color: p.dark ? C.red300 : C.red700),
+                      style: ts(context, size: 12, w: FontWeight.w500, color: red.fg),
                     ),
                   ),
                 ],
@@ -837,6 +1009,18 @@ class _AccessPanelState extends State<_AccessPanel> {
   bool _needsApproval = false;
   bool _workHours = false;
   final _zone = TextEditingController(text: 'UTC');
+  /// People search: only the newest answer counts; the field shows progress
+  /// and "nobody matches" instead of silently showing nothing.
+  int _seq = 0;
+  bool _searching = false;
+  bool _searched = false;
+  String? _searchError;
+  /// One share at a time (the form or a suggestion).
+  bool _sharing = false;
+  /// Grants being removed, and groups whose waiting members are being confirmed.
+  final _revoking = <String>{};
+  final _confirming = <String>{};
+  bool _loadingSuggestions = false;
 
   String get _docId => widget.doc['id'] as String;
 
@@ -850,42 +1034,89 @@ class _AccessPanelState extends State<_AccessPanel> {
   void dispose() {
     _t?.cancel();
     _query.dispose();
+    _zone.dispose();
     super.dispose();
   }
+
+  String? _loadError;
 
   Future<void> _load() async {
     try {
       final r = await Api.I.get('/documents/$_docId/access') as Map;
-      if (mounted) setState(() => _grants = (r['grants'] as List).cast<Map>());
+      if (mounted) {
+        setState(() {
+          _grants = (r['grants'] as List).cast<Map>();
+          _loadError = null;
+        });
+      }
     } catch (e) {
-      widget.onError(errorText(e));
+      if (!mounted) return;
+      // Before the first list: say so in the card (no endless skeleton).
+      if (_grants == null) {
+        setState(() => _loadError = errorText(e));
+      } else {
+        widget.onError(errorText(e));
+      }
     }
   }
 
   void _search(String q) {
     _t?.cancel();
+    final my = ++_seq;
     if (q.trim().length < 2) {
       setState(() {
         _users = [];
         _groups = [];
+        _searching = false;
+        _searched = false;
+        _searchError = null;
       });
       return;
     }
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
     _t = Timer(const Duration(milliseconds: 250), () async {
       try {
         final r = await Api.I.get('/directory?q=${Uri.encodeQueryComponent(q.trim())}') as Map;
-        if (mounted) {
-          setState(() {
-            _users = (r['users'] as List).cast<Map>();
-            _groups = (r['groups'] as List).cast<Map>();
-          });
-        }
-      } catch (_) {}
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _users = (r['users'] as List).cast<Map>();
+          _groups = (r['groups'] as List).cast<Map>();
+          _searching = false;
+          _searched = true;
+        });
+      } catch (e) {
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _users = [];
+          _groups = [];
+          _searching = false;
+          _searched = false;
+          _searchError = errorText(e, 'Search failed. Try again.');
+        });
+      }
+    });
+  }
+
+  void _pick(VoidCallback set) {
+    _seq++;
+    _t?.cancel();
+    setState(() {
+      set();
+      _users = [];
+      _groups = [];
+      _searching = false;
+      _searched = false;
+      _searchError = null;
     });
   }
 
   Future<void> _share(Map<String, String> subject, String lvl, String? expiresAt, {bool fromSuggestion = false, String label = ''}) async {
+    if (_sharing) return;
     widget.onError(null);
+    setState(() => _sharing = true);
     try {
       final policy = (_needsApproval || _workHours) && !fromSuggestion
           ? {
@@ -913,20 +1144,66 @@ class _AccessPanelState extends State<_AccessPanel> {
         _workHours = false;
         _users = [];
         _groups = [];
+        _searched = false;
         final id = subject['userId'] ?? subject['groupId'];
         _suggestions = _suggestions?.where((s) => s['id'] != id).toList();
       });
       await _load();
     } catch (e) {
       widget.onError(errorText(e));
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
+
+  /// Confirms the members who joined a group after it was shared (THREATS.md
+  /// A19). Re-sends that grant exactly as it is (level, end date and its own
+  /// conditions): the share form, and whatever is half-filled in it, is not
+  /// involved.
+  Future<void> _confirmPending(Map g) async {
+    final s = g['subject'] as Map;
+    final gid = s['id'] as String;
+    if (_confirming.contains(gid)) return;
+    widget.onError(null);
+    setState(() => _confirming.add(gid));
+    try {
+      await Api.I.put('/documents/$_docId/access', {
+        'groupId': gid,
+        'level': g['level'],
+        'expiresAt': g['expiresAt'],
+        'fromSuggestion': false,
+        if (g['policy'] != null) 'policy': g['policy'],
+      });
+      if (mounted) toast(context, 'Confirmed. Everyone in group ${s['name']} now has this access.');
+      await _load();
+    } catch (e) {
+      widget.onError(errorText(e));
+    } finally {
+      if (mounted) setState(() => _confirming.remove(gid));
     }
   }
 
   Future<void> _revoke(Map g) async {
+    final gid = g['id'] as String;
+    if (_revoking.contains(gid)) return;
+    final subject = g['subject'] as Map;
+    final isGroup = subject['type'] == 'group';
+    final ok = await showConfirm(
+      context,
+      isGroup ? 'Remove group ${subject['name']}’s access?' : 'Remove ${subject['name']}’s access?',
+      isGroup
+          ? 'Everyone who has it only through this group loses access on their next request.'
+          : 'They lose access on their next request. Copies they already downloaded stay stamped with their name.',
+      confirmLabel: 'Remove access',
+      danger: true,
+      icon: PhosphorIconsDuotone.userMinus,
+    );
+    if (!ok || !mounted) return;
     widget.onError(null);
+    setState(() => _revoking.add(gid));
     try {
-      final r = await Api.I.delete('/documents/$_docId/access/${g['id']}');
-      final name = (g['subject'] as Map)['name'];
+      final r = await Api.I.delete('/documents/$_docId/access/$gid');
+      final name = subject['name'];
       final still = r is Map ? r['stillHas'] as String? : null;
       // Their own grant is gone, but a group grant may still cover them. Say so.
       if (mounted) {
@@ -937,6 +1214,21 @@ class _AccessPanelState extends State<_AccessPanel> {
       await _load();
     } catch (e) {
       widget.onError(errorText(e));
+    } finally {
+      if (mounted) setState(() => _revoking.remove(gid));
+    }
+  }
+
+  Future<void> _loadSuggestions() async {
+    if (_loadingSuggestions) return;
+    setState(() => _loadingSuggestions = true);
+    try {
+      final r = await Api.I.get('/documents/$_docId/suggestions') as Map;
+      if (mounted) setState(() => _suggestions = (r['suggestions'] as List).cast<Map>());
+    } catch (e) {
+      widget.onError(errorText(e));
+    } finally {
+      if (mounted) setState(() => _loadingSuggestions = false);
     }
   }
 
@@ -967,7 +1259,7 @@ class _AccessPanelState extends State<_AccessPanel> {
                     decoration: BoxDecoration(
                       color: p.selectedBg,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: p.dark ? C.brand400.withValues(alpha: .25) : C.brand200),
+                      border: Border.all(color: toneOf(Tone.brand, p.dark).ring),
                     ),
                     child: Row(
                       children: [
@@ -994,7 +1286,7 @@ class _AccessPanelState extends State<_AccessPanel> {
                             ],
                           ),
                         ),
-                        Btn('Change', size: BtnSize.sm, variant: BtnVariant.ghost, onPressed: () => setState(() => _target = null)),
+                        Btn('Change', size: BtnSize.sm, variant: BtnVariant.ghost, icon: PhosphorIconsDuotone.arrowsLeftRight, onPressed: _sharing ? null : () => setState(() => _target = null)),
                       ],
                     ),
                   ),
@@ -1003,17 +1295,46 @@ class _AccessPanelState extends State<_AccessPanel> {
                 TextField(
                   controller: _query,
                   onChanged: _search,
-                  decoration: fieldDeco(hint: 'Type a name, email or group (2+ letters)', icon: PhosphorIconsDuotone.magnifyingGlass),
+                  textInputAction: TextInputAction.search,
+                  decoration: fieldDeco(
+                    hint: 'Type a name, email or group (2+ letters)',
+                    icon: PhosphorIconsDuotone.magnifyingGlass,
+                    suffix: _searching
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                          )
+                        : null,
+                  ),
                 ),
-                if (_groups.isNotEmpty || users.isNotEmpty)
-                  Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    decoration: BoxDecoration(
-                      color: p.raised,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: p.border),
-                      boxShadow: p.dark ? null : C.lift,
+                if (_searchError != null) Rise(dy: 6, child: Padding(padding: const EdgeInsets.only(top: 8), child: TvAlert(_searchError!, title: 'Search failed'))),
+                if (_searched && !_searching && _groups.isEmpty && users.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Row(
+                        children: [
+                          Ic(PhosphorIconsDuotone.fileMagnifyingGlass, size: 16, color: p.subtle),
+                          gap8,
+                          Expanded(child: Text('Nobody matches “${_query.text.trim()}”.', style: ts(context, size: 13, color: p.muted))),
+                        ],
+                      ),
                     ),
+                  ),
+                if (_groups.isNotEmpty || users.isNotEmpty) gap8,
+                if (_groups.isNotEmpty || users.isNotEmpty)
+                  Rise(
+                    dy: 6,
+                    child: Material(
+                    // A Material, so each row's ripple shows on the dropdown.
+                    color: p.raised,
+                    clipBehavior: Clip.antiAlias,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: BorderSide(color: p.border),
+                    ),
+                    elevation: 0,
                     child: Column(
                       children: [
                         for (final g in _groups)
@@ -1022,11 +1343,7 @@ class _AccessPanelState extends State<_AccessPanel> {
                             leading: const IconTile(PhosphorIconsDuotone.usersFour, tone: Tone.blue, size: 32),
                             title: Text(g['name'] as String, style: ts(context, size: 14, w: FontWeight.w500)),
                             subtitle: Text('Group · ${g['members']} members', style: ts(context, size: 12, color: p.muted)),
-                            onTap: () => setState(() {
-                              _target = (type: 'group', id: g['id'] as String, label: 'group ${g['name']}', external: false);
-                              _users = [];
-                              _groups = [];
-                            }),
+                            onTap: () => _pick(() => _target = (type: 'group', id: g['id'] as String, label: 'group ${g['name']}', external: false)),
                           ),
                         for (final u in users)
                           ListTile(
@@ -1039,22 +1356,24 @@ class _AccessPanelState extends State<_AccessPanel> {
                               style: ts(context, size: 12, color: p.muted),
                             ),
                             trailing: u['role'] == 'EXTERNAL' ? const TvBadge('External', tone: Tone.amber) : null,
-                            onTap: () => setState(() {
+                            onTap: () => _pick(() {
                               _target = (type: 'user', id: u['id'] as String, label: u['displayName'] as String, external: u['role'] == 'EXTERNAL');
                               // Externals start at View only: the file never leaves TrustVault (THREATS.md V10).
                               _level = u['role'] == 'EXTERNAL' ? 'VIEW' : 'READ';
-                              _users = [];
-                              _groups = [];
                             }),
                           ),
                       ],
                     ),
                   ),
+                  ),
               ],
               gap16,
-              Text(
-                'Access level',
-                style: ts(context, size: 13, w: FontWeight.w500, color: p.body),
+              Semantics(
+                header: true,
+                child: Text(
+                  'Access level',
+                  style: ts(context, size: 13, w: FontWeight.w500, color: p.body),
+                ),
               ),
               gap8,
               for (final l in levels)
@@ -1062,11 +1381,23 @@ class _AccessPanelState extends State<_AccessPanel> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: ChoiceCard(icon: l.$4, title: l.$2, text: l.$3, selected: _level == l.$1, onTap: () => setState(() => _level = l.$1)),
                 ),
-              if (t?.external ?? false) Text('External people get View only or Download, and it must end on a date. View only is suggested: the file never leaves TrustVault.', style: ts(context, size: 12, color: p.dark ? C.amber300 : C.amber700)),
+              if (t?.external ?? false)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(padding: const EdgeInsets.only(top: 1), child: Ic(PhosphorIconsDuotone.warning, size: 14, color: p.warning)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text('External people get View only or Download, and it must end on a date. View only is suggested: the file never leaves TrustVault.', style: ts(context, size: 12, color: p.warning, height: 1.45)),
+                    ),
+                  ],
+                ),
               gap12,
               FieldLabel(
                 (t?.external ?? false) ? 'Expires on (required for external)' : 'Expires on (optional)',
                 child: Press(
+                  button: true,
+                  semanticLabel: _expires.isEmpty ? 'Expires on: no end date. Choose a date' : 'Expires on $_expires. Change the date',
                   onTap: () async {
                     final now = DateTime.now();
                     final d = await showDatePicker(context: context, firstDate: now, lastDate: DateTime(now.year + 5), initialDate: now.add(const Duration(days: 30)));
@@ -1075,28 +1406,56 @@ class _AccessPanelState extends State<_AccessPanel> {
                   child: InputDecorator(
                     decoration: fieldDeco(
                       icon: PhosphorIconsDuotone.calendarBlank,
-                      suffix: _expires.isEmpty ? null : IconButton(icon: const Ic(PhosphorIconsBold.x, size: 14), onPressed: () => setState(() => _expires = '')),
+                      suffix: _expires.isEmpty ? null : IconButton(tooltip: 'Clear end date', constraints: const BoxConstraints(minWidth: kMinTap, minHeight: kMinTap), icon: Ic(PhosphorIconsBold.x, size: 14, color: p.muted), onPressed: () => setState(() => _expires = '')),
                     ),
-                    child: Text(_expires.isEmpty ? 'No end date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? C.slate400 : null)),
+                    child: Text(_expires.isEmpty ? 'No end date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? p.subtle : null)),
                   ),
                 ),
               ),
               gap8,
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _needsApproval,
-                onChanged: (v) => setState(() => _needsApproval = v ?? false),
-                title: Text('Downloads need my approval', style: ts(context, size: 14, w: FontWeight.w500)),
-                subtitle: Text('They can read the details; each download waits for you.', style: ts(context, size: 12, color: p.muted)),
+              // A Material, so the rows' ripple shows on the card.
+              Material(
+                type: MaterialType.transparency,
+                child: Column(
+                  children: [
+                    CheckboxListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      checkboxShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+                      activeColor: p.dark ? C.brand500 : C.brand600,
+                      side: BorderSide(color: p.lineStrong, width: 1.5),
+                      value: _needsApproval,
+                      onChanged: (v) => setState(() => _needsApproval = v ?? false),
+                      secondary: Ic(PhosphorIconsDuotone.sealCheck, size: 18, color: _needsApproval ? p.accent : p.subtle),
+                      title: Text('Downloads need my approval', style: ts(context, size: 14, w: FontWeight.w500)),
+                      subtitle: Text('They can read the details; each download waits for you.', style: ts(context, size: 12, color: p.muted)),
+                    ),
+                    CheckboxListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      checkboxShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+                      activeColor: p.dark ? C.brand500 : C.brand600,
+                      side: BorderSide(color: p.lineStrong, width: 1.5),
+                      value: _workHours,
+                      onChanged: (v) => setState(() => _workHours = v ?? false),
+                      secondary: Ic(PhosphorIconsDuotone.calendarBlank, size: 18, color: _workHours ? p.accent : p.subtle),
+                      title: Text('Only Mon–Fri 09:00–18:00', style: ts(context, size: 14, w: FontWeight.w500)),
+                      subtitle: Text('Local time in the zone below, daylight saving included.', style: ts(context, size: 12, color: p.muted)),
+                    ),
+                  ],
+                ),
               ),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _workHours,
-                onChanged: (v) => setState(() => _workHours = v ?? false),
-                title: Text('Only Mon–Fri 09:00–18:00', style: ts(context, size: 14, w: FontWeight.w500)),
-                subtitle: Text('Local time in the zone below, daylight saving included.', style: ts(context, size: 12, color: p.muted)),
+              AnimatedSize(
+                duration: Motion.of(context, Motion.base),
+                curve: Motion.easeOut,
+                alignment: Alignment.topCenter,
+                child: _workHours
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: TextField(controller: _zone, decoration: fieldDeco(hint: 'Time zone, e.g. Europe/London', icon: PhosphorIconsDuotone.globe)),
+                      )
+                    : const SizedBox(width: double.infinity),
               ),
-              if (_workHours) TextField(controller: _zone, decoration: fieldDeco(hint: 'Time zone, e.g. Europe/London')),
               gap16,
               Btn(
                 'Share',
@@ -1104,7 +1463,8 @@ class _AccessPanelState extends State<_AccessPanel> {
                 size: BtnSize.lg,
                 expand: true,
                 icon: PhosphorIconsDuotone.shareNetwork,
-                onPressed: t == null || (t.external && _expires.isEmpty)
+                loading: _sharing,
+                onPressed: t == null || _sharing || (t.external && _expires.isEmpty)
                     ? null
                     : () => _share(
                         t.type == 'user' ? {'userId': t.id} : {'groupId': t.id},
@@ -1123,7 +1483,12 @@ class _AccessPanelState extends State<_AccessPanel> {
           actions: _grants == null ? null : TvBadge('${_grants!.length + 1} with access'),
           padded: false,
           child: _grants == null
-              ? const SkeletonRows(rows: 3)
+              ? (_loadError != null
+                    ? Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: ErrorState(compact: true, title: 'Could not load who has access', message: _loadError, onRetry: _load),
+                      )
+                    : const SkeletonRows(rows: 3))
               : RowList(
                   children: [
                     _person(
@@ -1135,11 +1500,18 @@ class _AccessPanelState extends State<_AccessPanel> {
                       const TvBadge('Owner', tone: Tone.violet, icon: PhosphorIconsDuotone.crown),
                       null,
                     ),
-                    for (final g in _grants!) _grantRow(context, p, g, isOwner),
+                    for (final (i, g) in _grants!.indexed)
+                      Rise(key: ValueKey(g['id']), delay: 40 * (i + 1).clamp(0, 8), dy: 6, child: _grantRow(context, p, g, isOwner)),
                     if (_grants!.isEmpty)
                       Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Text('Only the owner can open this document.', style: ts(context, size: 13, color: p.muted)),
+                        child: Row(
+                          children: [
+                            Ic(PhosphorIconsDuotone.lockKey, size: 16, color: p.subtle),
+                            gap8,
+                            Expanded(child: Text('Only the owner can open this document.', style: ts(context, size: 13, color: p.muted))),
+                          ],
+                        ),
                       ),
                   ],
                 ),
@@ -1155,10 +1527,20 @@ class _AccessPanelState extends State<_AccessPanel> {
               if (_suggestions == null)
                 Text('You confirm each one, and both the suggestion and your decision are recorded.', style: ts(context, size: 13, color: p.muted))
               else if (_suggestions!.isEmpty)
-                Text('No suggestions for this document.', style: ts(context, size: 13, color: p.muted))
+                Row(
+                  children: [
+                    Ic(PhosphorIconsDuotone.sparkle, size: 16, color: p.subtle),
+                    gap8,
+                    Expanded(child: Text('No suggestions for this document.', style: ts(context, size: 13, color: p.muted))),
+                  ],
+                )
               else
-                for (final s in _suggestions!)
-                  Container(
+                for (final (i, s) in _suggestions!.indexed)
+                  Rise(
+                    key: ValueKey('s-${s['type']}-${s['id']}'),
+                    delay: 40 * i.clamp(0, 8),
+                    dy: 6,
+                    child: Container(
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -1183,7 +1565,9 @@ class _AccessPanelState extends State<_AccessPanel> {
                           'Share ${accessLabel[s['level']]}',
                           size: BtnSize.sm,
                           icon: PhosphorIconsDuotone.userPlus,
-                          onPressed: () => _share(
+                          onPressed: _sharing
+                              ? null
+                              : () => _share(
                             s['type'] == 'user' ? {'userId': s['id'] as String} : {'groupId': s['id'] as String},
                             s['level'] as String,
                             null,
@@ -1194,6 +1578,7 @@ class _AccessPanelState extends State<_AccessPanel> {
                       ],
                     ),
                   ),
+                  ),
               gap8,
               Align(
                 alignment: Alignment.centerLeft,
@@ -1202,14 +1587,8 @@ class _AccessPanelState extends State<_AccessPanel> {
                   size: BtnSize.sm,
                   variant: BtnVariant.soft,
                   icon: PhosphorIconsDuotone.sparkle,
-                  onPressed: () async {
-                    try {
-                      final r = await Api.I.get('/documents/$_docId/suggestions') as Map;
-                      if (mounted) setState(() => _suggestions = (r['suggestions'] as List).cast<Map>());
-                    } catch (e) {
-                      widget.onError(errorText(e));
-                    }
-                  },
+                  loading: _loadingSuggestions,
+                  onPressed: _loadingSuggestions ? null : _loadSuggestions,
                 ),
               ),
             ],
@@ -1234,14 +1613,26 @@ class _AccessPanelState extends State<_AccessPanel> {
       isGroup ? '${s['name']} · group of ${s['members']}' : s['name'] as String,
       sub.toString(),
       TvBadge(accessLabel[level] ?? level, tone: accessTone[level] ?? Tone.neutral, dot: true),
-      (isOwner || level != 'MANAGE') ? IconBtn(PhosphorIconsDuotone.trash, tooltip: 'Remove access for ${s['name']}', danger: true, onPressed: () => _revoke(g)) : null,
+      (isOwner || level != 'MANAGE')
+          ? (_revoking.contains(g['id'])
+                ? const SizedBox(
+                    width: kMinTap,
+                    height: kMinTap,
+                    child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+                  )
+                : IconBtn(PhosphorIconsDuotone.trash, tooltip: 'Remove access for ${s['name']}', danger: true, onPressed: () => _revoke(g)))
+          : null,
       extra: [
         if (!isGroup && s['role'] == 'EXTERNAL') const TvBadge('External', tone: Tone.amber),
         // People added to the group after it was shared wait for the owner (THREATS.md A19).
         if (isGroup && ((s['pending'] as int?) ?? 0) > 0)
           Press(
-            onTap: () => _share({'groupId': s['id'] as String}, level, g['expiresAt'] as String?, label: 'group ${s['name']}'),
-            child: TvBadge('${s['pending']} waiting · tap to confirm', tone: Tone.amber, icon: PhosphorIconsDuotone.userPlus),
+            button: true,
+            semanticLabel: '${s['pending']} people waiting in group ${s['name']}. Confirm their access',
+            onTap: _confirming.contains(s['id']) ? null : () => _confirmPending(g),
+            child: _confirming.contains(s['id'])
+                ? const TvBadge('Confirming…', tone: Tone.amber, icon: PhosphorIconsDuotone.userPlus)
+                : TvBadge('${s['pending']} waiting · tap to confirm', tone: Tone.amber, icon: PhosphorIconsDuotone.userPlus),
           ),
         if (!isGroup && s['active'] == false) const TvBadge('Inactive', tone: Tone.red),
         ..._conditionBadges(g['policy'] as Map?),
@@ -1296,17 +1687,28 @@ class _History extends StatefulWidget {
 
 class _HistoryState extends State<_History> {
   List<Map>? _events;
+  /// A failed load says so: on a security screen an error must never read
+  /// as "nothing happened".
+  String? _error;
+
   @override
   void initState() {
     super.initState();
-    Api.I
-        .get('/documents/${widget.docId}/history')
-        .then((r) {
-          if (mounted) setState(() => _events = ((r as Map)['events'] as List).cast<Map>());
-        })
-        .catchError((_) {
-          if (mounted) setState(() => _events = []);
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await Api.I.get('/documents/${widget.docId}/history') as Map;
+      if (mounted) {
+        setState(() {
+          _events = (r['events'] as List).cast<Map>();
+          _error = null;
         });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Could not load the history.'));
+    }
   }
 
   @override
@@ -1318,14 +1720,20 @@ class _HistoryState extends State<_History> {
       icon: PhosphorIconsDuotone.clockCounterClockwise,
       description: 'Everything that happened to this document, including refused attempts.',
       padded: ev == null || ev.isEmpty ? false : true,
-      child: ev == null
+      child: ev == null && _error != null
+          ? ErrorState(title: 'Could not load the history', message: _error, onRetry: _load)
+          : ev == null
           ? const SkeletonRows(rows: 5)
           : ev.isEmpty
-          ? const EmptyState(icon: PhosphorIconsDuotone.clockCounterClockwise, title: 'No activity yet')
+          ? const EmptyState(icon: PhosphorIconsDuotone.clockCounterClockwise, title: 'No activity yet', body: 'Views, downloads, shares and refused attempts will show here.')
           : Column(
               children: [
                 for (var i = 0; i < ev.length; i++)
-                  IntrinsicHeight(
+                  Rise(
+                    key: ValueKey('e-${ev[i]['seq']}'),
+                    delay: 40 * i.clamp(0, 8),
+                    dy: 6,
+                    child: IntrinsicHeight(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1369,10 +1777,11 @@ class _HistoryState extends State<_History> {
                         ),
                         Text(
                           '#${ev[i]['seq']}',
-                          style: TextStyle(fontFamily: C.mono, fontSize: 11, color: p.faint),
+                          style: TextStyle(fontFamily: C.mono, fontSize: 11, color: p.subtle),
                         ),
                       ],
                     ),
+                  ),
                   ),
               ],
             ),
@@ -1383,8 +1792,10 @@ class _HistoryState extends State<_History> {
 /* ---------------------------------------------------------- owner actions */
 
 class _OwnerActions extends StatefulWidget {
-  const _OwnerActions({required this.doc, required this.onTrash, required this.onRestore, required this.onPurge, required this.onTransfer, required this.onMove});
+  const _OwnerActions({required this.doc, required this.busy, required this.onTrash, required this.onRestore, required this.onPurge, required this.onTransfer, required this.onMove});
   final Map doc;
+  /// An action on the document is running; every button waits for it.
+  final bool busy;
   final VoidCallback onTrash;
   final VoidCallback onRestore;
   final VoidCallback onPurge;
@@ -1400,6 +1811,13 @@ class _OwnerActionsState extends State<_OwnerActions> {
   List<Map> _folders = [];
   List<Map> _owners = [];
   Timer? _t;
+  int _seq = 0;
+  bool _searching = false;
+  bool _searched = false;
+  String? _searchError;
+  String _ownerQuery = '';
+  /// Which button started the running action, so only it spins.
+  String? _pressed;
 
   @override
   void initState() {
@@ -1420,17 +1838,63 @@ class _OwnerActionsState extends State<_OwnerActions> {
 
   void _searchOwners(String q) {
     _t?.cancel();
+    final my = ++_seq;
+    _ownerQuery = q.trim();
     if (q.trim().length < 2) {
-      setState(() => _owners = []);
+      setState(() {
+        _owners = [];
+        _searching = false;
+        _searched = false;
+        _searchError = null;
+      });
       return;
     }
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
     _t = Timer(const Duration(milliseconds: 250), () async {
       try {
         final r = await Api.I.get('/directory?q=${Uri.encodeQueryComponent(q.trim())}') as Map;
-        if (mounted) setState(() => _owners = (r['users'] as List).cast<Map>().where((u) => u['role'] == 'OWNER').toList());
-      } catch (_) {}
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _owners = (r['users'] as List).cast<Map>().where((u) => u['role'] == 'OWNER').toList();
+          _searching = false;
+          _searched = true;
+        });
+      } catch (e) {
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _owners = [];
+          _searching = false;
+          _searched = false;
+          _searchError = errorText(e, 'Search failed. Try again.');
+        });
+      }
     });
   }
+
+  void _run(String key, VoidCallback action) {
+    if (widget.busy) return;
+    setState(() => _pressed = key);
+    action();
+  }
+
+  Future<void> _transfer(Map o) async {
+    if (widget.busy) return;
+    final ok = await showConfirm(
+      context,
+      'Transfer “${widget.doc['title']}” to ${o['displayName']}?',
+      'They become the owner with full control. You lose access unless they share it back. This can’t be undone from your side.',
+      confirmLabel: 'Transfer',
+      danger: true,
+      icon: PhosphorIconsDuotone.arrowsLeftRight,
+    );
+    if (!ok || !mounted) return;
+    _run('transfer:${o['id']}', () => widget.onTransfer(o['id'] as String));
+  }
+
+  bool _spins(String key) => widget.busy && _pressed == key;
 
   @override
   Widget build(BuildContext context) {
@@ -1448,10 +1912,12 @@ class _OwnerActionsState extends State<_OwnerActions> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                Btn('Restore', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.arrowCounterClockwise, onPressed: widget.onRestore),
-                _confirmPurge
-                    ? Btn('Yes, delete forever', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.fire, onPressed: widget.onPurge)
-                    : Btn('Delete permanently', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, onPressed: () => setState(() => _confirmPurge = true)),
+                Btn('Restore', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.arrowCounterClockwise, loading: _spins('restore'), onPressed: widget.busy ? null : () => _run('restore', widget.onRestore)),
+                if (_confirmPurge) ...[
+                  Btn('Yes, delete forever', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.fire, loading: _spins('purge'), onPressed: widget.busy ? null : () => _run('purge', widget.onPurge)),
+                  Btn('Cancel', variant: BtnVariant.ghost, icon: PhosphorIconsBold.x, onPressed: widget.busy ? null : () => setState(() => _confirmPurge = false)),
+                ] else
+                  Btn('Delete permanently', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, onPressed: widget.busy ? null : () => setState(() => _confirmPurge = true)),
               ],
             ),
           ],
@@ -1459,6 +1925,7 @@ class _OwnerActionsState extends State<_OwnerActions> {
       );
     }
     final folder = widget.doc['folder'] as Map?;
+    final red = toneOf(Tone.red, p.dark);
     return TvCard(
       title: 'Owner actions',
       icon: PhosphorIconsDuotone.crown,
@@ -1469,13 +1936,16 @@ class _OwnerActionsState extends State<_OwnerActions> {
             FieldLabel(
               'Folder',
               child: DropdownButtonFormField<String>(
-                initialValue: (folder?['id'] as String?) ?? '',
+                // Its value must be one of the items: a folder missing from
+                // the list (deleted elsewhere) reads as "No folder".
+                key: ValueKey('folder-${folder?['id']}-${_folders.length}'),
+                initialValue: _folders.any((f) => f['id'] == folder?['id']) ? folder!['id'] as String : '',
                 decoration: fieldDeco(icon: PhosphorIconsDuotone.folderSimple),
                 items: [
                   const DropdownMenuItem(value: '', child: Text('No folder')),
                   for (final f in _folders) DropdownMenuItem(value: f['id'] as String, child: Text(f['name'] as String)),
                 ],
-                onChanged: (v) => widget.onMove((v == null || v.isEmpty) ? null : v),
+                onChanged: widget.busy ? null : (v) => widget.onMove((v == null || v.isEmpty) ? null : v),
               ),
             ),
             gap16,
@@ -1485,11 +1955,43 @@ class _OwnerActionsState extends State<_OwnerActions> {
             hint: 'The new owner gets full control. You keep no access unless they share it back.',
             child: TextField(
               onChanged: _searchOwners,
-              decoration: fieldDeco(hint: 'Search document owners', icon: PhosphorIconsDuotone.arrowsLeftRight),
+              textInputAction: TextInputAction.search,
+              decoration: fieldDeco(
+                hint: 'Search document owners',
+                icon: PhosphorIconsDuotone.arrowsLeftRight,
+                suffix: _searching
+                    ? const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      )
+                    : null,
+              ),
             ),
           ),
-          for (final o in _owners)
-            Container(
+          if (_searchError != null) Rise(dy: 6, child: Padding(padding: const EdgeInsets.only(top: 8), child: TvAlert(_searchError!, title: 'Search failed'))),
+          if (_searched && !_searching && _owners.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
+              child: Semantics(
+                liveRegion: true,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(padding: const EdgeInsets.only(top: 1), child: Ic(PhosphorIconsDuotone.fileMagnifyingGlass, size: 16, color: p.subtle)),
+                    gap8,
+                    Expanded(
+                      child: Text('No document owner matches “$_ownerQuery”. Only people with the Owner role can take over a document.', style: ts(context, size: 13, color: p.muted, height: 1.4)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          for (final (i, o) in _owners.indexed)
+            Rise(
+              key: ValueKey('o-${o['id']}'),
+              delay: 40 * i.clamp(0, 8),
+              dy: 6,
+              child: Container(
               margin: const EdgeInsets.only(top: 8),
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -1513,46 +2015,55 @@ class _OwnerActionsState extends State<_OwnerActions> {
                       ],
                     ),
                   ),
-                  Btn('Transfer', size: BtnSize.sm, onPressed: () => widget.onTransfer(o['id'] as String)),
+                  Btn('Transfer', size: BtnSize.sm, icon: PhosphorIconsDuotone.arrowsLeftRight, loading: _spins('transfer:${o['id']}'), onPressed: widget.busy ? null : () => _transfer(o)),
                 ],
               ),
+            ),
             ),
           gap16,
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: p.dark ? C.red500.withValues(alpha: .05) : C.red50.withValues(alpha: .5),
+              color: red.bg,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: p.dark ? C.red500.withValues(alpha: .25) : C.red200),
+              border: Border.all(color: red.ring),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Ic(PhosphorIconsDuotone.warning, size: 18, color: p.dark ? C.red300 : C.red700),
+                    Ic(PhosphorIconsDuotone.warningOctagon, size: 18, color: red.fg),
                     gap8,
-                    Text(
-                      'Danger zone',
-                      style: ts(context, size: 14, w: FontWeight.w600, color: p.dark ? C.red300 : C.red700),
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Danger zone',
+                        style: ts(context, size: 14, w: FontWeight.w600, color: red.fg),
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 Text(
                   "Moving to the trash removes everyone else's access at once. You can restore it later.",
-                  style: ts(context, size: 12, color: (p.dark ? C.red300 : C.red700).withValues(alpha: .8), height: 1.45),
+                  style: ts(context, size: 12, color: red.fg, height: 1.45),
                 ),
                 gap12,
-                _confirmTrash
-                    ? Wrap(
-                        spacing: 8,
-                        children: [
-                          Btn('Yes, move to trash', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, onPressed: widget.onTrash),
-                          Btn('Cancel', variant: BtnVariant.ghost, onPressed: () => setState(() => _confirmTrash = false)),
-                        ],
-                      )
-                    : Btn('Move to trash', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, onPressed: () => setState(() => _confirmTrash = true)),
+                AnimatedSwitcher(
+                  duration: Motion.of(context, Motion.base),
+                  child: _confirmTrash
+                      ? Wrap(
+                          key: const ValueKey('confirm'),
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            Btn('Yes, move to trash', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, loading: _spins('trash'), onPressed: widget.busy ? null : () => _run('trash', widget.onTrash)),
+                            Btn('Cancel', variant: BtnVariant.ghost, icon: PhosphorIconsBold.x, onPressed: widget.busy ? null : () => setState(() => _confirmTrash = false)),
+                          ],
+                        )
+                      : Btn(key: const ValueKey('ask'), 'Move to trash', variant: BtnVariant.danger, icon: PhosphorIconsDuotone.trash, onPressed: widget.busy ? null : () => setState(() => _confirmTrash = true)),
+                ),
               ],
             ),
           ),
@@ -1649,26 +2160,16 @@ class _ApprovalDownloadState extends State<_ApprovalDownload> {
   }
 
   Future<void> _ask() async {
-    final reason = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Ask to download'),
-        content: TextField(controller: reason, maxLines: 3, maxLength: 500, decoration: fieldDeco(hint: 'Why do you need a copy? (10+ characters)')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Send')),
-        ],
-      ),
+    final sent = await showSheet<bool>(
+      context,
+      title: 'Ask to download',
+      icon: PhosphorIconsDuotone.sealCheck,
+      description: 'The owner gets an email and decides. If they approve, you can download this version for a limited time.',
+      builder: (_) => _AskDownloadForm(docId: widget.docId, versionNo: widget.versionNo),
     );
-    if (ok != true || !mounted) return;
-    try {
-      await Api.I.post('/documents/${widget.docId}/download-requests', {'reason': reason.text.trim(), 'versionNo': widget.versionNo});
-      if (mounted) toast(context, 'Asked. The owner was emailed.');
-      await _load();
-    } catch (e) {
-      if (mounted) toast(context, errorText(e), tone: Tone.red);
-    }
+    if (sent != true || !mounted) return;
+    toast(context, 'Asked. The owner was emailed.');
+    await _load();
   }
 
   @override
@@ -1680,16 +2181,24 @@ class _ApprovalDownloadState extends State<_ApprovalDownload> {
     final pending = widget.requestStatus == 'PENDING' || (_mine ?? const <Map>[]).any((r) => r['status'] == 'PENDING' && r['versionNo'] == widget.versionNo);
     if (live.isNotEmpty) {
       final left = (live.first['maxUses'] as int) - (live.first['uses'] as int);
-      return Btn(
-        'Download (approved, $left left)',
-        variant: BtnVariant.primary,
-        size: BtnSize.lg,
-        expand: true,
-        icon: PhosphorIconsDuotone.downloadSimple,
-        onPressed: () async {
-          await downloadAndOpen(context, documentId: widget.docId, versionNo: widget.versionNo, apiPath: '/documents/${widget.docId}/versions/${widget.versionNo}/download', fallbackName: widget.fileName);
-          await _load();
-        },
+      final path = '/documents/${widget.docId}/versions/${widget.versionNo}/download';
+      // Each tap uses up one approved download: a second tap while one runs is ignored.
+      return DownloadState(
+        apiPath: path,
+        builder: (context, downloading) => Btn(
+          'Download (approved, $left left)',
+          variant: BtnVariant.primary,
+          size: BtnSize.lg,
+          expand: true,
+          icon: PhosphorIconsDuotone.downloadSimple,
+          loading: downloading,
+          onPressed: downloading
+              ? null
+              : () async {
+                  await downloadAndOpen(context, documentId: widget.docId, versionNo: widget.versionNo, apiPath: path, fallbackName: widget.fileName);
+                  await _load();
+                },
+        ),
       );
     }
     if (pending) {
@@ -1706,6 +2215,103 @@ class _ApprovalDownloadState extends State<_ApprovalDownload> {
       expand: true,
       icon: PhosphorIconsDuotone.sealCheck,
       onPressed: _mine == null || !widget.requestable ? null : _ask,
+    );
+  }
+}
+
+/// The reason for a download request, with the server's 10-character
+/// minimum checked here (live counter), a busy Send and errors shown in the
+/// sheet, which stays open until the request is sent.
+class _AskDownloadForm extends StatefulWidget {
+  const _AskDownloadForm({required this.docId, required this.versionNo});
+  final String docId;
+  final int versionNo;
+  @override
+  State<_AskDownloadForm> createState() => _AskDownloadFormState();
+}
+
+class _AskDownloadFormState extends State<_AskDownloadForm> {
+  static const _min = 10;
+  final _reason = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _reason.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  int get _length => _reason.text.trim().length;
+
+  Future<void> _send() async {
+    if (_busy || _length < _min) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await Api.I.post('/documents/${widget.docId}/download-requests', {'reason': _reason.text.trim(), 'versionNo': widget.versionNo});
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) setState(() => _error = errorText(e, 'Could not send the request'));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Pal.of(context);
+    final short = _length < _min;
+    return PopScope(
+      canPop: !_busy,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FieldLabel(
+            'Why do you need a copy?',
+            child: TextField(
+              controller: _reason,
+              autofocus: true,
+              enabled: !_busy,
+              minLines: 3,
+              maxLines: 5,
+              maxLength: 500,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: fieldDeco(hint: 'e.g. To sign and return it to the bank').copyWith(counterText: ''),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              short ? 'At least $_min characters (${_min - _length} more)' : '$_length / 500',
+              textAlign: TextAlign.right,
+              style: ts(context, size: 12, color: short ? p.muted : p.subtle),
+            ),
+          ),
+          if (_error != null) ...[gap12, Semantics(liveRegion: true, child: TvAlert(_error!))],
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: Btn('Cancel', expand: true, icon: PhosphorIconsBold.x, onPressed: _busy ? null : () => Navigator.of(context).pop(false)),
+              ),
+              gap8,
+              Expanded(
+                child: Btn('Send request', expand: true, variant: BtnVariant.primary, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: short || _busy ? null : _send),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

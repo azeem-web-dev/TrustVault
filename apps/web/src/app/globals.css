@@ -22,16 +22,36 @@
 
   --color-ink-900: oklch(0.2 0.025 275);
   --color-ink-950: oklch(0.155 0.02 275);
+  --color-ink-975: oklch(0.13 0.02 275);
 
   --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08);
   --shadow-lift: 0 2px 4px rgb(15 23 42 / 0.04), 0 16px 40px -12px rgb(15 23 42 / 0.25);
   --shadow-glow: 0 1px 0 rgb(255 255 255 / 0.2) inset, 0 8px 20px -6px rgb(79 70 229 / 0.55);
 
-  --animate-fade-in: fade-in 0.25s ease-out both;
+  /* Motion tokens (§2.3): duration-fast/base/slow, ease-out/in/spring. */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(0.3, 1.3, 0.5, 1);
+
+  --animate-fade-in: fade-in 0.2s ease-out both;
+  --animate-fade-out: fade-out 0.16s cubic-bezier(0.4, 0, 1, 1) both;
   --animate-rise: rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
   --animate-pop: pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop-out: pop-out 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-pop-up: pop-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop-up-out: pop-up-out 0.12s cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-menu-out: pop-out 0.12s cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-sheet-up: sheet-up 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-sheet-down: sheet-down 0.2s cubic-bezier(0.4, 0, 1, 1) both;
   --animate-slide-in: slide-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-toast-out: toast-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
   --animate-drawer: drawer 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-drawer-out: drawer-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-drawer-right: drawer-right 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-drawer-right-out: drawer-right-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-float: float 7s ease-in-out infinite;
   /* Staggered copies: classes, not style attributes, so the CSP needs no 'unsafe-inline' for styles. */
@@ -44,24 +64,124 @@
   --animate-dash: dash 3s linear infinite;
 
   @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
   @keyframes rise { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
   @keyframes pop { from { opacity: 0; transform: scale(0.96) translateY(6px) } to { opacity: 1; transform: none } }
+  @keyframes pop-out { from { opacity: 1; transform: none } to { opacity: 0; transform: scale(0.96) translateY(6px) } }
+  @keyframes pop-up { from { opacity: 0; transform: scale(0.96) translateY(-6px) } to { opacity: 1; transform: none } }
+  @keyframes pop-up-out { from { opacity: 1; transform: none } to { opacity: 0; transform: scale(0.96) translateY(-6px) } }
+  @keyframes sheet-up { from { transform: translateY(100%) } to { transform: none } }
+  @keyframes sheet-down { from { transform: none } to { transform: translateY(100%) } }
   @keyframes slide-in { from { opacity: 0; transform: translateX(24px) } to { opacity: 1; transform: none } }
+  @keyframes toast-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(24px) } }
   @keyframes drawer { from { transform: translateX(-100%) } to { transform: none } }
+  @keyframes drawer-out { from { transform: none } to { transform: translateX(-100%) } }
+  @keyframes drawer-right { from { transform: translateX(100%) } to { transform: none } }
+  @keyframes drawer-right-out { from { transform: none } to { transform: translateX(100%) } }
   @keyframes shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
   @keyframes float { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
   @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.6 } 100% { transform: scale(2.4); opacity: 0 } }
   @keyframes dash { to { stroke-dashoffset: -40 } }
 }
 
-:root { color-scheme: light; }
-:root.dark { color-scheme: dark; }
+/* Semantic, theme-aware tokens (§2.1). The raw values switch with .dark; the
+   @theme inline block below exposes them as utilities: bg-bg, bg-surface,
+   bg-surface-2, bg-raised, border-line, border-line-strong, text-fg,
+   text-fg-muted, text-fg-subtle (>= 4.5:1 on its own background), ring-ring. */
+:root {
+  color-scheme: light;
+  --tv-bg: var(--color-slate-50);
+  --tv-surface: #fff;
+  --tv-surface-2: var(--color-slate-50);
+  --tv-raised: #fff;
+  --tv-line: rgb(226 232 240 / 0.8);
+  --tv-line-strong: var(--color-slate-300);
+  --tv-fg: var(--color-slate-900);
+  --tv-fg-muted: var(--color-slate-600);
+  --tv-fg-subtle: var(--color-slate-500);
+  --tv-ring: var(--color-brand-500);
+}
+:root.dark {
+  color-scheme: dark;
+  --tv-bg: var(--color-ink-950);
+  --tv-surface: rgb(255 255 255 / 0.03);
+  --tv-surface-2: var(--color-ink-900);
+  --tv-raised: var(--color-ink-900);
+  --tv-line: rgb(255 255 255 / 0.08);
+  --tv-line-strong: rgb(255 255 255 / 0.15);
+  --tv-fg: var(--color-slate-100);
+  --tv-fg-muted: var(--color-slate-300);
+  --tv-fg-subtle: var(--color-slate-400);
+  --tv-ring: var(--color-brand-400);
+}
+
+@theme inline {
+  --color-bg: var(--tv-bg);
+  --color-surface: var(--tv-surface);
+  --color-surface-2: var(--tv-surface-2);
+  --color-raised: var(--tv-raised);
+  --color-line: var(--tv-line);
+  --color-line-strong: var(--tv-line-strong);
+  --color-fg: var(--tv-fg);
+  --color-fg-muted: var(--tv-fg-muted);
+  --color-fg-subtle: var(--tv-fg-subtle);
+  --color-ring: var(--tv-ring);
+
+  /* Status aliases: one place to retune success / warning / danger / info / severe ("high" severity). */
+  --color-success-50: var(--color-emerald-50);
+  --color-success-100: var(--color-emerald-100);
+  --color-success-300: var(--color-emerald-300);
+  --color-success-500: var(--color-emerald-500);
+  --color-success-600: var(--color-emerald-600);
+  --color-success-700: var(--color-emerald-700);
+  --color-warning-50: var(--color-amber-50);
+  --color-warning-100: var(--color-amber-100);
+  --color-warning-300: var(--color-amber-300);
+  --color-warning-500: var(--color-amber-500);
+  --color-warning-600: var(--color-amber-600);
+  --color-warning-700: var(--color-amber-700);
+  --color-danger-50: var(--color-red-50);
+  --color-danger-100: var(--color-red-100);
+  --color-danger-300: var(--color-red-300);
+  --color-danger-500: var(--color-red-500);
+  --color-danger-600: var(--color-red-600);
+  --color-danger-700: var(--color-red-700);
+  --color-info-50: var(--color-sky-50);
+  --color-info-100: var(--color-sky-100);
+  --color-info-300: var(--color-sky-300);
+  --color-info-500: var(--color-sky-500);
+  --color-info-600: var(--color-sky-600);
+  --color-info-700: var(--color-sky-700);
+  --color-severe-50: var(--color-orange-50);
+  --color-severe-100: var(--color-orange-100);
+  --color-severe-300: var(--color-orange-300);
+  --color-severe-500: var(--color-orange-500);
+  --color-severe-600: var(--color-orange-600);
+  --color-severe-700: var(--color-orange-700);
+}
+
+@layer base {
+  /* One visible keyboard focus ring for every interactive element (X9). In the
+     base layer, so components that draw their own ring (focus-visible:outline-none
+     plus ring-*) still win. */
+  :where(a[href], button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option'], [role='switch'], [role='checkbox'], [role='radio'], [tabindex]:not([tabindex='-1']), input[type='checkbox'], input[type='radio'], input[type='range']):focus-visible {
+    outline: 2px solid var(--tv-ring);
+    outline-offset: 2px;
+  }
+}
 
 /* Fluid root font size: every rem-based size (typography, spacing, radii,
    control heights — Tailwind's scale is rem) scales smoothly with the
-   viewport, from small phones up to large displays. */
+   viewport. Never below 16px: a smaller root made inputs < 16px (iOS zooms
+   on focus) and pushed tap targets under 44px (X9). */
 html {
-  font-size: clamp(0.9rem, 0.85rem + 0.3vw, 1.05rem);
+  font-size: clamp(1rem, 0.85rem + 0.3vw, 1.05rem);
+}
+
+/* Touch screens: form text at least 16px so iOS Safari never zooms on focus.
+   Unlayered on purpose, so it outranks text-xs / text-sm utilities. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea { font-size: max(16px, 1rem); }
 }
 
 body {
@@ -99,6 +219,21 @@ body {
   color: transparent;
 }
 
+/* Diagonal warning stripe (break-glass, danger banners) built from theme colours (X14). */
+.hazard-stripe {
+  background-image: repeating-linear-gradient(-45deg, var(--color-amber-400) 0 10px, var(--color-slate-800) 10px 20px);
+}
+
+/* Stagger for list / tile enter animations without style attributes (CSP). */
+.stagger-1 { animation-delay: 40ms; }
+.stagger-2 { animation-delay: 80ms; }
+.stagger-3 { animation-delay: 120ms; }
+.stagger-4 { animation-delay: 160ms; }
+.stagger-5 { animation-delay: 200ms; }
+.stagger-6 { animation-delay: 240ms; }
+.stagger-7 { animation-delay: 280ms; }
+.stagger-8 { animation-delay: 320ms; }
+
 .skeleton {
   background-image: linear-gradient(90deg, rgb(148 163 184 / 0.12) 25%, rgb(148 163 184 / 0.26) 50%, rgb(148 163 184 / 0.12) 75%);
   background-size: 200% 100%;
@@ -112,7 +247,7 @@ body {
 .dark input::-webkit-calendar-picker-indicator { filter: invert(0.8); }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
 /* View-only pages are not printed (a speed bump, THREATS.md V3). */

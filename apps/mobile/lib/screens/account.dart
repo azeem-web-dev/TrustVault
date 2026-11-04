@@ -18,6 +18,27 @@ import 'shell.dart';
 
 const _roleLabel = {'ADMIN': 'Administrator', 'OWNER': 'Document owner', 'VIEWER': 'Viewer', 'EXTERNAL': 'External partner'};
 
+/// Cross-fades a card body from skeleton to content (§2.3); instant under
+/// reduced motion.
+Widget _swap(BuildContext context, Object state, Widget child) => AnimatedSwitcher(
+  duration: Motion.of(context),
+  switchInCurve: Motion.curve,
+  switchOutCurve: Motion.easeIn,
+  layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+  child: KeyedSubtree(key: ValueKey(state), child: child),
+);
+
+/// Opens or closes an inline panel by animating its height.
+Widget _reveal(BuildContext context, Widget? child) => AnimatedSize(
+  duration: Motion.of(context),
+  curve: Motion.curve,
+  alignment: Alignment.topCenter,
+  child: child ?? const SizedBox(width: double.infinity),
+);
+
+/// Link-style text button with a 44px tap target.
+ButtonStyle _link(Color color) => TextButton.styleFrom(foregroundColor: color, minimumSize: const Size(kMinTap, kMinTap), padding: const EdgeInsets.symmetric(horizontal: 10));
+
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
   @override
@@ -28,8 +49,11 @@ class _AccountScreenState extends State<AccountScreen> {
   Map? _mfa;
   List<Map>? _devices;
   List<String>? _policy;
-  String? _error;
+  /// Error from the last load (R5); errors from actions are per card in [_errors].
+  String? _loadError;
+  final Map<String, String> _errors = {};
   String? _busy;
+  int _gen = 0;
   ({String secret, String uri})? _totp;
   // Turning email codes on (THREATS.md S30): where the code was sent, and what
   // was typed. Null until the user asks for a code.
@@ -43,6 +67,7 @@ class _AccountScreenState extends State<AccountScreen> {
   void initState() {
     super.initState();
     _load();
+    _current.addListener(() => setState(() {}));
     _next.addListener(() => setState(() {}));
     _code.addListener(() => setState(() {}));
     _emailCode.addListener(() => setState(() {}));
@@ -58,38 +83,98 @@ class _AccountScreenState extends State<AccountScreen> {
   }
 
   Future<void> _load() async {
+    final gen = ++_gen;
+    // Signed out (e.g. after a password change): nothing to load.
+    if (context.read<Session>().user == null) return;
     try {
-      final r = await Api.I.get('/auth/mfa') as Map;
-      final d = await Api.I.get('/auth/sessions') as Map;
-      final isAdmin = mounted && context.read<Session>().user?.isAdmin == true;
-      final pol = isAdmin ? await Api.I.get('/admin/settings/mfa-policy') as Map : null;
-      if (mounted) {
+      final isAdmin = context.read<Session>().user?.isAdmin == true;
+      final res = await Future.wait([
+        Api.I.get('/auth/mfa'),
+        Api.I.get('/auth/sessions'),
+        if (isAdmin) Api.I.get('/admin/settings/mfa-policy'),
+      ]);
+      if (mounted && gen == _gen) {
         setState(() {
-          _mfa = r;
-          _devices = (d['sessions'] as List).cast<Map>();
-          _policy = (pol?['requiredRoles'] as List?)?.cast<String>();
+          _mfa = res[0] as Map;
+          _devices = ((res[1] as Map)['sessions'] as List).cast<Map>();
+          _policy = isAdmin ? ((res[2] as Map)['requiredRoles'] as List?)?.cast<String>() : null;
+          _loadError = null;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted && gen == _gen && context.read<Session>().user != null) setState(() => _loadError = errorText(e));
     }
   }
 
-  Future<void> _run(String key, Future<void> Function() fn, String success) async {
+  /// The card an action belongs to, so its error shows inside that card
+  /// rather than at the top of a long page (R6).
+  static String _cardOf(String key) {
+    if (key == 'passkey' || key.startsWith('rm-')) return 'passkeys';
+    if (key.startsWith('totp')) return 'totp';
+    if (key.startsWith('email')) return 'email';
+    if (key == 'others' || key.startsWith('so-')) return 'devices';
+    return key; // 'policy', 'pw'
+  }
+
+  /// Runs one action at a time. [reload] is false when the action ends the
+  /// session (password change), so nothing is fetched on a dead session.
+  Future<void> _run(String key, Future<void> Function() fn, String success, {bool reload = true}) async {
+    if (_busy != null) return;
+    final card = _cardOf(key);
     setState(() {
-      _error = null;
+      _errors.remove(card);
       _busy = key;
     });
     try {
       await fn();
       if (!mounted) return;
       toast(context, success);
-      await _load();
+      if (reload && context.read<Session>().user != null) await _load();
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted) setState(() => _errors[card] = errorText(e));
     } finally {
       if (mounted) setState(() => _busy = null);
     }
+  }
+
+  /// The error of [card], if its last action failed.
+  Widget _cardError(String card, {EdgeInsets padding = EdgeInsets.zero}) {
+    final e = _errors[card];
+    if (e == null) return const SizedBox.shrink();
+    return Padding(
+      padding: padding,
+      child: Rise(dy: 6, child: TvAlert(e, onDismiss: () => setState(() => _errors.remove(card)))),
+    );
+  }
+
+  /// Placeholder while a card's data is missing: a skeleton while loading,
+  /// a short note once the load has failed (the retry is at the top).
+  Widget _pending(Widget skeleton) => _loadError == null
+      ? skeleton
+      : Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Ic(PhosphorIconsDuotone.warning, size: 16, color: Pal.of(context).warning),
+              gap8,
+              Text('Not loaded. Pull down to try again.', style: ts(context, size: 13, color: Pal.of(context).muted)),
+            ],
+          ),
+        );
+
+  Future<void> _changePassword(Session session) async {
+    final ok = await showConfirm(
+      context,
+      'Change your password?',
+      'You will be signed out on every device, including this one, and must sign in again with the new password.',
+      confirmLabel: 'Change password',
+      icon: PhosphorIconsDuotone.password,
+    );
+    if (!ok || !mounted) return;
+    await _run('pw', () async {
+      await Api.I.post('/auth/password', {'currentPassword': _current.text, 'newPassword': _next.text});
+      await session.endedElsewhere();
+    }, 'Password changed. You have been signed out everywhere.', reload: false);
   }
 
   @override
@@ -168,7 +253,16 @@ class _AccountScreenState extends State<AccountScreen> {
                                 padding: const EdgeInsets.symmetric(vertical: 2),
                                 child: Row(
                                   children: [
-                                    Ic(done ? PhosphorIconsFill.checkCircle : PhosphorIconsRegular.circle, size: 16, color: done ? C.emerald500 : (p.dark ? C.slate600 : C.slate300)),
+                                    AnimatedSwitcher(
+                                      duration: Motion.of(context),
+                                      transitionBuilder: (c, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: c)),
+                                      child: Ic(
+                                        done ? PhosphorIconsFill.checkCircle : PhosphorIconsRegular.circle,
+                                        key: ValueKey(done),
+                                        size: 16,
+                                        color: done ? p.success : p.lineStrong,
+                                      ),
+                                    ),
                                     const SizedBox(width: 6),
                                     Expanded(
                                       child: Text(label, style: ts(context, size: 12.5, color: done ? null : p.muted)),
@@ -186,7 +280,15 @@ class _AccountScreenState extends State<AccountScreen> {
             ),
           ),
         ),
-        if (_error != null) ...[gap16, TvAlert(_error!, onDismiss: () => setState(() => _error = null))],
+        if (_loadError != null) ...[
+          gap16,
+          ErrorState(
+            compact: true,
+            title: mfa == null ? 'Could not load your security settings' : 'Could not refresh',
+            message: _loadError,
+            onRetry: _load,
+          ),
+        ],
         gap16,
         TvCard(
           title: 'Passkeys',
@@ -194,16 +296,22 @@ class _AccountScreenState extends State<AccountScreen> {
           description: "Sign in with your face, fingerprint, PIN or a security key. They can't be phished.",
           actions: mfa == null ? null : TvBadge(hasPasskey ? '${passkeys.length} added' : 'None yet', tone: hasPasskey ? Tone.green : Tone.neutral, dot: true),
           padded: false,
-          child: mfa == null
-              ? const SkeletonRows(rows: 2)
+          child: _swap(context, mfa == null ? 'pending' : 'ready', mfa == null
+              ? _pending(const SkeletonRows(rows: 2))
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    _cardError('passkeys', padding: const EdgeInsets.fromLTRB(16, 0, 16, 12)),
                     if (passkeys.isNotEmpty)
                       RowList(
                         children: [
-                          for (final k in passkeys)
-                            Padding(
+                          for (var i = 0; i < passkeys.length; i++)
+                            Rise(
+                              key: ValueKey(passkeys[i]['id']),
+                              delay: (i < 8 ? i : 8) * 40,
+                              child: Builder(builder: (context) {
+                                final k = passkeys[i];
+                                return Padding(
                               padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
                               child: Row(
                                 children: [
@@ -224,12 +332,34 @@ class _AccountScreenState extends State<AccountScreen> {
                                     size: BtnSize.sm,
                                     icon: PhosphorIconsDuotone.trash,
                                     loading: _busy == 'rm-${k['id']}',
-                                    onPressed: () => _run('rm-${k['id']}', () => Api.I.delete('/auth/mfa/passkeys/${k['id']}'), 'Passkey removed'),
+                                    // Your role must keep one second factor (R6).
+                                    onPressed: lastRequired || _busy != null
+                                        ? null
+                                        : () => _run('rm-${k['id']}', () => Api.I.delete('/auth/mfa/passkeys/${k['id']}'), 'Passkey removed'),
                                   ),
                                 ],
                               ),
+                            );
+                              }),
                             ),
                         ],
+                      ),
+                    if (passkeys.isNotEmpty && lastRequired)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: Text('Your role must keep two-step verification. Add another passkey or an authenticator app before removing this one.',
+                            style: ts(context, size: 12, color: p.muted, height: 1.45)),
+                      ),
+                    if (passkeys.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                        child: Row(
+                          children: [
+                            const IconTile(PhosphorIconsDuotone.fingerprint, tone: Tone.violet, size: 36),
+                            gap12,
+                            Expanded(child: Text('No passkeys yet. Add one to sign in without a code.', style: ts(context, size: 13, color: p.muted, height: 1.45))),
+                          ],
+                        ),
                       ),
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -245,7 +375,7 @@ class _AccountScreenState extends State<AccountScreen> {
                             variant: BtnVariant.primary,
                             icon: PhosphorIconsBold.plus,
                             loading: _busy == 'passkey',
-                            onPressed: () => _run('passkey', () async {
+                            onPressed: _busy != null ? null : () => _run('passkey', () async {
                               await Passkeys.register('Android phone');
                               await session.refresh();
                             }, 'Passkey added'),
@@ -259,7 +389,7 @@ class _AccountScreenState extends State<AccountScreen> {
                       ),
                     ),
                   ],
-                ),
+                )),
         ),
         gap16,
         TvCard(
@@ -267,24 +397,34 @@ class _AccountScreenState extends State<AccountScreen> {
           icon: PhosphorIconsDuotone.deviceMobile,
           description: 'A 6-digit code that changes every 30 seconds.',
           actions: mfa == null ? null : TvBadge(mfa['totp'] == true ? 'On' : 'Off', tone: mfa['totp'] == true ? Tone.green : Tone.neutral, dot: true),
-          child: mfa == null
-              ? const Skeleton(height: 40)
-              : mfa['totp'] == true
+          child: _swap(context, mfa == null ? 'pending' : 'ready', mfa == null
+              ? _pending(const Skeleton(height: 40))
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _cardError('totp', padding: const EdgeInsets.only(bottom: 12)),
+                    _swap(context, mfa['totp'] == true ? 'on' : (_totp != null ? 'setup' : 'off'), mfa['totp'] == true
               ? Container(
                   padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: p.dark ? C.emerald500.withValues(alpha: .1) : C.emerald50.withValues(alpha: .6), borderRadius: BorderRadius.circular(14)),
+                  decoration: BoxDecoration(
+                    color: toneOf(Tone.green, p.dark).bg,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: toneOf(Tone.green, p.dark).ring),
+                  ),
                   child: Row(
                     children: [
-                      Ic(PhosphorIconsDuotone.shieldCheck, size: 22, color: p.dark ? C.emerald300 : C.emerald600),
+                      Ic(PhosphorIconsDuotone.shieldCheck, size: 22, color: p.success),
                       gap12,
                       Expanded(child: Text('Set up. You will be asked for a code when you sign in.', style: ts(context, size: 13.5))),
-                      if (!(mfa['requiredByRole'] == true && !hasPasskey))
+                      // Same last-factor rule as passkeys and email codes (R6).
+                      if (!lastRequired)
                         Btn(
                           'Remove',
                           variant: BtnVariant.danger,
                           size: BtnSize.sm,
+                          icon: PhosphorIconsDuotone.trash,
                           loading: _busy == 'totp-rm',
-                          onPressed: () => _run('totp-rm', () => Api.I.delete('/auth/mfa/totp'), 'Authenticator app removed'),
+                          onPressed: _busy != null ? null : () => _run('totp-rm', () => Api.I.delete('/auth/mfa/totp'), 'Authenticator app removed'),
                         ),
                     ],
                   ),
@@ -297,12 +437,19 @@ class _AccountScreenState extends State<AccountScreen> {
                     'Set up Google Authenticator',
                     icon: PhosphorIconsDuotone.deviceMobile,
                     loading: _busy == 'totp-setup',
-                    onPressed: () => _run('totp-setup', () async {
+                    onPressed: _busy != null ? null : () => _run('totp-setup', () async {
                       final r = await Api.I.post('/auth/mfa/totp/setup') as Map;
-                      setState(() => _totp = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
+                      if (mounted) setState(() => _totp = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
                     }, 'Follow the three steps to finish'),
                   ),
-                ),
+                )),
+                    if (mfa['totp'] == true && lastRequired) ...[
+                      gap8,
+                      Text('Your role must keep two-step verification. Add a passkey or email codes before removing the authenticator app.',
+                          style: ts(context, size: 12, color: p.muted, height: 1.45)),
+                    ],
+                  ],
+                )),
         ),
         gap16,
         TvCard(
@@ -310,11 +457,12 @@ class _AccountScreenState extends State<AccountScreen> {
           icon: PhosphorIconsDuotone.envelope,
           description: 'A 6-digit code emailed to you each time you sign in. Easy, but weaker: anyone who can read your email can use it.',
           actions: mfa == null ? null : TvBadge(emailOn ? 'On' : 'Off', tone: emailOn ? Tone.green : Tone.neutral, dot: true),
-          child: mfa == null
-              ? const Skeleton(height: 40)
+          child: _swap(context, mfa == null ? 'pending' : 'ready', mfa == null
+              ? _pending(const Skeleton(height: 40))
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    _cardError('email', padding: const EdgeInsets.only(bottom: 12)),
                     Row(
                       children: [
                         Expanded(
@@ -332,10 +480,12 @@ class _AccountScreenState extends State<AccountScreen> {
                                   if (on) {
                                     _run('email-send', () async {
                                       final r = await Api.I.post('/auth/mfa/email/send', {'purpose': 'enable'}) as Map;
-                                      setState(() {
-                                        _emailCode.clear();
-                                        _emailSetup = r['sentTo'] as String;
-                                      });
+                                      if (mounted) {
+                                        setState(() {
+                                          _emailCode.clear();
+                                          _emailSetup = r['sentTo'] as String;
+                                        });
+                                      }
                                     }, 'Code sent. Check your email.');
                                   } else {
                                     // Turning off is a step-up route: the API asks for a fresh factor first.
@@ -349,20 +499,26 @@ class _AccountScreenState extends State<AccountScreen> {
                       gap8,
                       Text('Your role must keep two-step verification. Add an authenticator app or passkey before turning email codes off.', style: ts(context, size: 12, color: p.muted, height: 1.45)),
                     ],
-                    if (_emailSetup != null) ...[
-                      gap12,
-                      Container(
+                    _reveal(context, _emailSetup == null ? null : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Container(
                         padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(14)),
+                        decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(14), border: Border.all(color: p.line)),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Text('We emailed a 6-digit code to $_emailSetup. Enter it to turn email codes on.', style: ts(context, size: 13, height: 1.4)),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Padding(padding: const EdgeInsets.only(top: 1), child: Ic(PhosphorIconsDuotone.envelope, size: 16, color: p.accent)),
+                                gap8,
+                                Expanded(child: Text('We emailed a 6-digit code to $_emailSetup. Enter it to turn email codes on.', style: ts(context, size: 13, height: 1.4))),
+                              ],
+                            ),
                             gap12,
                             Row(
                               children: [
-                                SizedBox(
-                                  width: 150,
+                                Expanded(
                                   child: TextField(
                                     controller: _emailCode,
                                     keyboardType: TextInputType.number,
@@ -379,14 +535,16 @@ class _AccountScreenState extends State<AccountScreen> {
                                   'Turn on',
                                   variant: BtnVariant.primary,
                                   loading: _busy == 'email-on',
-                                  onPressed: _emailCode.text.length != 6
+                                  onPressed: _emailCode.text.length != 6 || _busy != null
                                       ? null
                                       : () => _run('email-on', () async {
                                           await Api.I.post('/auth/mfa/email/enable', {'code': _emailCode.text});
-                                          setState(() {
-                                            _emailSetup = null;
-                                            _emailCode.clear();
-                                          });
+                                          if (mounted) {
+                                            setState(() {
+                                              _emailSetup = null;
+                                              _emailCode.clear();
+                                            });
+                                          }
                                           await session.refresh();
                                         }, 'Email codes turned on'),
                                 ),
@@ -395,23 +553,26 @@ class _AccountScreenState extends State<AccountScreen> {
                             gap8,
                             Align(
                               alignment: Alignment.centerLeft,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
+                              child: Wrap(
                                 children: [
                                   TextButton(
+                                    style: _link(p.accent),
                                     onPressed: _busy != null
                                         ? null
                                         : () => _run('email-send', () async {
                                             final r = await Api.I.post('/auth/mfa/email/send', {'purpose': 'enable'}) as Map;
-                                            setState(() {
-                                              _emailCode.clear();
-                                              _emailSetup = r['sentTo'] as String;
-                                            });
+                                            if (mounted) {
+                                              setState(() {
+                                                _emailCode.clear();
+                                                _emailSetup = r['sentTo'] as String;
+                                              });
+                                            }
                                           }, 'Code sent. Check your email.'),
-                                    child: Text('No email? Send a new code', style: ts(context, size: 13, color: p.accent)),
+                                    child: Text('No email? Send a new code', style: ts(context, size: 13, w: FontWeight.w500, color: p.accent)),
                                   ),
                                   TextButton(
-                                    onPressed: () => setState(() {
+                                    style: _link(p.muted),
+                                    onPressed: _busy != null ? null : () => setState(() {
                                       _emailSetup = null;
                                       _emailCode.clear();
                                     }),
@@ -423,9 +584,9 @@ class _AccountScreenState extends State<AccountScreen> {
                           ],
                         ),
                       ),
-                    ],
+                    )),
                   ],
-                ),
+                )),
         ),
         gap16,
         _devicesCard(context, p),
@@ -440,6 +601,7 @@ class _AccountScreenState extends State<AccountScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              _cardError('pw', padding: const EdgeInsets.only(bottom: 16)),
               FieldLabel(
                 'Current password',
                 child: TextField(
@@ -460,43 +622,49 @@ class _AccountScreenState extends State<AccountScreen> {
                   decoration: fieldDeco(icon: PhosphorIconsDuotone.lockSimple),
                 ),
               ),
-              if (nextLen > 0) ...[
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
-                  child: LinearProgressIndicator(
-                    value: (nextLen / 20).clamp(0, 1).toDouble(),
-                    minHeight: 6,
-                    backgroundColor: p.soft2,
-                    color: nextLen < 12
-                        ? C.red500
-                        : nextLen < 16
-                        ? C.amber500
-                        : C.emerald500,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  nextLen < 12
-                      ? '${12 - nextLen} more characters needed'
-                      : nextLen < 16
-                      ? 'Good. Longer is even better.'
-                      : 'Strong',
-                  style: ts(context, size: 12, color: p.muted),
-                ),
-              ],
+              _reveal(
+                context,
+                nextLen == 0
+                    ? null
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Builder(builder: (context) {
+                          final strength = nextLen < 12 ? p.danger : (nextLen < 16 ? p.warning : p.success);
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(9),
+                                child: TweenAnimationBuilder<double>(
+                                  tween: Tween(end: (nextLen / 20).clamp(0, 1).toDouble()),
+                                  duration: Motion.of(context),
+                                  curve: Motion.curve,
+                                  builder: (_, v, _) => LinearProgressIndicator(value: v, minHeight: 6, backgroundColor: p.soft2, color: strength),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                nextLen < 12
+                                    ? '${12 - nextLen} more characters needed'
+                                    : nextLen < 16
+                                    ? 'Good. Longer is even better.'
+                                    : 'Strong',
+                                style: ts(context, size: 12, w: FontWeight.w500, color: strength),
+                              ),
+                            ],
+                          );
+                        }),
+                      ),
+              ),
               gap16,
               Btn(
                 'Change password',
                 variant: BtnVariant.primary,
+                icon: PhosphorIconsDuotone.password,
                 expand: true,
                 loading: _busy == 'pw',
-                onPressed: _current.text.isEmpty && nextLen == 0
-                    ? null
-                    : () => _run('pw', () async {
-                        await Api.I.post('/auth/password', {'currentPassword': _current.text, 'newPassword': _next.text});
-                        await session.endedElsewhere();
-                      }, 'Password changed. You have been signed out everywhere.'),
+                // Both fields needed and the new one long enough (R6).
+                onPressed: _current.text.isEmpty || nextLen < 12 || _busy != null ? null : () => _changePassword(session),
               ),
             ],
           ),
@@ -531,10 +699,12 @@ class _AccountScreenState extends State<AccountScreen> {
       child: TotpSetupGuide(
         secret: t.secret,
         uri: t.uri,
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(
-              width: 150,
+        Row(
+          children: [
+            Expanded(
               child: TextField(
                 controller: _code,
                 keyboardType: TextInputType.number,
@@ -551,16 +721,32 @@ class _AccountScreenState extends State<AccountScreen> {
               'Turn on',
               variant: BtnVariant.primary,
               loading: _busy == 'totp',
-              onPressed: _code.text.length != 6
+              onPressed: _code.text.length != 6 || _busy != null
                   ? null
                   : () => _run('totp', () async {
                       await Api.I.post('/auth/mfa/totp/enable', {'code': _code.text});
-                      setState(() {
-                        _totp = null;
-                        _code.clear();
-                      });
+                      if (mounted) {
+                        setState(() {
+                          _totp = null;
+                          _code.clear();
+                        });
+                      }
                       await session.refresh();
                     }, 'Authenticator app turned on'),
+            ),
+          ],
+        ),
+            // Back out of setup, like the email-code flow (R12).
+            TextButton(
+              onPressed: _busy != null
+                  ? null
+                  : () => setState(() {
+                      _totp = null;
+                      _code.clear();
+                      _errors.remove('totp');
+                    }),
+              style: _link(p.muted),
+              child: Text('Cancel setup', style: ts(context, size: 13, color: p.muted)),
             ),
           ],
         ),
@@ -577,15 +763,21 @@ class _AccountScreenState extends State<AccountScreen> {
       icon: PhosphorIconsDuotone.desktop,
       description: 'Where your account is signed in now. Sign out anything you don’t recognise.',
       padded: false,
-      child: devices == null
-          ? const SkeletonRows(rows: 2)
+      child: _swap(context, devices == null ? 'pending' : 'ready', devices == null
+          ? _pending(const SkeletonRows(rows: 2))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                _cardError('devices', padding: const EdgeInsets.fromLTRB(16, 0, 16, 12)),
                 RowList(
                   children: [
-                    for (final d in devices)
-                      Padding(
+                    for (var i = 0; i < devices.length; i++)
+                      Rise(
+                        key: ValueKey(devices[i]['id']),
+                        delay: (i < 8 ? i : 8) * 40,
+                        child: Builder(builder: (context) {
+                          final d = devices[i];
+                          return Padding(
                         padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
                         child: Row(
                           children: [
@@ -617,11 +809,14 @@ class _AccountScreenState extends State<AccountScreen> {
                               Btn(
                                 'Sign out',
                                 size: BtnSize.sm,
+                                icon: PhosphorIconsDuotone.signOut,
                                 loading: _busy == 'so-${d['id']}',
-                                onPressed: () => _run('so-${d['id']}', () => Api.I.delete('/auth/sessions/${d['id']}'), 'Device signed out'),
+                                onPressed: _busy != null ? null : () => _run('so-${d['id']}', () => Api.I.delete('/auth/sessions/${d['id']}'), 'Device signed out'),
                               ),
                           ],
                         ),
+                      );
+                        }),
                       ),
                   ],
                 ),
@@ -633,11 +828,11 @@ class _AccountScreenState extends State<AccountScreen> {
                       variant: BtnVariant.danger,
                       icon: PhosphorIconsDuotone.signOut,
                       loading: _busy == 'others',
-                      onPressed: () => _run('others', () => Api.I.post('/auth/sessions/revoke-others'), 'Signed out everywhere else'),
+                      onPressed: _busy != null ? null : () => _run('others', () => Api.I.post('/auth/sessions/revoke-others'), 'Signed out everywhere else'),
                     ),
                   ),
               ],
-            ),
+            )),
     );
   }
 
@@ -651,17 +846,18 @@ class _AccountScreenState extends State<AccountScreen> {
       icon: PhosphorIconsDuotone.shieldCheck,
       description: 'Everyone in these roles must use an authenticator app or a passkey, from their next click. Admins always.',
       padded: false,
-      child: policy == null
-          ? const SkeletonRows(rows: 3)
+      child: _swap(context, policy == null ? 'pending' : 'ready', policy == null
+          ? _pending(const SkeletonRows(rows: 3))
           : RowList(
               children: [
+                if (_errors['policy'] != null) _cardError('policy', padding: const EdgeInsets.fromLTRB(16, 0, 16, 12)),
                 for (final (role, label) in roles)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
                     child: Row(
                       children: [
                         Expanded(child: Text(label, style: ts(context, size: 13.5, w: FontWeight.w600))),
-                        if (role == 'ADMIN') const TvBadge('Always', tone: Tone.violet),
+                        if (role == 'ADMIN') const TvBadge('Always', tone: Tone.violet, icon: PhosphorIconsDuotone.lock),
                         Switch(
                           value: role == 'ADMIN' || policy.contains(role),
                           onChanged: role == 'ADMIN' || _busy != null
@@ -669,14 +865,14 @@ class _AccountScreenState extends State<AccountScreen> {
                               : (on) => _run('policy', () async {
                                   final next = on ? [...policy, role] : policy.where((r) => r != role).toList();
                                   final r = await Api.I.put('/admin/settings/mfa-policy', {'requiredRoles': next}) as Map;
-                                  setState(() => _policy = (r['requiredRoles'] as List).cast<String>());
+                                  if (mounted) setState(() => _policy = (r['requiredRoles'] as List).cast<String>());
                                 }, 'Policy saved'),
                         ),
                       ],
                     ),
                   ),
               ],
-            ),
+            )),
     );
   }
 

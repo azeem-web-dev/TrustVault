@@ -23,9 +23,14 @@ class AuthLayout extends StatelessWidget {
     final p = Pal.of(context);
     final top = MediaQuery.of(context).padding.top;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      // Light status bar over the night header; the navigation bar sits on
+      // the sheet, so its icons follow the sheet's colour.
+      value: SystemUiOverlayStyle.light.copyWith(systemNavigationBarIconBrightness: p.dark ? Brightness.light : Brightness.dark),
       child: Scaffold(
-        backgroundColor: C.night,
+        // The sheet's colour, not the header's: the header paints its own
+        // night sky, so nothing dark can show below or beside the sheet
+        // (the old night background showed as a band under it).
+        backgroundColor: p.bg,
         body: SingleChildScrollView(
           child: Column(
             children: [
@@ -59,6 +64,8 @@ class AuthLayout extends StatelessWidget {
                   ),
                 ],
               ),
+              // Overlaps the header by 20px; the 20px this leaves at the end of
+              // the scroll area is the sheet's own colour (see backgroundColor).
               Transform.translate(
                 offset: const Offset(0, -20),
                 child: Container(
@@ -67,7 +74,7 @@ class AuthLayout extends StatelessWidget {
                     color: p.bg,
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
                   ),
-                  padding: const EdgeInsets.fromLTRB(22, 28, 22, 30),
+                  padding: const EdgeInsets.fromLTRB(22, 28, 22, 10),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 440),
@@ -97,8 +104,11 @@ class _Points extends StatelessWidget {
       spacing: 8,
       runSpacing: 8,
       children: [
-        for (final (icon, label) in items)
-          Container(
+        for (final (i, (icon, label)) in items.indexed)
+          Rise(
+            delay: 120 + 50 * i,
+            dy: 6,
+            child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: .06),
@@ -112,14 +122,30 @@ class _Points extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text(
                   label,
-                  style: TextStyle(fontSize: 12, color: C.brand100.withValues(alpha: .85), fontWeight: FontWeight.w500),
+                  style: ts(context, size: 12, color: C.brand100.withValues(alpha: .85), w: FontWeight.w500),
                 ),
               ],
             ),
           ),
+          ),
       ],
     );
   }
+}
+
+/// Muted text link with a 44px tap target, an icon and pressed / disabled states.
+Widget _linkBtn(BuildContext context, String label, {PI? icon, VoidCallback? onPressed, Color? color, double size = 13, FontWeight? w}) {
+  final p = Pal.of(context);
+  final c = color ?? p.muted;
+  final text = Text(label, style: ts(context, size: size, w: w ?? FontWeight.w500, color: onPressed == null ? c.withValues(alpha: .5) : c));
+  final style = TextButton.styleFrom(minimumSize: const Size(kMinTap, kMinTap), foregroundColor: c, padding: const EdgeInsets.symmetric(horizontal: 12));
+  if (icon == null) return TextButton(style: style, onPressed: onPressed, child: text);
+  return TextButton.icon(
+    style: style,
+    onPressed: onPressed,
+    icon: Ic(icon, size: 16, color: onPressed == null ? c.withValues(alpha: .5) : c),
+    label: text,
+  );
 }
 
 /* ------------------------------------------------------------------ login */
@@ -153,6 +179,8 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _reveal = false;
   bool _busy = false;
   String? _error;
+  /// Not an error: the account is fine, the sign-in finishes from an email.
+  String? _notice;
 
   @override
   void dispose() {
@@ -162,14 +190,24 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_form.currentState!.validate()) return;
+    if (_busy || !_form.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
     setState(() {
       _busy = true;
       _error = null;
+      _notice = null;
     });
     try {
       await context.read<Session>().signIn(_email.text.trim(), _password.text);
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (e.status == 202) {
+          _notice = e.message;
+        } else {
+          _error = e.message;
+        }
+      });
     } catch (e) {
       if (mounted) setState(() => _error = errorText(e, 'Could not reach the server'));
     } finally {
@@ -214,7 +252,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   icon: PhosphorIconsDuotone.lockSimple,
                   suffix: IconButton(
                     tooltip: _reveal ? 'Hide characters' : 'Show characters',
-                    icon: Ic(_reveal ? PhosphorIconsDuotone.eyeSlash : PhosphorIconsDuotone.eye, size: 19, color: C.slate400),
+                    icon: Ic(_reveal ? PhosphorIconsDuotone.eyeSlash : PhosphorIconsDuotone.eye, size: 19, color: p.faint),
                     onPressed: () => setState(() => _reveal = !_reveal),
                   ),
                 ),
@@ -223,7 +261,10 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton(
+              child: _linkBtn(
+                context,
+                'Forgot password?',
+                color: p.accent,
                 onPressed: () => showSheet(
                   context,
                   title: 'Reset your password',
@@ -231,10 +272,29 @@ class _LoginScreenState extends State<LoginScreen> {
                   description: 'We will email you a link that works once and expires in 30 minutes.',
                   builder: (_) => _ForgotForm(initialEmail: _email.text.trim()),
                 ),
-                child: Text('Forgot password?', style: ts(context, size: 13, w: FontWeight.w500, color: p.accent)),
               ),
             ),
-            if (_error != null) ...[const SizedBox(height: 14), TvAlert(_error!)],
+            AnimatedSize(
+              duration: Motion.of(context, Motion.base),
+              curve: Motion.easeOut,
+              alignment: Alignment.topCenter,
+              child: AnimatedSwitcher(
+                duration: Motion.of(context, Motion.base),
+                child: _error != null
+                    ? Padding(
+                        key: ValueKey('err:$_error'),
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Semantics(liveRegion: true, child: TvAlert(_error!, title: 'Could not sign in')),
+                      )
+                    : _notice != null
+                    ? Padding(
+                        key: ValueKey('note:$_notice'),
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Semantics(liveRegion: true, child: TvAlert(_notice!, tone: Tone.blue, title: 'Check your email')),
+                      )
+                    : const SizedBox(key: ValueKey('none'), width: double.infinity),
+              ),
+            ),
             const SizedBox(height: 18),
             Btn(
               _busy ? 'Signing in…' : 'Sign in',
@@ -242,6 +302,7 @@ class _LoginScreenState extends State<LoginScreen> {
               size: BtnSize.lg,
               expand: true,
               loading: _busy,
+              icon: _busy ? null : PhosphorIconsDuotone.signIn,
               trailing: _busy ? null : PhosphorIconsBold.arrowRight,
               onPressed: _submit,
             ),
@@ -256,21 +317,28 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisSpacing: 8,
               childAspectRatio: 2.65,
               children: [
-                for (final d in _demo)
-                  Press(
+                for (final (i, d) in _demo.indexed)
+                  Rise(
+                    delay: 160 + 40 * i,
+                    dy: 6,
+                    child: Press(
+                    button: true,
+                    selected: _email.text == d.email,
+                    semanticLabel: 'Use the ${d.name} demo account (${d.role})',
                     onTap: () => setState(() {
                       _email.text = d.email;
                       _password.text = d.password;
                       _error = null;
+                      _notice = null;
                     }),
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
+                      duration: Motion.of(context, const Duration(milliseconds: 180)),
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
                         color: _email.text == d.email ? p.selectedBg : p.card,
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: _email.text == d.email ? p.selectedBorder : p.fieldBorder),
-                        boxShadow: _email.text == d.email ? [BoxShadow(color: C.brand500.withValues(alpha: .1), spreadRadius: 4)] : p.shadow,
+                        boxShadow: _email.text == d.email ? [BoxShadow(color: C.brand500.withValues(alpha: p.dark ? .18 : .1), spreadRadius: 4)] : p.shadow,
                       ),
                       child: Row(
                         children: [
@@ -295,15 +363,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 2),
-                  child: Ic(PhosphorIconsDuotone.sparkle, size: 14, color: C.brand500),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Ic(PhosphorIconsDuotone.sparkle, size: 14, color: p.accent),
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -312,10 +381,19 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
             ),
             const SizedBox(height: 26),
-            Text(
-              'Every sign-in, download and permission change is recorded.',
-              textAlign: TextAlign.center,
-              style: ts(context, size: 12, color: p.faint),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Ic(PhosphorIconsDuotone.shieldCheck, size: 14, color: p.subtle),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Every sign-in, download and permission change is recorded.',
+                    textAlign: TextAlign.center,
+                    style: ts(context, size: 12, color: p.subtle),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -367,19 +445,43 @@ class _ForgotFormState extends State<_ForgotForm> {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
-    if (_done) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const TvAlert('If an account exists for that email, a link is on its way. Open it on this phone or a computer.', tone: Tone.green),
-          const SizedBox(height: 10),
-          Text('Demo accounts cannot be reset.', style: ts(context, size: 12, color: p.muted)),
-          const SizedBox(height: 14),
-          Btn('Done', expand: true, onPressed: () => Navigator.of(context).pop()),
-        ],
-      );
-    }
+    return AnimatedSize(
+      duration: Motion.of(context, Motion.base),
+      curve: Motion.easeOut,
+      alignment: Alignment.topCenter,
+      child: AnimatedSwitcher(
+        duration: Motion.of(context, Motion.base),
+        child: _done ? _sent(context, p) : _form(context),
+      ),
+    );
+  }
+
+  Widget _sent(BuildContext context, Pal p) {
     return Column(
+      key: const ValueKey('sent'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          liveRegion: true,
+          child: const TvAlert('If an account exists for that email, a link is on its way. Open it on this phone or a computer.', tone: Tone.green, title: 'Check your email'),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Ic(PhosphorIconsDuotone.info, size: 14, color: p.subtle),
+            const SizedBox(width: 6),
+            Expanded(child: Text('Demo accounts cannot be reset.', style: ts(context, size: 12, color: p.subtle))),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Btn('Done', expand: true, icon: PhosphorIconsBold.check, onPressed: () => Navigator.of(context).pop()),
+      ],
+    );
+  }
+
+  Widget _form(BuildContext context) {
+    return Column(
+      key: const ValueKey('form'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FieldLabel(
@@ -392,13 +494,14 @@ class _ForgotFormState extends State<_ForgotForm> {
             decoration: fieldDeco(hint: 'you@company.com', icon: PhosphorIconsDuotone.envelope),
           ),
         ),
-        if (_error != null) ...[const SizedBox(height: 14), TvAlert(_error!)],
+        if (_error != null) ...[const SizedBox(height: 14), Semantics(liveRegion: true, child: TvAlert(_error!))],
         const SizedBox(height: 16),
         Btn(
           _busy ? 'Sending…' : 'Email me a reset link',
           variant: BtnVariant.primary,
           size: BtnSize.lg,
           expand: true,
+          icon: _busy ? null : PhosphorIconsDuotone.envelope,
           loading: _busy,
           onPressed: _busy ? null : _send,
         ),
@@ -423,8 +526,13 @@ class _MfaScreenState extends State<MfaScreen> {
   ({String secret, String uri})? _setup;
   /// An emailed code is on its way: to finish signing in, or to turn email codes on (THREATS.md S30).
   ({String purpose, String sentTo})? _emailFlow;
+  final _codeFocus = FocusNode();
   String? _error;
   bool _busy = false;
+  /// Which action is running ('verify', 'passkey', 'email', 'setup'), so
+  /// only its button spins while the others are disabled.
+  String? _action;
+  bool _loading = false;
 
   @override
   void initState() {
@@ -436,10 +544,22 @@ class _MfaScreenState extends State<MfaScreen> {
   @override
   void dispose() {
     _code.dispose();
+    _codeFocus.dispose();
     super.dispose();
   }
 
+  /// Try again after the options failed to load.
+  void _reload() {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    _load();
+  }
+
   Future<void> _load() async {
+    _loading = true;
     try {
       final s = await Api.I.get('/auth/mfa') as Map;
       if (!mounted) return;
@@ -450,24 +570,39 @@ class _MfaScreenState extends State<MfaScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _error = errorText(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _run(Future<void> Function() fn) async {
+  Future<void> _run(String action, Future<void> Function() fn) async {
+    if (_busy) return;
     setState(() {
       _busy = true;
+      _action = action;
       _error = null;
     });
     try {
       await fn();
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (!mounted) return;
+      setState(() => _error = errorText(e));
+      // A wrong or expired code: start the next try from an empty field.
+      if (action == 'verify') {
+        _code.clear();
+        _codeFocus.requestFocus();
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _action = null;
+        });
+      }
     }
   }
 
-  Future<void> _verify() => _run(() async {
+  Future<void> _verify() => _run('verify', () async {
     final flow = _emailFlow;
     final url = flow != null
         ? (flow.purpose == 'enable' ? '/auth/mfa/email/enable' : '/auth/mfa/email/verify')
@@ -479,7 +614,7 @@ class _MfaScreenState extends State<MfaScreen> {
   });
 
   /// Emails a 6-digit code (`signin`, or `enable` to turn email codes on as the first factor).
-  Future<void> _sendEmail(String purpose) => _run(() async {
+  Future<void> _sendEmail(String purpose) => _run('email', () async {
     final r = await Api.I.post('/auth/mfa/email/send', {'purpose': purpose}) as Map;
     if (!mounted) return;
     setState(() {
@@ -490,7 +625,7 @@ class _MfaScreenState extends State<MfaScreen> {
   });
 
   /// Second step with a passkey (Credential Manager), or enrolling one as the first factor.
-  Future<void> _passkey({required bool enrol}) => _run(() async {
+  Future<void> _passkey({required bool enrol}) => _run('passkey', () async {
     if (enrol) {
       await Passkeys.register('Android phone');
     } else {
@@ -499,8 +634,9 @@ class _MfaScreenState extends State<MfaScreen> {
     if (mounted) await context.read<Session>().refresh();
   });
 
-  Future<void> _startSetup() => _run(() async {
+  Future<void> _startSetup() => _run('setup', () async {
     final r = await Api.I.post('/auth/mfa/totp/setup') as Map;
+    if (!mounted) return;
     setState(() => _setup = (secret: r['secret'] as String, uri: r['otpauthUri'] as String));
   });
 
@@ -514,10 +650,13 @@ class _MfaScreenState extends State<MfaScreen> {
         compact: true,
         child: _error != null
             ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TvAlert(_error!),
+                  Semantics(liveRegion: true, child: TvAlert(_error!, title: 'Could not load your sign-in options')),
                   gap16,
-                  Btn('Sign out', icon: PhosphorIconsDuotone.signOut, onPressed: session.signOut),
+                  Btn('Try again', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.arrowClockwise, loading: _loading, onPressed: _loading ? null : _reload),
+                  gap8,
+                  Btn('Sign out', expand: true, icon: PhosphorIconsDuotone.signOut, onPressed: _loading ? null : session.signOut),
                 ],
               )
             : const Column(
@@ -539,7 +678,13 @@ class _MfaScreenState extends State<MfaScreen> {
 
     return AuthLayout(
       compact: true,
-      child: Column(
+      // Each step (choose / authenticator setup / emailed code) fades in.
+      child: AnimatedSwitcher(
+        duration: Motion.of(context, Motion.base),
+        switchInCurve: Motion.easeOut,
+        layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+        child: Column(
+        key: ValueKey('mfa-${_setup != null}-${flow?.purpose}'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Align(alignment: Alignment.centerLeft, child: IconTile(PhosphorIconsDuotone.shieldCheckered, size: 56, gradient: true)),
@@ -563,11 +708,11 @@ class _MfaScreenState extends State<MfaScreen> {
           else
             Text(emailAllowed ? 'Your account needs two-step verification. Choose how you want to confirm it’s you.' : 'Your account must use an authenticator app or a passkey. Choose one to continue.', style: ts(context, size: 14, color: p.muted, height: 1.5)),
           const SizedBox(height: 22),
-          if (_error != null) ...[TvAlert(_error!), gap16],
+          if (_error != null) ...[Semantics(liveRegion: true, child: TvAlert(_error!)), gap16],
           if (onlyEmail && flow == null)
-            Btn('Send code to $emailTo', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _busy ? null : () => _sendEmail('signin')),
+            Btn('Send code to $emailTo', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _action == 'email', onPressed: _busy ? null : () => _sendEmail('signin')),
           if (passkeys.isNotEmpty && _setup == null && flow == null) ...[
-            Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _busy && _code.text.length != 6, onPressed: _busy ? null : () => _passkey(enrol: false)),
+            Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _action == 'passkey', onPressed: _busy ? null : () => _passkey(enrol: false)),
             if (totp) const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: DividerLabel('or enter a code')),
           ],
           if (showCode) ...[
@@ -588,18 +733,19 @@ class _MfaScreenState extends State<MfaScreen> {
             const SizedBox(height: 8),
             TextField(
               controller: _code,
+              focusNode: _codeFocus,
               autofocus: true,
               keyboardType: TextInputType.number,
               autofillHints: const [AutofillHints.oneTimeCode],
               maxLength: 6,
               textAlign: TextAlign.center,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              onSubmitted: (_) => _code.text.length == 6 ? _verify() : null,
+              onSubmitted: (_) => _code.text.length == 6 && !_busy ? _verify() : null,
               style: TextStyle(fontFamily: C.mono, fontSize: 30, fontWeight: FontWeight.w600, letterSpacing: 14, color: p.text),
               decoration: InputDecoration(
                 counterText: '',
                 hintText: '000000',
-                hintStyle: TextStyle(fontFamily: C.mono, fontSize: 30, letterSpacing: 14, color: p.dark ? C.slate700 : C.slate200),
+                hintStyle: TextStyle(fontFamily: C.mono, fontSize: 30, letterSpacing: 14, color: p.lineStrong),
                 contentPadding: const EdgeInsets.symmetric(vertical: 16),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(18),
@@ -611,7 +757,7 @@ class _MfaScreenState extends State<MfaScreen> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(18),
-                  borderSide: const BorderSide(color: C.brand500, width: 1.8),
+                  borderSide: BorderSide(color: p.dark ? C.brand400 : C.brand500, width: 1.8),
                 ),
               ),
             ),
@@ -622,7 +768,7 @@ class _MfaScreenState extends State<MfaScreen> {
                   if (i > 0) const SizedBox(width: 6),
                   Expanded(
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
+                      duration: Motion.of(context, Motion.base),
                       height: 4,
                       decoration: BoxDecoration(borderRadius: BorderRadius.circular(9), gradient: i < _code.text.length ? C.brandGradient : null, color: i < _code.text.length ? null : p.soft2),
                     ),
@@ -636,61 +782,68 @@ class _MfaScreenState extends State<MfaScreen> {
               variant: BtnVariant.primary,
               size: BtnSize.lg,
               expand: true,
-              loading: _busy && _code.text.length == 6,
+              loading: _action == 'verify',
               onPressed: _code.text.length == 6 && !_busy ? _verify : null,
             ),
-            if (flow != null)
-              TextButton(
-                onPressed: _busy ? null : () => _sendEmail(flow.purpose),
-                child: Text('No email? Send a new code', style: ts(context, size: 13, color: p.muted)),
-              ),
+            if (flow != null) ...[
+              gap8,
+              _linkBtn(context, 'No email? Send a new code', icon: PhosphorIconsDuotone.arrowClockwise, onPressed: _busy ? null : () => _sendEmail(flow.purpose)),
+            ],
             if (_setup != null || flow != null)
-              TextButton.icon(
-                onPressed: () => setState(() {
+              _linkBtn(
+                context,
+                enrolled ? 'Use another method' : 'Choose another method',
+                icon: PhosphorIconsBold.arrowLeft,
+                onPressed: _busy ? null : () => setState(() {
+                  _error = null;
                   _setup = null;
                   _emailFlow = null;
                   _code.clear();
                 }),
-                icon: Ic(PhosphorIconsBold.arrowLeft, size: 14, color: p.muted),
-                label: Text(enrolled ? 'Use another method' : 'Choose another method', style: ts(context, size: 13, color: p.muted)),
               ),
           ],
-          if (enrolled && email && !onlyEmail && flow == null)
-            TextButton.icon(
-              onPressed: _busy ? null : () => _sendEmail('signin'),
-              icon: Ic(PhosphorIconsDuotone.envelope, size: 16, color: p.muted),
-              label: Text('Email a code to $emailTo instead', style: ts(context, size: 13, color: p.muted)),
-            ),
+          if (enrolled && email && !onlyEmail && flow == null) ...[
+            gap8,
+            _linkBtn(context, 'Email a code to $emailTo instead', icon: PhosphorIconsDuotone.envelope, onPressed: _busy ? null : () => _sendEmail('signin')),
+          ],
           if (!enrolled && _setup == null && flow == null) ...[
-            _MethodCard(
-              icon: PhosphorIconsDuotone.deviceMobile,
-              title: 'Use Google Authenticator',
-              text: 'Or any authenticator app: a new 6-digit code every 30 seconds. Takes a minute.',
-              onTap: _busy ? null : _startSetup,
-              recommended: true,
+            Rise(
+              delay: 40,
+              child: _MethodCard(
+                icon: PhosphorIconsDuotone.deviceMobile,
+                title: 'Use Google Authenticator',
+                text: 'Or any authenticator app: a new 6-digit code every 30 seconds. Takes a minute.',
+                onTap: _busy ? null : _startSetup,
+                busy: _action == 'setup',
+                recommended: true,
+              ),
             ),
             const SizedBox(height: 10),
-            _MethodCard(icon: PhosphorIconsDuotone.key, title: 'Use a passkey on this phone', text: 'Your face, fingerprint or screen lock. Saved to your Google account; can’t be phished.', onTap: _busy ? null : () => _passkey(enrol: true)),
+            Rise(
+              delay: 80,
+              child: _MethodCard(icon: PhosphorIconsDuotone.key, title: 'Use a passkey on this phone', text: 'Your face, fingerprint or screen lock. Saved to your Google account; can’t be phished.', busy: _action == 'passkey', onTap: _busy ? null : () => _passkey(enrol: true)),
+            ),
             if (emailAllowed) ...[
               const SizedBox(height: 10),
-              _MethodCard(icon: PhosphorIconsDuotone.envelope, title: 'Email me a code ($emailTo)', text: 'Simplest, but weakest: anyone who can read your email could use it. We send a code now to check it reaches you.', onTap: _busy ? null : () => _sendEmail('enable')),
+              Rise(
+                delay: 120,
+                child: _MethodCard(icon: PhosphorIconsDuotone.envelope, title: 'Email me a code ($emailTo)', text: 'Simplest, but weakest: anyone who can read your email could use it. We send a code now to check it reaches you.', busy: _action == 'email', onTap: _busy ? null : () => _sendEmail('enable')),
+              ),
             ],
           ],
           const SizedBox(height: 12),
-          TextButton.icon(
-            onPressed: session.signOut,
-            icon: Ic(PhosphorIconsDuotone.signOut, size: 16, color: p.muted),
-            label: Text('Sign out', style: ts(context, size: 14, color: p.muted)),
-          ),
+          _linkBtn(context, 'Sign out', icon: PhosphorIconsDuotone.signOut, size: 14, onPressed: _busy ? null : session.signOut),
         ],
+        ),
       ),
     );
   }
 }
 
 class _MethodCard extends StatelessWidget {
-  const _MethodCard({required this.icon, required this.title, required this.text, required this.onTap, this.recommended = false});
+  const _MethodCard({required this.icon, required this.title, required this.text, required this.onTap, this.recommended = false, this.busy = false});
   final PI icon;
+  final bool busy;
   final String title;
   final String text;
   final VoidCallback? onTap;
@@ -698,16 +851,19 @@ class _MethodCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
-    return Opacity(
-      opacity: onTap == null ? .6 : 1,
+    return AnimatedOpacity(
+      duration: Motion.of(context, Motion.fast),
+      opacity: onTap == null && !busy ? .5 : 1,
       child: Press(
         onTap: onTap,
-        child: Container(
+        button: true,
+        child: AnimatedContainer(
+          duration: Motion.of(context, Motion.fast),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: p.card,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: p.border),
+            border: Border.all(color: busy ? p.selectedBorder : p.border),
             boxShadow: p.shadow,
           ),
           child: Row(
@@ -731,7 +887,9 @@ class _MethodCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Ic(PhosphorIconsBold.caretRight, size: 16, color: p.faint),
+              busy
+                  ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: p.accent))
+                  : Ic(PhosphorIconsBold.caretRight, size: 16, color: p.subtle),
             ],
           ),
         ),

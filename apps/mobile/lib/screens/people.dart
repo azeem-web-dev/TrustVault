@@ -22,6 +22,16 @@ final _roleInfo = {
   'EXTERNAL': ('External', 'Read-only, until an end date.', PhosphorIconsDuotone.globe, Tone.amber),
 };
 
+/// Cross-fades a card body from skeleton to content (§2.3); instant under
+/// reduced motion.
+Widget _swap(BuildContext context, Object state, Widget child) => AnimatedSwitcher(
+  duration: Motion.of(context),
+  switchInCurve: Motion.curve,
+  switchOutCurve: Motion.easeIn,
+  layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+  child: KeyedSubtree(key: ValueKey(state), child: child),
+);
+
 /// Users and groups under one tab (two separate pages on the web).
 class PeopleScreen extends StatefulWidget {
   const PeopleScreen({super.key});
@@ -29,8 +39,27 @@ class PeopleScreen extends StatefulWidget {
   State<PeopleScreen> createState() => _PeopleScreenState();
 }
 
-class _PeopleScreenState extends State<PeopleScreen> {
+class _PeopleScreenState extends State<PeopleScreen> with SingleTickerProviderStateMixin {
   String _view = 'users';
+
+  /// Fades the view in on a Users / Groups switch without rebuilding it, so
+  /// each keeps its list, search and scroll (§2.3).
+  late final AnimationController _fade = AnimationController(vsync: this, duration: Motion.base, value: 1);
+  late final Animation<double> _fadeIn = CurvedAnimation(parent: _fade, curve: Motion.easeOut);
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    super.dispose();
+  }
+
+  void _switch(String v) {
+    if (v == _view) return;
+    setState(() => _view = v);
+    if (Motion.reduced(context)) return;
+    _fade.forward(from: 0);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -40,7 +69,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
           child: Segmented<String>(
             value: _view,
             expand: true,
-            onChanged: (v) => setState(() => _view = v),
+            onChanged: _switch,
             options: const [
               SegOption('users', 'Users', icon: PhosphorIconsDuotone.usersThree),
               SegOption('groups', 'Groups', icon: PhosphorIconsDuotone.usersFour),
@@ -48,7 +77,10 @@ class _PeopleScreenState extends State<PeopleScreen> {
           ),
         ),
         Expanded(
-          child: IndexedStack(index: _view == 'users' ? 0 : 1, children: const [_Users(), _Groups()]),
+          child: FadeTransition(
+            opacity: _fadeIn,
+            child: IndexedStack(index: _view == 'users' ? 0 : 1, children: const [_Users(), _Groups()]),
+          ),
         ),
       ],
     );
@@ -65,9 +97,21 @@ class _Users extends StatefulWidget {
 
 class _UsersState extends State<_Users> {
   List<Map>? _users;
-  String? _error;
+
+  /// Error from the last load (R5). Action errors are toasts, because the
+  /// row that failed may be far below the top of the list.
+  String? _loadError;
   String _q = '';
+  final _search = TextEditingController();
   String _filter = 'all';
+
+  /// Id of the user whose action is running; row controls wait for it.
+  String? _busy;
+
+  /// Bumped after every role change so the dropdowns remount and show the
+  /// role the server has, not a rejected choice (R7).
+  int _rev = 0;
+  int _gen = 0;
 
   @override
   void initState() {
@@ -75,19 +119,46 @@ class _UsersState extends State<_Users> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
+    final gen = ++_gen;
     try {
       final r = await Api.I.get('/admin/users') as Map;
-      if (mounted) setState(() => _users = (r['users'] as List).cast<Map>());
+      if (mounted && gen == _gen) {
+        setState(() {
+          _users = (r['users'] as List).cast<Map>();
+          _loadError = null;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e, 'Could not load users'));
+      if (mounted && gen == _gen) setState(() => _loadError = errorText(e, 'Could not load users'));
+    }
+  }
+
+  void _fail(Object e) {
+    if (mounted) toast(context, errorText(e, 'Request failed'), tone: Tone.red);
+  }
+
+  /// Runs [fn] for user [id]; one row action at a time.
+  Future<T?> _guard<T>(String id, Future<T> Function() fn) async {
+    if (_busy != null) return null;
+    setState(() => _busy = id);
+    try {
+      return await fn();
+    } finally {
+      if (mounted) setState(() => _busy = null);
     }
   }
 
   Future<void> _sendReset(String id, String email) async {
-    setState(() => _error = null);
+    if (_busy != null) return;
     try {
-      final r = await Api.I.post('/admin/users/$id/reset-link');
+      final r = await _guard(id, () => Api.I.post('/admin/users/$id/reset-link'));
       if (!mounted) return;
       if (r is Map && r['sent'] == false) {
         toast(context, 'Demo accounts never receive email', tone: Tone.blue);
@@ -95,15 +166,15 @@ class _UsersState extends State<_Users> {
         toast(context, 'Reset link sent to $email. You never see their new password.');
       }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e, 'Request failed'));
+      _fail(e);
     }
   }
 
   // A fresh invitation link; the earlier one stops working.
   Future<void> _resendInvite(String id, String email) async {
-    setState(() => _error = null);
+    if (_busy != null) return;
     try {
-      final r = await Api.I.post('/admin/users/$id/invite');
+      final r = await _guard(id, () => Api.I.post('/admin/users/$id/invite'));
       if (!mounted) return;
       if (r is Map && r['sent'] == false) {
         toast(context, 'Email is turned off on this server, so no invitation was sent', tone: Tone.blue);
@@ -111,19 +182,43 @@ class _UsersState extends State<_Users> {
         toast(context, 'Invitation sent again to $email. The earlier link no longer works.');
       }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e, 'Request failed'));
+      _fail(e);
     }
   }
 
-  Future<void> _run(Future<dynamic> Function() fn, String msg) async {
-    setState(() => _error = null);
+  Future<void> _run(String id, Future<dynamic> Function() fn, String msg) async {
     try {
-      await fn();
-      if (mounted) toast(context, msg);
-      await _load();
+      await _guard(id, () async {
+        await fn();
+        if (mounted) toast(context, msg);
+        await _load();
+      });
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e, 'Request failed'));
+      _fail(e);
     }
+  }
+
+  Future<void> _changeRole(Map u, String? role) async {
+    final email = u['email'] as String;
+    if (role != null && role != u['role']) {
+      final info = _roleInfo[role]!;
+      final ok = await showConfirm(
+        context,
+        'Make $email ${info.$1.toLowerCase()}?',
+        '${info.$2} They will be signed out everywhere at once.',
+        confirmLabel: 'Change role',
+        icon: info.$3,
+      );
+      if (ok && mounted) await _run('${u['id']}', () => Api.I.patch('/admin/users/${u['id']}', {'role': role}), 'Role changed for $email. They were signed out.');
+    }
+    // Remount the dropdown so it shows the server's role, also after Cancel
+    // or a refused change.
+    if (mounted) setState(() => _rev++);
+  }
+
+  Future<void> _confirmThen(String title, String body, String label, Future<void> Function() action) async {
+    final ok = await showConfirm(context, title, body, danger: true, confirmLabel: label);
+    if (ok && mounted) await action();
   }
 
   @override
@@ -153,8 +248,19 @@ class _UsersState extends State<_Users> {
         ),
         gap16,
         TextField(
+          controller: _search,
           onChanged: (v) => setState(() => _q = v),
-          decoration: fieldDeco(hint: 'Search by name or email', icon: PhosphorIconsDuotone.magnifyingGlass),
+          textInputAction: TextInputAction.search,
+          decoration: fieldDeco(
+            hint: 'Search by name or email',
+            icon: PhosphorIconsDuotone.magnifyingGlass,
+            suffix: _q.isEmpty
+                ? null
+                : IconBtn(PhosphorIconsBold.x, tooltip: 'Clear search', size: 32, onPressed: () => setState(() {
+                    _q = '';
+                    _search.clear();
+                  })),
+          ),
         ),
         gap12,
         Segmented<String>(
@@ -166,14 +272,35 @@ class _UsersState extends State<_Users> {
           ],
         ),
         gap16,
-        if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
+        if (_users != null && _loadError != null) ...[
+          TvAlert(_loadError!, tone: Tone.amber, title: 'Could not refresh', onDismiss: () => setState(() => _loadError = null)),
+          gap12,
+        ],
         TvCard(
           padded: false,
-          child: _users == null
-              ? const SkeletonRows(rows: 6)
-              : shown.isEmpty
-              ? const EmptyState(icon: PhosphorIconsDuotone.usersThree, title: 'No users match', body: 'Try another name or role.')
-              : RowList(children: [for (final u in shown) _userRow(context, p, u, me)]),
+          child: _swap(
+            context,
+            _users == null ? (_loadError != null ? 'error' : 'loading') : (shown.isEmpty ? 'empty' : 'list'),
+            _users == null
+                ? (_loadError != null ? ErrorState(title: 'Could not load users', message: _loadError, onRetry: _load) : const SkeletonRows(rows: 6))
+                : shown.isEmpty
+                ? EmptyState(
+                    icon: PhosphorIconsDuotone.magnifyingGlass,
+                    title: 'No users match',
+                    body: 'Try another name or role.',
+                    action: term.isEmpty && _filter == 'all' ? null : Btn('Show everyone', icon: PhosphorIconsDuotone.usersThree, onPressed: () => setState(() {
+                      _q = '';
+                      _filter = 'all';
+                      _search.clear();
+                    })),
+                  )
+                : RowList(
+                    children: [
+                      for (var i = 0; i < shown.length; i++)
+                        Rise(key: ValueKey(shown[i]['id']), delay: (i < 8 ? i : 8) * 40, child: _userRow(context, p, shown[i], me)),
+                    ],
+                  ),
+          ),
         ),
       ],
     );
@@ -186,7 +313,13 @@ class _UsersState extends State<_Users> {
     final active = u['status'] == 'ACTIVE';
     final invited = u['status'] == 'INVITED';
     final email = u['email'] as String;
-    return Opacity(
+    final id = '${u['id']}';
+    // Authenticator app or email codes: both can be reset (R7, web parity).
+    final has2fa = u['totpEnabledAt'] != null || u['emailOtpEnabledAt'] != null;
+    final rowBusy = _busy == id;
+    final idle = _busy == null;
+    return AnimatedOpacity(
+      duration: Motion.of(context),
       opacity: active || invited ? 1 : .6,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
@@ -213,6 +346,8 @@ class _UsersState extends State<_Users> {
                               ),
                           ],
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       Text(
                         email,
@@ -235,7 +370,7 @@ class _UsersState extends State<_Users> {
                   TvBadge(active ? 'Active' : 'Deactivated', tone: active ? Tone.green : Tone.neutral, dot: true),
                 if (locked) const TvBadge('Locked', tone: Tone.amber, icon: PhosphorIconsDuotone.lockKey),
                 if (protected) const TvBadge('Demo', tone: Tone.violet, icon: PhosphorIconsDuotone.sparkle),
-                if (u['totpEnabledAt'] != null) const TvBadge('2FA', tone: Tone.blue, icon: PhosphorIconsDuotone.shieldCheck),
+                if (has2fa) const TvBadge('2FA', tone: Tone.blue, icon: PhosphorIconsDuotone.shieldCheck),
                 if (u['accessExpiresAt'] != null) TvBadge('Until ${formatDay(u['accessExpiresAt'] as String?)}', icon: PhosphorIconsDuotone.calendarBlank),
               ],
             ),
@@ -244,6 +379,7 @@ class _UsersState extends State<_Users> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
+                    key: ValueKey('$id-${u['role']}-$_rev'),
                     initialValue: u['role'] as String,
                     isExpanded: true,
                     decoration: fieldDeco(icon: _roleInfo[u['role']]?.$3).copyWith(contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9)),
@@ -254,22 +390,30 @@ class _UsersState extends State<_Users> {
                           child: Text(_roleInfo[r]!.$1, style: ts(context, size: 13.5)),
                         ),
                     ],
-                    onChanged: (self || protected) ? null : (v) => _run(() => Api.I.patch('/admin/users/${u['id']}', {'role': v}), 'Role changed for $email. They were signed out.'),
+                    onChanged: (self || protected || !idle) ? null : (v) => _changeRole(u, v),
                   ),
                 ),
                 gap8,
                 if (self || protected)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Ic(PhosphorIconsDuotone.lock, size: 14, color: p.faint),
-                      const SizedBox(width: 4),
-                      Text(self ? 'Your account' : 'Protected', style: ts(context, size: 12, color: p.faint)),
-                    ],
+                  Container(
+                    height: kMinTap,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(11), border: Border.all(color: p.line)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Ic(PhosphorIconsDuotone.lock, size: 14, color: p.muted),
+                        const SizedBox(width: 4),
+                        Text(self ? 'Your account' : 'Protected', style: ts(context, size: 12, color: p.muted)),
+                      ],
+                    ),
                   )
                 else
                   PopupMenuButton<String>(
                     tooltip: 'Actions for $email',
+                    enabled: idle,
+                    position: PopupMenuPosition.under,
+                    popUpAnimationStyle: AnimationStyle(duration: Motion.of(context), reverseDuration: Motion.of(context, Motion.fast)),
                     onSelected: (v) {
                       switch (v) {
                         case 'mfa':
@@ -285,12 +429,23 @@ class _UsersState extends State<_Users> {
                               if (sent && context.mounted) toast(context, 'Request sent. Another administrator must approve it.');
                             });
                           } else {
-                            _run(() => Api.I.post('/admin/users/${u['id']}/mfa/reset'), 'Second factor reset for $email; they must set it up again');
+                            _confirmThen(
+                              'Reset the second factor of $email?',
+                              'Their authenticator app and email codes are cleared, and they are told by email. They must set up a second factor again.',
+                              'Reset 2FA',
+                              () => _run(id, () => Api.I.post('/admin/users/${u['id']}/mfa/reset'), 'Second factor reset for $email; they must set it up again'),
+                            );
                           }
                         case 'deactivate':
-                          _run(() => Api.I.post('/admin/users/${u['id']}/deactivate'), invited ? 'Invitation for $email cancelled' : '$email deactivated and signed out');
+                          _confirmThen(
+                            invited ? 'Cancel the invitation for $email?' : 'Deactivate $email?',
+                            invited ? 'Their invitation link stops working. You can invite them again later.' : 'They are signed out everywhere at once and cannot sign in until reactivated.',
+                            invited ? 'Cancel invite' : 'Deactivate',
+                            () => _run(id, () => Api.I.post('/admin/users/${u['id']}/deactivate'), invited ? 'Invitation for $email cancelled' : '$email deactivated and signed out'),
+                          );
                         case 'reactivate':
                           _run(
+                            id,
                             () => Api.I.post('/admin/users/${u['id']}/reactivate'),
                             u['activatedAt'] != null ? '$email reactivated' : '$email is invited again. Use Resend invite to email a new link.',
                           );
@@ -323,7 +478,7 @@ class _UsersState extends State<_Users> {
                             ],
                           ),
                         ),
-                      if (u['totpEnabledAt'] != null)
+                      if (has2fa)
                         PopupMenuItem(
                           value: 'mfa',
                           child: Row(
@@ -339,9 +494,9 @@ class _UsersState extends State<_Users> {
                           value: 'deactivate',
                           child: Row(
                             children: [
-                              const Ic(PhosphorIconsDuotone.prohibit, size: 18, color: C.red500),
-                              const SizedBox(width: 8),
-                              Text(invited ? 'Cancel invite' : 'Deactivate', style: const TextStyle(color: C.red500)),
+                              Ic(PhosphorIconsDuotone.prohibit, size: 18, color: p.danger),
+                              gap8,
+                              Text(invited ? 'Cancel invite' : 'Deactivate', style: TextStyle(color: p.danger, fontWeight: FontWeight.w500)),
                             ],
                           ),
                         )
@@ -358,19 +513,25 @@ class _UsersState extends State<_Users> {
                         ),
                     ],
                     child: Container(
-                      height: 42,
+                      height: kMinTap,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(11),
                         border: Border.all(color: p.fieldBorder),
                         color: p.field,
                       ),
-                      child: Row(
-                        children: [
-                          Text('Actions', style: ts(context, size: 13.5, w: FontWeight.w600)),
-                          const SizedBox(width: 4),
-                          Ic(PhosphorIconsBold.caretDown, size: 12, color: p.muted),
-                        ],
+                      child: AnimatedOpacity(
+                        duration: Motion.of(context, Motion.fast),
+                        opacity: idle || rowBusy ? 1 : .5,
+                        child: Row(
+                          children: [
+                            Text('Actions', style: ts(context, size: 13.5, w: FontWeight.w600, color: idle ? null : p.muted)),
+                            const SizedBox(width: 6),
+                            rowBusy
+                                ? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: p.accent))
+                                : Ic(PhosphorIconsBold.caretDown, size: 14, color: p.muted),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -415,7 +576,14 @@ class _CreateUserState extends State<_CreateUser> {
   String? _error;
   bool _busy = false;
 
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
   Future<void> _submit() async {
+    if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -454,10 +622,14 @@ class _CreateUserState extends State<_CreateUser> {
           style: ts(context, size: 13, w: FontWeight.w500, color: p.body),
         ),
         gap8,
-        for (final r in _roles)
+        for (var i = 0; i < _roles.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: ChoiceCard(icon: _roleInfo[r]!.$3, title: _roleInfo[r]!.$1, text: _roleInfo[r]!.$2, selected: _role == r, onTap: () => setState(() => _role = r)),
+            child: Rise(
+              delay: i * 40,
+              dy: 6,
+              child: ChoiceCard(icon: _roleInfo[_roles[i]]!.$3, title: _roleInfo[_roles[i]]!.$1, text: _roleInfo[_roles[i]]!.$2, selected: _role == _roles[i], onTap: () => setState(() => _role = _roles[i])),
+            ),
           ),
         gap8,
         FieldLabel(
@@ -473,13 +645,13 @@ class _CreateUserState extends State<_CreateUser> {
               decoration: fieldDeco(icon: PhosphorIconsDuotone.calendarBlank).copyWith(
                 suffixIcon: _expires.isEmpty || _role == 'EXTERNAL'
                     ? null
-                    : IconButton(tooltip: 'No end date', icon: Ic(PhosphorIconsBold.x, size: 14, color: p.muted), onPressed: () => setState(() => _expires = '')),
+                    : IconBtn(PhosphorIconsBold.x, tooltip: 'No end date', size: 32, onPressed: () => setState(() => _expires = '')),
               ),
-              child: Text(_expires.isEmpty ? 'Pick a date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? C.slate400 : null)),
+              child: Text(_expires.isEmpty ? 'Pick a date' : _expires, style: ts(context, size: 14, color: _expires.isEmpty ? p.muted : null)),
             ),
           ),
         ),
-        if (_error != null) ...[gap16, TvAlert(_error!)],
+        if (_error != null) ...[gap16, Rise(dy: 6, child: TvAlert(_error!))],
         gap24,
         Btn('Send invitation', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _submit),
       ],
@@ -498,8 +670,16 @@ class _Groups extends StatefulWidget {
 class _GroupsState extends State<_Groups> {
   List<Map>? _groups;
   final _name = TextEditingController();
-  String? _error;
+
+  /// Error from the last load (R5). Action errors are toasts, since the card
+  /// that failed may be far down the page.
+  String? _loadError;
   String? _confirmDelete;
+
+  /// The running action (`create`, `del-GROUP`, `rm-GROUP-USER`,
+  /// `add-GROUP`); other actions wait until it finishes.
+  String? _busy;
+  int _gen = 0;
 
   @override
   void initState() {
@@ -507,24 +687,51 @@ class _GroupsState extends State<_Groups> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
+    final gen = ++_gen;
     try {
       final r = await Api.I.get('/admin/groups') as Map;
-      if (mounted) setState(() => _groups = (r['groups'] as List).cast<Map>());
+      if (mounted && gen == _gen) {
+        setState(() {
+          _groups = (r['groups'] as List).cast<Map>();
+          _loadError = null;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted && gen == _gen) setState(() => _loadError = errorText(e));
     }
   }
 
-  Future<void> _run(Future<dynamic> Function() fn, String msg) async {
-    setState(() => _error = null);
+  /// Returns true on success.
+  Future<bool> _run(String key, Future<dynamic> Function() fn, String msg) async {
+    if (_busy != null) return false;
+    setState(() => _busy = key);
     try {
       await fn();
       if (mounted) toast(context, msg);
       await _load();
+      return true;
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted) toast(context, errorText(e), tone: Tone.red);
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = null);
     }
+  }
+
+  void _create() {
+    final n = _name.text.trim();
+    if (n.isEmpty || _busy != null) return;
+    _run('create', () async {
+      await Api.I.post('/admin/groups', {'name': n});
+      _name.clear();
+    }, 'Group “$n” created');
   }
 
   @override
@@ -546,6 +753,9 @@ class _GroupsState extends State<_Groups> {
                 child: TextField(
                   controller: _name,
                   maxLength: 80,
+                  readOnly: _busy == 'create',
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _create(),
                   onChanged: (_) => setState(() {}),
                   decoration: fieldDeco(hint: 'New group name, e.g. Finance team', icon: PhosphorIconsDuotone.usersFour).copyWith(counterText: ''),
                 ),
@@ -555,37 +765,44 @@ class _GroupsState extends State<_Groups> {
                 'Create',
                 variant: BtnVariant.primary,
                 icon: PhosphorIconsBold.plus,
-                onPressed: _name.text.trim().isEmpty
-                    ? null
-                    : () {
-                        final n = _name.text.trim();
-                        _run(() async {
-                          await Api.I.post('/admin/groups', {'name': n});
-                          _name.clear();
-                        }, 'Group “$n” created');
-                      },
+                loading: _busy == 'create',
+                onPressed: _name.text.trim().isEmpty || _busy != null ? null : _create,
               ),
             ],
           ),
         ),
         gap16,
-        if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), gap12],
-        if (g == null)
-          const Column(children: [Skeleton(height: 220, radius: 18), gap16, Skeleton(height: 220, radius: 18)])
-        else if (g.isEmpty)
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: p.dark ? Colors.white.withValues(alpha: .1) : C.slate300),
-            ),
-            child: const EmptyState(icon: PhosphorIconsDuotone.usersFour, title: 'No groups yet', body: 'Create one above, then share documents with the whole team at once.'),
-          )
-        else
-          for (var i = 0; i < g.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Rise(delay: i * 50, child: _groupCard(context, p, g[i])),
-            ),
+        if (g != null && _loadError != null) ...[
+          TvAlert(_loadError!, tone: Tone.amber, title: 'Could not refresh', onDismiss: () => setState(() => _loadError = null)),
+          gap12,
+        ],
+        _swap(
+          context,
+          g == null ? (_loadError != null ? 'error' : 'loading') : (g.isEmpty ? 'empty' : 'list'),
+          g == null && _loadError != null
+              ? TvCard(padded: false, child: ErrorState(title: 'Could not load groups', message: _loadError, onRetry: _load))
+              : g == null
+              ? const Column(children: [Skeleton(height: 220, radius: 18), gap16, Skeleton(height: 220, radius: 18)])
+              : g.isEmpty
+              ? Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: p.dashed),
+                  ),
+                  child: const EmptyState(icon: PhosphorIconsDuotone.usersFour, title: 'No groups yet', body: 'Create one above, then share documents with the whole team at once.'),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = 0; i < g.length; i++)
+                      Padding(
+                        key: ValueKey(g[i]['id']),
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: Rise(delay: (i < 8 ? i : 8) * 40, child: _groupCard(context, p, g[i])),
+                      ),
+                  ],
+                ),
+        ),
       ],
     );
   }
@@ -594,6 +811,8 @@ class _GroupsState extends State<_Groups> {
     final members = (g['members'] as List).cast<Map>();
     final grants = g['documentGrants'] as int;
     final name = g['name'] as String;
+    final gid = g['id'] as String;
+    final idle = _busy == null;
     return Container(
       decoration: BoxDecoration(
         color: p.card,
@@ -615,7 +834,7 @@ class _GroupsState extends State<_Groups> {
                   height: 150,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: RadialGradient(colors: [C.brand500.withValues(alpha: .12), Colors.transparent]),
+                    gradient: RadialGradient(colors: [C.brand500.withValues(alpha: .12), C.brand500.withValues(alpha: 0)]),
                   ),
                 ),
               ),
@@ -646,25 +865,34 @@ class _GroupsState extends State<_Groups> {
                             ],
                           ),
                         ),
-                        if (_confirmDelete == g['id'])
-                          Row(
+                        // Trash ↔ Delete / Keep cross-fades in place.
+                        AnimatedSwitcher(
+                          duration: Motion.of(context, Motion.fast),
+                          transitionBuilder: (c, a) => FadeTransition(opacity: a, child: ScaleTransition(scale: Tween(begin: .94, end: 1.0).animate(a), alignment: Alignment.centerRight, child: c)),
+                          child: _confirmDelete == g['id']
+                          ? Row(
+                            key: const ValueKey('confirm'),
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Btn(
                                 'Delete',
                                 size: BtnSize.sm,
                                 variant: BtnVariant.danger,
-                                onPressed: () {
-                                  setState(() => _confirmDelete = null);
-                                  _run(() => Api.I.delete('/admin/groups/${g['id']}'), 'Deleted $name and its $grants grants');
-                                },
+                                icon: PhosphorIconsDuotone.trash,
+                                loading: _busy == 'del-$gid',
+                                onPressed: idle
+                                    ? () async {
+                                        await _run('del-$gid', () => Api.I.delete('/admin/groups/$gid'), 'Deleted $name and its $grants grants');
+                                        if (mounted) setState(() => _confirmDelete = null);
+                                      }
+                                    : null,
                               ),
                               const SizedBox(width: 4),
-                              Btn('Keep', size: BtnSize.sm, variant: BtnVariant.ghost, onPressed: () => setState(() => _confirmDelete = null)),
+                              Btn('Keep', size: BtnSize.sm, variant: BtnVariant.ghost, onPressed: _busy == 'del-$gid' ? null : () => setState(() => _confirmDelete = null)),
                             ],
                           )
-                        else
-                          IconBtn(PhosphorIconsDuotone.trash, tooltip: 'Delete group $name', danger: true, onPressed: () => setState(() => _confirmDelete = g['id'] as String)),
+                          : IconBtn(PhosphorIconsDuotone.trash, key: const ValueKey('trash'), tooltip: 'Delete group $name', danger: true, onPressed: idle ? () => setState(() => _confirmDelete = gid) : null),
+                        ),
                       ],
                     ),
                     if (members.isNotEmpty) ...[
@@ -680,10 +908,13 @@ class _GroupsState extends State<_Groups> {
           if (members.isEmpty)
             Padding(
               padding: const EdgeInsets.all(20),
-              child: Text(
-                'No members yet.',
-                textAlign: TextAlign.center,
-                style: ts(context, size: 13, color: p.muted),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Ic(PhosphorIconsDuotone.userPlus, size: 16, color: p.muted),
+                  gap8,
+                  Text('No members yet. Add someone below.', style: ts(context, size: 13, color: p.muted)),
+                ],
               ),
             )
           else
@@ -691,7 +922,8 @@ class _GroupsState extends State<_Groups> {
               children: [
                 for (final m in members)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    key: ValueKey(m['id']),
+                    padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
                     child: Row(
                       children: [
                         Avatar(m['displayName'] as String, size: 32),
@@ -709,13 +941,19 @@ class _GroupsState extends State<_Groups> {
                             ],
                           ),
                         ),
-                        IconBtn(
-                          PhosphorIconsDuotone.userMinus,
-                          tooltip: 'Remove ${m['email']} from $name',
-                          danger: true,
-                          size: 34,
-                          onPressed: () => _run(() => Api.I.delete('/admin/groups/${g['id']}/members/${m['id']}'), 'Removed ${m['email']} from $name'),
-                        ),
+                        if (_busy == 'rm-$gid-${m['id']}')
+                          SizedBox(
+                            width: kMinTap,
+                            height: kMinTap,
+                            child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: p.danger))),
+                          )
+                        else
+                          IconBtn(
+                            PhosphorIconsDuotone.userMinus,
+                            tooltip: 'Remove ${m['email']} from $name',
+                            danger: true,
+                            onPressed: idle ? () => _removeMember(gid, name, m) : null,
+                          ),
                       ],
                     ),
                   ),
@@ -723,18 +961,40 @@ class _GroupsState extends State<_Groups> {
             ),
           _AddMember(
             existing: [for (final m in members) m['id'] as String],
-            onAdd: (u) => _run(() => Api.I.post('/admin/groups/${g['id']}/members', {'userId': u['id']}), 'Added ${u['displayName']} to $name'),
+            busy: _busy != null,
+            adding: _busy == 'add-$gid',
+            onAdd: (u) => _run('add-$gid', () => Api.I.post('/admin/groups/$gid/members', {'userId': u['id']}), 'Added ${u['displayName']} to $name'),
           ),
         ],
       ),
     );
   }
+
+  Future<void> _removeMember(String gid, String name, Map m) async {
+    final ok = await showConfirm(
+      context,
+      'Remove ${m['displayName']} from $name?',
+      'They lose access to documents shared with $name on their next request, unless the documents are shared with them another way.',
+      danger: true,
+      confirmLabel: 'Remove',
+      icon: PhosphorIconsDuotone.userMinus,
+    );
+    if (ok && mounted) await _run('rm-$gid-${m['id']}', () => Api.I.delete('/admin/groups/$gid/members/${m['id']}'), 'Removed ${m['email']} from $name');
+  }
 }
 
 class _AddMember extends StatefulWidget {
-  const _AddMember({required this.existing, required this.onAdd});
+  const _AddMember({required this.existing, required this.onAdd, this.busy = false, this.adding = false});
   final List<String> existing;
-  final ValueChanged<Map> onAdd;
+
+  /// Resolves true when the member was added.
+  final Future<bool> Function(Map) onAdd;
+
+  /// Another group action is running: Add waits.
+  final bool busy;
+
+  /// This group's Add is running.
+  final bool adding;
   @override
   State<_AddMember> createState() => _AddMemberState();
 }
@@ -743,6 +1003,13 @@ class _AddMemberState extends State<_AddMember> {
   final _q = TextEditingController();
   List<Map> _users = [];
   Timer? _t;
+
+  /// Request counter: a slow answer for an older query never overwrites a
+  /// newer one (R7).
+  int _seq = 0;
+  bool _searching = false;
+  String? _searchError;
+  String? _addingId;
 
   @override
   void dispose() {
@@ -753,21 +1020,60 @@ class _AddMemberState extends State<_AddMember> {
 
   void _search(String q) {
     _t?.cancel();
-    if (q.trim().length < 2) {
-      setState(() => _users = []);
+    final term = q.trim();
+    final seq = ++_seq;
+    if (term.length < 2) {
+      setState(() {
+        _users = [];
+        _searching = false;
+        _searchError = null;
+      });
       return;
     }
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
     _t = Timer(const Duration(milliseconds: 250), () async {
       try {
-        final r = await Api.I.get('/directory?q=${Uri.encodeQueryComponent(q.trim())}') as Map;
-        if (mounted) setState(() => _users = (r['users'] as List).cast<Map>().where((u) => u['role'] != 'EXTERNAL' && !widget.existing.contains(u['id'])).toList());
-      } catch (_) {}
+        final r = await Api.I.get('/directory?q=${Uri.encodeQueryComponent(term)}') as Map;
+        if (!mounted || seq != _seq) return;
+        setState(() {
+          _users = (r['users'] as List).cast<Map>().where((u) => u['role'] != 'EXTERNAL' && !widget.existing.contains(u['id'])).toList();
+          _searching = false;
+        });
+      } catch (e) {
+        if (!mounted || seq != _seq) return;
+        setState(() {
+          _users = [];
+          _searching = false;
+          _searchError = errorText(e, 'Search failed. Try again.');
+        });
+      }
+    });
+  }
+
+  Future<void> _add(Map u) async {
+    if (widget.busy || _addingId != null) return;
+    setState(() => _addingId = u['id'] as String?);
+    final ok = await widget.onAdd(u);
+    if (!mounted) return;
+    setState(() {
+      _addingId = null;
+      if (ok) {
+        _seq++;
+        _t?.cancel();
+        _q.clear();
+        _users = [];
+        _searching = false;
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
+    final term = _q.text.trim();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -775,17 +1081,58 @@ class _AddMemberState extends State<_AddMember> {
         border: Border(top: BorderSide(color: p.divider)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextField(
             controller: _q,
             onChanged: _search,
-            decoration: fieldDeco(hint: 'Add a member: type a name or email', icon: PhosphorIconsDuotone.magnifyingGlass),
+            decoration: fieldDeco(
+              hint: 'Add a member: type a name or email',
+              icon: PhosphorIconsDuotone.magnifyingGlass,
+              suffix: _searching
+                  ? Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: p.accent)),
+                    )
+                  : null,
+            ),
           ),
-          for (final u in _users)
-            Container(
+          if (_searchError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Semantics(
+                liveRegion: true,
+                child: Row(
+                  children: [
+                    Ic(PhosphorIconsDuotone.warning, size: 14, color: p.danger),
+                    const SizedBox(width: 6),
+                    Expanded(child: Text(_searchError!, style: ts(context, size: 12.5, color: p.danger))),
+                  ],
+                ),
+              ),
+            )
+          else if (!_searching && term.length >= 2 && _users.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Ic(PhosphorIconsDuotone.magnifyingGlass, size: 14, color: p.muted),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text('No one to add matches “$term”.', style: ts(context, size: 12.5, color: p.muted))),
+                ],
+              ),
+            ),
+          for (var i = 0; i < _users.length; i++)
+            Rise(
+              key: ValueKey(_users[i]['id']),
+              delay: (i < 8 ? i : 8) * 40,
+              dy: 6,
+              child: Builder(builder: (context) {
+                final u = _users[i];
+                return Container(
               margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: p.card, borderRadius: BorderRadius.circular(12), boxShadow: p.shadow),
+              padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+              decoration: BoxDecoration(color: p.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: p.line), boxShadow: p.shadow),
               child: Row(
                 children: [
                   Avatar(u['displayName'] as String, size: 30),
@@ -807,14 +1154,13 @@ class _AddMemberState extends State<_AddMember> {
                     'Add',
                     size: BtnSize.sm,
                     icon: PhosphorIconsDuotone.userPlus,
-                    onPressed: () {
-                      widget.onAdd(u);
-                      _q.clear();
-                      setState(() => _users = []);
-                    },
+                    loading: widget.adding && _addingId == u['id'],
+                    onPressed: widget.busy || _addingId != null ? null : () => _add(u),
                   ),
                 ],
               ),
+            );
+              }),
             ),
         ],
       ),

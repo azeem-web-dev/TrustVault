@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,16 +12,27 @@ import '../core/theme.dart';
 
 export 'phosphor.dart' show PI;
 
-/// Phosphor duotone icon, the same family the web app uses.
+/// Phosphor duotone icon, the same family the web app uses. Decorative
+/// (hidden from TalkBack) unless it is given a [semanticLabel].
 class Ic extends StatelessWidget {
-  const Ic(this.icon, {super.key, this.size = 18, this.color});
+  const Ic(this.icon, {super.key, this.size = 18, this.color, this.semanticLabel});
   final PI icon;
   final double size;
   final Color? color;
+  final String? semanticLabel;
   @override
-  Widget build(BuildContext context) =>
-      SvgPicture.string(icon.svg, width: size, height: size, colorFilter: ColorFilter.mode(color ?? IconTheme.of(context).color ?? Pal.of(context).muted, BlendMode.srcIn));
+  Widget build(BuildContext context) => SvgPicture.string(
+    icon.svg,
+    width: size,
+    height: size,
+    semanticsLabel: semanticLabel,
+    excludeFromSemantics: semanticLabel == null,
+    colorFilter: ColorFilter.mode(color ?? IconTheme.of(context).color ?? Pal.of(context).muted, BlendMode.srcIn),
+  );
 }
+
+/// Minimum touch target (Material / WCAG): 44 x 44 logical pixels.
+const kMinTap = 44.0;
 
 const gap4 = SizedBox(width: 4, height: 4);
 const gap8 = SizedBox(width: 8, height: 8);
@@ -33,7 +45,8 @@ TextStyle ts(BuildContext c, {double size = 14, FontWeight? w, Color? color, dou
 
 /* ------------------------------------------------------------------ motion */
 
-/// Fade + slide up, like the web's `animate-rise`.
+/// Fade + slide up, like the web's `animate-rise`. Shows the child at once
+/// when the system asks for reduced motion.
 class Rise extends StatefulWidget {
   const Rise({super.key, required this.child, this.delay = 0, this.dy = 10});
   final Widget child;
@@ -61,41 +74,86 @@ class _RiseState extends State<Rise> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _a,
-    builder: (_, child) => Opacity(
-      opacity: _a.value,
-      child: Transform.translate(offset: Offset(0, widget.dy * (1 - _a.value)), child: child),
-    ),
-    child: widget.child,
-  );
+  Widget build(BuildContext context) {
+    if (Motion.reduced(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: _a,
+      builder: (_, child) => Opacity(
+        opacity: _a.value,
+        child: Transform.translate(offset: Offset(0, widget.dy * (1 - _a.value)), child: child),
+      ),
+      child: widget.child,
+    );
+  }
 }
 
-/// Pressable surface that dips slightly when touched.
+/// Pressable surface that dips slightly when touched. Exposed to TalkBack
+/// as a button (with its enabled / selected state), focusable with a
+/// keyboard or switch access (Enter / Space activate) and drawn with a 2px
+/// brand ring while focused. No dip under reduced motion.
 class Press extends StatefulWidget {
-  const Press({super.key, required this.child, this.onTap, this.radius = 16});
+  const Press({super.key, required this.child, this.onTap, this.radius = 16, this.button = false, this.selected, this.semanticLabel});
   final Widget child;
   final VoidCallback? onTap;
   final double radius;
+
+  /// Announce as a button even while disabled ([onTap] null), e.g. for [Btn].
+  final bool button;
+  final bool? selected;
+  final String? semanticLabel;
   @override
   State<Press> createState() => _PressState();
 }
 
 class _PressState extends State<Press> {
   bool _down = false;
+  bool _focused = false;
+
+  void _tap() {
+    final onTap = widget.onTap;
+    if (onTap == null) return;
+    HapticFeedback.selectionClick();
+    onTap();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: widget.onTap == null ? null : (_) => setState(() => _down = true),
-      onTapUp: widget.onTap == null ? null : (_) => setState(() => _down = false),
-      onTapCancel: () => setState(() => _down = false),
-      onTap: widget.onTap == null
-          ? null
-          : () {
-              HapticFeedback.selectionClick();
-              widget.onTap!();
-            },
-      child: AnimatedScale(scale: _down ? 0.975 : 1, duration: const Duration(milliseconds: 120), child: widget.child),
+    final enabled = widget.onTap != null;
+    final isButton = enabled || widget.button;
+    final reduced = Motion.reduced(context);
+    Widget child = AnimatedScale(scale: _down && !reduced ? 0.975 : 1, duration: Motion.fast, child: widget.child);
+    if (_focused) {
+      child = DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(widget.radius),
+          border: Border.all(color: Pal.of(context).dark ? C.brand400 : C.brand500, width: 2),
+        ),
+        child: child,
+      );
+    }
+    return Semantics(
+      container: isButton,
+      button: isButton ? true : null,
+      enabled: isButton ? enabled : null,
+      selected: widget.selected,
+      label: widget.semanticLabel,
+      onTap: enabled ? _tap : null,
+      child: FocusableActionDetector(
+        enabled: enabled,
+        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        onShowFocusHighlight: (v) => setState(() => _focused = v),
+        actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => _tap())},
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+          onTapCancel: () => setState(() => _down = false),
+          onTap: enabled ? _tap : null,
+          child: child,
+        ),
+      ),
     );
   }
 }
@@ -121,9 +179,11 @@ class Btn extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     final disabled = onPressed == null || loading;
+    // Drawn height; the tap area is never under [kMinTap] (sm is drawn at
+    // 36 inside a 44 hit box).
     final h = switch (size) {
-      BtnSize.sm => 34.0,
-      BtnSize.md => 42.0,
+      BtnSize.sm => 36.0,
+      BtnSize.md => 44.0,
       BtnSize.lg => 50.0,
     };
     final fs = switch (size) {
@@ -192,11 +252,20 @@ class Btn extends StatelessWidget {
       opacity: disabled && !loading ? 0.5 : 1,
       child: Press(
         onTap: disabled ? null : onPressed,
-        child: Container(
-          height: h,
-          padding: EdgeInsets.symmetric(horizontal: size == BtnSize.sm ? 12 : 16),
-          decoration: deco,
-          child: content,
+        button: true,
+        radius: size == BtnSize.lg ? 14 : 11,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: kMinTap, minWidth: kMinTap),
+          child: Align(
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Container(
+              height: h,
+              padding: EdgeInsets.symmetric(horizontal: size == BtnSize.sm ? 12 : 16),
+              decoration: deco,
+              child: loading ? Semantics(label: 'Working', child: content) : content,
+            ),
+          ),
         ),
       ),
     );
@@ -214,19 +283,22 @@ class IconBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
+    // The icon scales with [size]; the touch area never drops under [kMinTap].
+    final hit = math.max(size, kMinTap);
+    final tint = color ?? (danger ? C.red500 : p.muted);
     return Tooltip(
       message: tooltip,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           onTap: onPressed,
           splashColor: danger ? C.red500.withValues(alpha: .15) : null,
           child: SizedBox(
-            width: size,
-            height: size,
+            width: hit,
+            height: hit,
             child: Center(
-              child: Ic(icon, size: size * 0.5, color: color ?? (danger ? C.red500 : p.muted)),
+              child: Ic(icon, size: size * 0.5, color: onPressed == null ? tint.withValues(alpha: .45) : tint),
             ),
           ),
         ),
@@ -298,12 +370,15 @@ class TvCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: color ?? p.card,
+    // A Material (not a bare Container) so InkWell / ListTile ripples inside
+    // the card are visible and clipped to its corners (M12).
+    return DecoratedBox(
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), boxShadow: p.shadow),
+      child: Material(
+      color: color ?? p.card,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: borderColor ?? p.border),
-        boxShadow: p.shadow,
+        side: BorderSide(color: borderColor ?? p.border),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -336,6 +411,7 @@ class TvCard extends StatelessWidget {
             ),
           if (padded) Padding(padding: EdgeInsets.fromLTRB(18, title != null ? 12 : 18, 18, 18), child: child) else child,
         ],
+      ),
       ),
     );
   }
@@ -489,14 +565,14 @@ class TvAlert extends StatelessWidget {
     final t = toneOf(tone, dark);
     final icon = switch (tone) {
       Tone.green => PhosphorIconsDuotone.checkCircle,
-      Tone.amber => PhosphorIconsDuotone.warning,
+      Tone.amber || Tone.orange => PhosphorIconsDuotone.warning,
       Tone.blue => PhosphorIconsDuotone.info,
       _ => PhosphorIconsDuotone.warningOctagon,
     };
     return Rise(
       dy: 6,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+        padding: EdgeInsets.fromLTRB(14, 12, onDismiss != null ? 0 : 8, onDismiss != null ? 2 : 12),
         decoration: BoxDecoration(
           color: t.bg,
           borderRadius: BorderRadius.circular(14),
@@ -522,12 +598,9 @@ class TvAlert extends StatelessWidget {
               ),
             ),
             if (onDismiss != null)
-              InkWell(
-                onTap: onDismiss,
-                child: Padding(
-                  padding: const EdgeInsets.all(2),
-                  child: Ic(PhosphorIconsBold.x, size: 14, color: t.fg),
-                ),
+              Transform.translate(
+                offset: const Offset(4, -10),
+                child: IconBtn(PhosphorIconsBold.x, tooltip: 'Dismiss', size: 28, color: t.fg, onPressed: onDismiss),
               ),
           ],
         ),
@@ -541,13 +614,14 @@ void toast(BuildContext context, String message, {Tone tone = Tone.green}) {
   if (m == null) return;
   final icon = switch (tone) {
     Tone.red => PhosphorIconsFill.warningOctagon,
-    Tone.amber => PhosphorIconsFill.warning,
+    Tone.amber || Tone.orange => PhosphorIconsFill.warning,
     Tone.blue => PhosphorIconsFill.info,
     _ => PhosphorIconsFill.checkCircle,
   };
   final color = switch (tone) {
     Tone.red => C.red500,
     Tone.amber => C.amber500,
+    Tone.orange => C.orange500,
     Tone.blue => C.sky500,
     _ => C.emerald500,
   };
@@ -847,8 +921,8 @@ class _SkeletonState extends State<Skeleton> with SingleTickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    const base = Color(0x1F94A3B8);
-    const hi = Color(0x4294A3B8);
+    final base = C.slate400.withValues(alpha: .12);
+    final hi = C.slate400.withValues(alpha: .26);
     return AnimatedBuilder(
       animation: _c,
       builder: (_, _) {
@@ -858,7 +932,7 @@ class _SkeletonState extends State<Skeleton> with SingleTickerProviderStateMixin
           height: widget.height,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(widget.radius),
-            gradient: LinearGradient(begin: Alignment(x - 1, 0), end: Alignment(x, 0), colors: const [base, hi, base]),
+            gradient: LinearGradient(begin: Alignment(x - 1, 0), end: Alignment(x, 0), colors: [base, hi, base]),
           ),
         );
       },
@@ -871,7 +945,11 @@ class SkeletonRows extends StatelessWidget {
   final int rows;
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return Semantics(
+      label: 'Loading',
+      liveRegion: true,
+      child: ExcludeSemantics(
+      child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
@@ -896,6 +974,8 @@ class SkeletonRows extends StatelessWidget {
               ),
             ),
         ],
+      ),
+      ),
       ),
     );
   }
@@ -978,19 +1058,20 @@ class Segmented<T> extends StatelessWidget {
     final p = Pal.of(context);
     Widget item(SegOption<T> o) {
       final on = o.id == value;
-      return GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onChanged(o.id);
-        },
+      return Press(
+        onTap: () => onChanged(o.id),
+        selected: on,
+        radius: 10,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
+          duration: Motion.of(context),
           curve: Curves.easeOut,
+          constraints: const BoxConstraints(minHeight: 38),
+          alignment: Alignment.center,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: on ? (p.dark ? Colors.white.withValues(alpha: .10) : Colors.white) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
-            boxShadow: on && !p.dark ? const [BoxShadow(color: Color(0x140F172A), blurRadius: 6, offset: Offset(0, 2))] : null,
+            boxShadow: on && !p.dark ? [BoxShadow(color: C.slate900.withValues(alpha: .08), blurRadius: 6, offset: const Offset(0, 2))] : null,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1046,8 +1127,11 @@ class TvChip extends StatelessWidget {
     final Color fg = selected ? Colors.white : (danger ? (p.dark ? C.red300 : C.red600) : p.body);
     return Press(
       onTap: onTap,
+      selected: selected,
+      radius: 99,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
+        duration: Motion.of(context, const Duration(milliseconds: 180)),
+        constraints: const BoxConstraints(minHeight: 36),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           gradient: selected && !danger ? C.brandGradient : null,
@@ -1147,8 +1231,10 @@ class ChoiceCard extends StatelessWidget {
     final p = Pal.of(context);
     return Press(
       onTap: onTap,
+      selected: selected,
+      radius: 14,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
+        duration: Motion.of(context, const Duration(milliseconds: 180)),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: selected ? p.selectedBg : Colors.transparent,
@@ -1159,7 +1245,7 @@ class ChoiceCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Ic(icon, size: 19, color: selected ? p.accent : C.slate400),
+            Ic(icon, size: 19, color: selected ? p.accent : p.muted),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1331,7 +1417,7 @@ class _CopyBtnState extends State<CopyBtn> {
   Widget build(BuildContext context) => IconBtn(
     _done ? PhosphorIconsBold.check : PhosphorIconsDuotone.copy,
     tooltip: widget.label,
-    size: 30,
+    size: 32,
     color: _done ? C.emerald500 : null,
     onPressed: () async {
       await Clipboard.setData(ClipboardData(text: widget.value));
@@ -1355,6 +1441,149 @@ class RowList extends StatelessWidget {
       children: [
         for (var i = 0; i < children.length; i++) ...[if (i > 0) Divider(height: 1, thickness: 1, color: p.divider), children[i]],
       ],
+    );
+  }
+}
+
+/* ------------------------------------------------------- confirm + error */
+
+/// Asks before a destructive or important action. Resolves true when the
+/// user confirms (and [onConfirm], if given, completes without throwing),
+/// false on Cancel or when the sheet is dismissed. With [onConfirm], the
+/// confirm button spins while it runs and an error is shown in the sheet,
+/// which stays open.
+///
+///   if (!await showConfirm(context, 'Revoke access?', 'They lose access at once.', danger: true, confirmLabel: 'Revoke')) return;
+Future<bool> showConfirm(
+  BuildContext context,
+  String title,
+  String? body, {
+  String confirmLabel = 'Confirm',
+  String cancelLabel = 'Cancel',
+  bool danger = false,
+  PI? icon,
+  Future<void> Function()? onConfirm,
+}) async {
+  final ok = await showSheet<bool>(
+    context,
+    title: title,
+    icon: icon ?? (danger ? PhosphorIconsDuotone.warningOctagon : null),
+    description: body,
+    builder: (_) => _ConfirmActions(confirmLabel: confirmLabel, cancelLabel: cancelLabel, danger: danger, onConfirm: onConfirm),
+  );
+  return ok ?? false;
+}
+
+class _ConfirmActions extends StatefulWidget {
+  const _ConfirmActions({required this.confirmLabel, required this.cancelLabel, required this.danger, this.onConfirm});
+  final String confirmLabel;
+  final String cancelLabel;
+  final bool danger;
+  final Future<void> Function()? onConfirm;
+  @override
+  State<_ConfirmActions> createState() => _ConfirmActionsState();
+}
+
+class _ConfirmActionsState extends State<_ConfirmActions> {
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _confirm() async {
+    if (_busy) return;
+    final run = widget.onConfirm;
+    if (run == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await run();
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) setState(() => _error = _message(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  static String _message(Object e) {
+    final s = e.toString();
+    return s.startsWith('Exception: ') ? s.substring(11) : s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: !_busy,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_error != null) ...[TvAlert(_error!), const SizedBox(height: 14)],
+          Row(
+            children: [
+              Expanded(
+                child: Btn(widget.cancelLabel, expand: true, onPressed: _busy ? null : () => Navigator.of(context).pop(false)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Btn(
+                  widget.confirmLabel,
+                  expand: true,
+                  variant: widget.danger ? BtnVariant.danger : BtnVariant.primary,
+                  loading: _busy,
+                  onPressed: _confirm,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A load failed (instead of an endless spinner or a misleading empty
+/// state): says so and offers Try again. [onRetry] may be async; the button
+/// spins until it completes. [compact] renders an inline alert for cards.
+class ErrorState extends StatefulWidget {
+  const ErrorState({super.key, this.message, this.onRetry, this.title = 'Could not load this', this.compact = false});
+  final String? message;
+  final FutureOr<void> Function()? onRetry;
+  final String title;
+  final bool compact;
+  @override
+  State<ErrorState> createState() => _ErrorStateState();
+}
+
+class _ErrorStateState extends State<ErrorState> {
+  bool _busy = false;
+
+  Future<void> _retry() async {
+    final run = widget.onRetry;
+    if (run == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await run();
+    } catch (_) {
+      // The caller shows the new error through [message].
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final message = widget.message ?? 'Check your connection and try again.';
+    final retry = widget.onRetry == null
+        ? null
+        : Btn('Try again', icon: PhosphorIconsDuotone.arrowClockwise, size: widget.compact ? BtnSize.sm : BtnSize.md, loading: _busy, onPressed: _retry);
+    if (widget.compact) return TvAlert(message, title: widget.title, action: retry);
+    return Semantics(
+      liveRegion: true,
+      child: EmptyState(icon: PhosphorIconsDuotone.warningOctagon, tone: Tone.red, title: widget.title, body: message, action: retry),
     );
   }
 }

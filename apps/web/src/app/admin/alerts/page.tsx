@@ -2,15 +2,18 @@
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
-  BellRinging, Biohazard, Bug, DownloadSimple, Eye, FileText, Fire, Info, LockKey, Prohibit, ShareNetwork, ShieldCheck, ShieldWarning, Siren, Warning, WarningOctagon, ArrowSquareOut,
+  BellRinging, Biohazard, Bug, DownloadSimple, Eye, FileText, Info, LockKey, Prohibit, ShareNetwork, ShieldCheck, ShieldWarning, Siren, Warning, WarningOctagon, ArrowSquareOut, ArrowLeft, ListChecks, Pulse, SlidersHorizontal,
 } from '@phosphor-icons/react';
 import { Shell } from '@/components/shell';
+import { useSession } from '@/components/session';
 import { useToast } from '@/components/toast';
 import { SpotArt } from '@/components/art';
-import { Alert, Button, Card, EmptyState, Input, Label, PageTitle, Segmented, SkeletonRows, StatCard, Textarea, cx, relativeTime } from '@/components/ui';
+import { Alert, Button, Card, EmptyState, Input, Label, LoadError, PageTitle, Segmented, SkeletonRows, StatCard, Textarea, cx, relativeTime, staggerClass, tabPanelProps, ButtonLink, IconTile, SEVERITY_TILE_TONE } from '@/components/ui';
 import { api, errorText, formatDate } from '@/lib/api';
-import { AlertQueue } from './queue';
+import { useLatest } from '@/lib/hooks';
+import { AlertQueue, SEV } from './queue';
 import { RiskPolicy } from './policy';
 
 interface AlertItem {
@@ -22,12 +25,6 @@ interface AlertItem {
   documentTitle?: string | null;
 }
 
-const SEV = {
-  critical: { label: 'Critical', bar: 'bg-red-600', tile: 'bg-red-600 text-white', text: 'text-red-700 dark:text-red-300', icon: <WarningOctagon size={18} weight="fill" /> },
-  high: { label: 'High', bar: 'bg-orange-500', tile: 'bg-orange-500 text-white', text: 'text-orange-700 dark:text-orange-300', icon: <Warning size={18} weight="fill" /> },
-  medium: { label: 'Medium', bar: 'bg-amber-400', tile: 'bg-amber-400 text-amber-950', text: 'text-amber-700 dark:text-amber-300', icon: <Warning size={18} /> },
-  info: { label: 'Info', bar: 'bg-sky-500', tile: 'bg-sky-500 text-white', text: 'text-sky-700 dark:text-sky-300', icon: <Info size={18} weight="fill" /> },
-} as const;
 
 function kindIcon(kind: string): ReactNode {
   if (kind.includes('malware')) return <Biohazard size={20} />;
@@ -50,14 +47,36 @@ const RANGES = [
   { id: '720', label: '30 days' },
 ];
 
+type Tab = 'queue' | 'live' | 'policy';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function AlertsPage() {
-  const [tab, setTab] = useState<'queue' | 'live' | 'policy'>('queue');
+  const { user: me } = useSession();
+  const router = useRouter();
+  const [tab, setTab] = useState<Tab>('queue');
   // Escalation emails link to /admin/alerts?alert=<id>.
   const [openId, setOpenId] = useState<string | null>(null);
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('alert');
-    if (id && /^[0-9a-f-]{36}$/i.test(id)) setOpenId(id);
+    if (id && UUID.test(id)) setOpenId(id);
   }, []);
+
+  // The deep link is used once: closing that alert drops ?alert= from the URL,
+  // so switching tabs or reloading doesn't open it again (O2).
+  const consumeDeepLink = useCallback(() => {
+    setOpenId(null);
+    if (new URLSearchParams(window.location.search).has('alert')) router.replace('/admin/alerts', { scroll: false });
+  }, [router]);
+
+  if (me && me.role !== 'ADMIN') {
+    return (
+      <Shell>
+        <EmptyState art={<SpotArt tone="amber" icon={<LockKey size={30} />} />} title="Administrators only" action={<ButtonLink href="/" variant="soft" icon={<ArrowLeft size={16} weight="bold" />}>Back to documents</ButtonLink>}>
+          Alerts are reviewed by administrators.
+        </EmptyState>
+      </Shell>
+    );
+  }
 
   return (
     <Shell>
@@ -65,12 +84,14 @@ export default function AlertsPage() {
         title="Alerts"
         icon={<BellRinging size={26} />}
         subtitle="Every alert is kept: the queue shows all of them, highest severity first, with who acknowledged, assigned and resolved each one. Rules cover slow extraction over days and weeks, unusual sign-ins, refusals, integrity and malware."
-        actions={<Segmented value={tab} onChange={setTab} options={[{ id: 'queue', label: 'Queue' }, { id: 'live', label: 'Live view' }, { id: 'policy', label: 'Thresholds and limits' }]} />}
+        actions={<Segmented label="Alerts view" idBase="alerts-tab" value={tab} onChange={setTab} options={[{ id: 'queue', label: 'Queue', icon: <ListChecks size={16} /> }, { id: 'live', label: 'Live view', icon: <Pulse size={16} /> }, { id: 'policy', label: 'Thresholds and limits', icon: <SlidersHorizontal size={16} /> }]} />}
       />
-      {tab === 'queue' && <AlertQueue key={openId ?? 'queue'} openId={openId} />}
-      {tab === 'live' && <LiveAlerts />}
-      {tab === 'policy' && <RiskPolicy />}
-      <div className="mt-6"><BreakGlass onDone={() => undefined} /></div>
+      <div key={tab} {...tabPanelProps('alerts-tab', tab)} className="animate-fade-in outline-none">
+        {tab === 'queue' && <AlertQueue openId={openId} onDeepLinkClosed={consumeDeepLink} />}
+        {tab === 'live' && <LiveAlerts />}
+        {tab === 'policy' && <RiskPolicy />}
+      </div>
+      {tab === 'queue' && <div className="mt-6"><BreakGlass /></div>}
     </Shell>
   );
 }
@@ -79,19 +100,27 @@ export default function AlertsPage() {
 function LiveAlerts() {
   const [hours, setHours] = useState('24');
   const [alerts, setAlerts] = useState<AlertItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
+  const latest = useLatest();
 
+  // Old rows stay (dimmed) while another period loads; a slower, older
+  // response never replaces a newer one (X5).
   const load = useCallback(async () => {
+    const t = latest.begin();
+    setError(null);
+    setLoading(true);
     try {
-      const r = await api.get<{ alerts: AlertItem[] }>(`/admin/alerts?hours=${hours}`);
-      setAlerts(r.alerts);
+      const r = await api.get<{ alerts: AlertItem[] }>(`/admin/alerts?hours=${hours}`, { signal: t.signal });
+      if (t.isLatest()) setAlerts(r.alerts);
     } catch (err) {
-      setError(errorText(err));
+      if (t.isLatest()) { setAlerts(null); setError(err); }
+    } finally {
+      if (t.isLatest()) setLoading(false);
     }
-  }, [hours]);
+  }, [hours, latest]);
 
   useEffect(() => {
-    setAlerts(null);
     void load();
   }, [load]);
 
@@ -99,34 +128,32 @@ function LiveAlerts() {
 
   return (
     <>
-      <div className="mb-4 flex justify-end"><Segmented value={hours} onChange={setHours} options={RANGES} /></div>
+      <div className="mb-4 flex justify-end"><Segmented mode="filter" label="Period" value={hours} onChange={setHours} options={RANGES} /></div>
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        <StatCard label="Critical" value={count('critical')} icon={<WarningOctagon size={22} />} tone="red" hint="Act now" />
-        <StatCard label="High" value={count('high')} icon={<Warning size={22} />} tone="amber" hint="Look today" delay={60} />
-        <StatCard label="Medium" value={count('medium')} icon={<Fire size={22} />} tone="violet" hint="Worth a check" delay={120} />
-        <StatCard label="Info" value={count('info')} icon={<Info size={22} />} tone="blue" hint="For the record" delay={180} />
+        <StatCard label="Critical" value={count('critical')} icon={<WarningOctagon size={22} weight="fill" />} tone="red" hint="Act now" />
+        <StatCard label="High" value={count('high')} icon={<Warning size={22} weight="fill" />} tone="orange" hint="Look today" delay={40} />
+        <StatCard label="Medium" value={count('medium')} icon={<Warning size={22} />} tone="amber" hint="Worth a check" delay={80} />
+        <StatCard label="Info" value={count('info')} icon={<Info size={22} weight="fill" />} tone="blue" hint="For the record" delay={120} />
       </div>
 
-      {error && <div className="mb-4"><Alert onDismiss={() => setError(null)}>{error}</Alert></div>}
-
       <Card title="What to notice" icon={<BellRinging size={20} />} description={`Last ${RANGES.find((r) => r.id === hours)?.label.toLowerCase()}, recomputed now (up to 20 per kind; the queue keeps every alert)`} padded={false}>
-        {!alerts ? <SkeletonRows rows={4} /> : alerts.length === 0 ? (
+        {error && !loading ? <LoadError error={error} title="Couldn't load alerts" onRetry={() => void load()} /> : !alerts ? <SkeletonRows rows={4} label="Loading alerts…" /> : alerts.length === 0 ? (
           <EmptyState art={<SpotArt icon={<ShieldCheck size={30} />} tone="green" />} title="All clear">Nothing unusual in this period.</EmptyState>
         ) : (
-          <ul className="divide-y divide-slate-100 dark:divide-white/[0.05]">
+          <ul className={cx('divide-y divide-line transition-opacity duration-200', loading && 'opacity-60')} aria-busy={loading || undefined}>
             {alerts.map((a, i) => {
               const s = SEV[a.severity];
               return (
-                <li key={i} style={{ animationDelay: `${i * 30}ms` }} className="relative flex animate-rise items-start gap-4 px-5 py-4">
+                <li key={`${hours}-${i}`} className={cx('relative flex animate-rise items-start gap-4 px-5 py-4', staggerClass(i))}>
                   <span className={cx('absolute inset-y-3 left-0 w-1 rounded-r-full', s.bar)} />
-                  <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300">{kindIcon(a.kind)}</span>
+                  <IconTile tone={SEVERITY_TILE_TONE[a.severity.toUpperCase()] ?? 'slate'}>{kindIcon(a.kind)}</IconTile>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium leading-6">{a.message}</p>
-                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-fg-subtle">
                       <span className="capitalize">{a.kind.replace(/_/g, ' ')}</span>
                       {a.at && <><span>·</span><span title={formatDate(a.at)}>{relativeTime(a.at)}</span></>}
                       {a.documentId && (
-                        <><span>·</span><Link className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline dark:text-brand-300" href="/admin/audit"><FileText size={13} />{a.documentTitle ?? a.documentId}<ArrowSquareOut size={12} /></Link></>
+                        <><span>·</span><Link className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline dark:text-brand-300" href={`/admin/audit?documentId=${encodeURIComponent(a.documentId)}`}><FileText size={13} />{a.documentTitle ?? a.documentId}<ArrowSquareOut size={12} /></Link></>
                       )}
                     </p>
                   </div>
@@ -141,7 +168,7 @@ function LiveAlerts() {
   );
 }
 
-function BreakGlass({ onDone }: { onDone: () => void }) {
+function BreakGlass() {
   const toast = useToast();
   const [documentId, setDocumentId] = useState('');
   const [reason, setReason] = useState('');
@@ -151,15 +178,18 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    const id = documentId.trim();
+    if (!UUID.test(id)) { setError('Paste the full document id from the audit log: 36 characters, like 3f2b9c1e-8d4a-4c1b-9e2f-0a1b2c3d4e5f.'); return; }
     setError(null);
     setBusy(true);
     try {
       // Break-glass needs a second administrator (THREATS.md S19): this asks.
-      await api.post('/admin/approvals', { action: 'BREAK_GLASS', documentId: documentId.trim(), reason });
+      await api.post('/admin/approvals', { action: 'BREAK_GLASS', documentId: id, reason });
       setAsked(true);
       setReason('');
+      setDocumentId('');
       toast('Request sent. Another administrator must approve it on the Approvals page.', 'info');
-      onDone();
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -168,29 +198,40 @@ function BreakGlass({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-amber-300/70 bg-gradient-to-br from-amber-50 via-white to-white shadow-soft dark:border-amber-500/30 dark:from-amber-500/10 dark:via-transparent dark:to-transparent">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-1.5 bg-[repeating-linear-gradient(-45deg,#f59e0b_0_12px,#1f2937_12px_24px)] opacity-80" />
+    <section className="relative overflow-hidden rounded-2xl border border-warning-300/70 bg-gradient-to-br from-warning-50 via-surface to-surface shadow-soft dark:border-warning-500/30 dark:from-warning-500/10 dark:via-transparent dark:to-transparent">
+      <div aria-hidden className="hazard-stripe pointer-events-none absolute inset-x-0 top-0 h-1.5 opacity-80" />
       <div className="p-6">
         <div className="flex flex-wrap items-start gap-4">
-          <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg"><Siren size={26} /></span>
+          <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-warning-500 text-white shadow-lg ring-4 ring-warning-500/15"><Siren size={26} weight="fill" /></span>
           <div className="min-w-0 flex-1">
             <h2 className="text-[0.9375rem] font-semibold">Break-glass access</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-fg-muted">
               Administrators cannot open documents. In an emergency (legal hold, incident response) you can ask for one hour of view-only access to a single document: its pages, watermarked with your name, never the original file.
               A second administrator must approve; then you open it from the Approvals page, once, within 24 hours. The owner is emailed when it is approved,
               and the reason is recorded in the audit trail, raised as an alert, and shown in the document&apos;s own history. With only one administrator it is impossible.
             </p>
           </div>
-          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">Audited and alerted</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-warning-100 px-3 py-1 text-xs font-semibold text-warning-700 dark:bg-warning-500/20 dark:text-warning-300"><ShieldWarning size={14} />Audited and alerted</span>
         </div>
         <form onSubmit={submit} className="mt-5 grid gap-4 sm:grid-cols-3">
-          <Label label="Document id"><Input required value={documentId} onChange={(e) => setDocumentId(e.target.value)} placeholder="from the audit log" /></Label>
+          <Label label="Document id" hint="The 36-character id from the audit log.">
+            <Input
+              required
+              value={documentId}
+              onChange={(e) => setDocumentId(e.target.value)}
+              placeholder="from the audit log"
+              title="A document id: 36 characters, e.g. 3f2b9c1e-8d4a-4c1b-9e2f-0a1b2c3d4e5f"
+              spellCheck={false}
+              autoComplete="off"
+              className="font-mono"
+            />
+          </Label>
           <div className="sm:col-span-2">
             <Label label="Reason (at least 20 characters)" hint={`${reason.length}/500`}><Textarea rows={2} required minLength={20} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Legal hold requested by counsel, ticket LEG-142" /></Label>
           </div>
           <div><Button type="submit" variant="danger" icon={<Siren size={16} />} loading={busy}>Ask for emergency access</Button></div>
         </form>
-        {error && <div className="mt-4"><Alert>{error}</Alert></div>}
+        {error && <div className="mt-4"><Alert onDismiss={() => setError(null)}>{error}</Alert></div>}
         {asked && (
           <div className="mt-4"><Alert tone="amber" title="Waiting for a second administrator">Once another admin approves, open the access from <Link className="font-semibold underline" href="/admin/approvals">Approvals</Link>.</Alert></div>
         )}

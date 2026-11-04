@@ -34,6 +34,7 @@ class TotpSetupGuide extends StatelessWidget {
       children: [
         _Step(
           n: 1,
+          icon: PhosphorIconsDuotone.downloadSimple,
           title: 'Install Google Authenticator',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -46,6 +47,7 @@ class TotpSetupGuide extends StatelessWidget {
         ),
         _Step(
           n: 2,
+          icon: PhosphorIconsDuotone.key,
           title: 'Add TrustVault to the app',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,7 +66,7 @@ class TotpSetupGuide extends StatelessWidget {
               const SizedBox(height: 6),
               Container(
                 padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
-                decoration: BoxDecoration(color: p.soft2, borderRadius: BorderRadius.circular(10)),
+                decoration: BoxDecoration(color: p.soft, borderRadius: BorderRadius.circular(10), border: Border.all(color: p.line)),
                 child: Row(
                   children: [
                     Expanded(child: Mono(groupKey(secret), size: 13)),
@@ -78,7 +80,8 @@ class TotpSetupGuide extends StatelessWidget {
               Center(
                 child: Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: C.slate200)),
+                  // Always dark-on-white, also in dark mode: scanners need the contrast.
+                  decoration: BoxDecoration(color: C.slate50, borderRadius: BorderRadius.circular(16), border: Border.all(color: p.line), boxShadow: p.shadow),
                   child: QrImageView(
                     data: uri,
                     size: 150,
@@ -93,6 +96,7 @@ class TotpSetupGuide extends StatelessWidget {
         ),
         _Step(
           n: 3,
+          icon: PhosphorIconsDuotone.password,
           title: 'Type the 6-digit code it shows',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -109,13 +113,18 @@ class TotpSetupGuide extends StatelessWidget {
 }
 
 class _Step extends StatelessWidget {
-  const _Step({required this.n, required this.title, required this.child});
+  const _Step({required this.n, required this.title, required this.icon, required this.child});
   final int n;
   final String title;
+  final PI icon;
   final Widget child;
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    final p = Pal.of(context);
+    return Rise(
+      delay: (n - 1) * 60,
+      dy: 6,
+      child: Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -123,21 +132,27 @@ class _Step extends StatelessWidget {
           Container(
             width: 24,
             height: 24,
-            decoration: const BoxDecoration(shape: BoxShape.circle, gradient: C.brandGradient),
-            child: Center(child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600))),
+            decoration: const BoxDecoration(shape: BoxShape.circle, gradient: C.brandGradient, boxShadow: C.glow),
+            child: Center(child: Text('$n', style: const TextStyle(color: C.slate50, fontSize: 12, fontWeight: FontWeight.w600))),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(title, style: ts(context, size: 14, w: FontWeight.w600)),
+                Row(
+                  children: [
+                    Expanded(child: Text(title, style: ts(context, size: 14, w: FontWeight.w600))),
+                    Ic(icon, size: 16, color: p.faint),
+                  ],
+                ),
                 const SizedBox(height: 4),
                 child,
               ],
             ),
           ),
         ],
+      ),
       ),
     );
   }

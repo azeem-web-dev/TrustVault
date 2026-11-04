@@ -57,9 +57,9 @@ export function actionMeta(action: string): Meta {
 }
 
 export const OUTCOME_STYLE = {
-  ALLOWED: { dot: 'bg-emerald-500', tile: 'bg-emerald-50 text-emerald-600 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/25' },
-  DENIED: { dot: 'bg-red-500', tile: 'bg-red-50 text-red-600 ring-red-200 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/25' },
-  FAILED: { dot: 'bg-amber-500', tile: 'bg-amber-50 text-amber-600 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/25' },
+  ALLOWED: { dot: 'bg-success-500', tile: 'bg-success-50 text-success-600 ring-success-100 dark:bg-success-500/15 dark:text-success-300 dark:ring-success-500/25' },
+  DENIED: { dot: 'bg-danger-500', tile: 'bg-danger-50 text-danger-600 ring-danger-100 dark:bg-danger-500/15 dark:text-danger-300 dark:ring-danger-500/25' },
+  FAILED: { dot: 'bg-warning-500', tile: 'bg-warning-50 text-warning-700 ring-warning-100 dark:bg-warning-500/15 dark:text-warning-300 dark:ring-warning-500/25' },
 } as const;
 
 export function ActionIcon({ action, outcome }: { action: string; outcome: keyof typeof OUTCOME_STYLE }) {

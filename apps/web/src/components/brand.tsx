@@ -8,14 +8,14 @@ export function Logo({ size = 28 }: { size?: number }) {
     <svg aria-hidden width={size} height={size} viewBox="0 0 32 32">
       <defs>
         <linearGradient id={`${id}-l`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#6366f1" />
-          <stop offset="1" stopColor="#a855f7" />
+          <stop offset="0" className="[stop-color:var(--color-brand-500)]" />
+          <stop offset="1" className="[stop-color:var(--color-purple-500)]" />
         </linearGradient>
       </defs>
       <rect width="32" height="32" rx="9" fill={`url(#${id}-l)`} />
-      <rect width="32" height="16" rx="9" fill="#fff" fillOpacity="0.12" />
-      <path d="M16 6.5 L23.5 9.3 V15.6 C23.5 20.3 20.4 23.6 16 25.5 C11.6 23.6 8.5 20.3 8.5 15.6 V9.3 Z" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M12.6 15.8 L15.1 18.3 L19.6 13.6" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect width="32" height="16" rx="9" fillOpacity="0.12" className="fill-white" />
+      <path d="M16 6.5 L23.5 9.3 V15.6 C23.5 20.3 20.4 23.6 16 25.5 C11.6 23.6 8.5 20.3 8.5 15.6 V9.3 Z" fill="none" strokeWidth="1.8" className="stroke-white" strokeLinejoin="round" />
+      <path d="M12.6 15.8 L15.1 18.3 L19.6 13.6" fill="none" strokeWidth="2" className="stroke-white" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

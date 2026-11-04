@@ -30,7 +30,10 @@ final _exact = <String, ActionMeta>{
   'document.integrity': ActionMeta(PhosphorIconsDuotone.shieldWarning, 'Integrity check'),
   'access.grant': ActionMeta(PhosphorIconsDuotone.userPlus, 'Access granted'),
   'access.revoke': ActionMeta(PhosphorIconsDuotone.userMinus, 'Access removed'),
-  'access.suggestion': ActionMeta(PhosphorIconsDuotone.userPlus, 'Suggestion'),
+  // The API records 'access.suggest' (sharing.service.ts), not 'access.suggestion' (R12).
+  'access.suggest': ActionMeta(PhosphorIconsDuotone.userPlus, 'Suggestion'),
+  'group.member_add': ActionMeta(PhosphorIconsDuotone.usersThree, 'Added to group'),
+  'group.member_remove': ActionMeta(PhosphorIconsDuotone.usersThree, 'Removed from group'),
   'auth.login': ActionMeta(PhosphorIconsDuotone.signIn, 'Signed in'),
   'auth.logout': ActionMeta(PhosphorIconsDuotone.signOut, 'Signed out'),
   'auth.password_change': ActionMeta(PhosphorIconsDuotone.password, 'Password changed'),

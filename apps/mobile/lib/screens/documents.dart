@@ -18,6 +18,34 @@ import 'shell.dart';
 
 const _empty = {'q': '', 'owner': '', 'category': '', 'from': '', 'to': '', 'folderId': ''};
 
+/// File types the API accepts (it checks the content too), shared by the
+/// upload form and the new-version picker.
+const uploadExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'pptx', 'txt', 'csv', 'md'];
+
+/// The API refuses bigger files with a 413 (after the whole upload).
+const maxUploadBytes = 25 * 1024 * 1024;
+
+/// Why [name] / [size] cannot be uploaded, or null when it can. Checked
+/// before the file is read into memory and sent over mobile data.
+String? uploadProblem(String name, int size) {
+  final dot = name.lastIndexOf('.');
+  final ext = dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
+  if (!uploadExtensions.contains(ext)) return 'That file type can’t be uploaded. Use PDF, an image, Word, Excel, PowerPoint, text, CSV or Markdown.';
+  if (size > maxUploadBytes) return 'That file is over 25 MB (${formatBytes(size)}). Choose a smaller one.';
+  if (size == 0) return 'That file is empty.';
+  return null;
+}
+
+/// A date-only filter value (yyyy-mm-dd, the phone's day) as the UTC instant
+/// it starts ([end] false) or ends at, so the server compares the right
+/// moments whatever the phone's time zone.
+String _dayBound(String day, {required bool end}) {
+  final d = DateTime.tryParse(day);
+  if (d == null) return day;
+  final local = end ? DateTime(d.year, d.month, d.day, 23, 59, 59, 999) : DateTime(d.year, d.month, d.day);
+  return local.toUtc().toIso8601String();
+}
+
 class DocumentsScreen extends StatefulWidget {
   const DocumentsScreen({super.key});
   @override
@@ -36,6 +64,10 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   List<Map> _folders = [];
   String? _error;
   bool _grid = false;
+  /// Only the newest list / meta request may update the screen: switching
+  /// tabs or typing fast must not let an older, slower answer win.
+  int _seq = 0;
+  int _metaSeq = 0;
 
   // Null once signed out (a refresh can still finish after that).
   bool get _isOwner => mounted && (context.read<Session>().user?.isOwner ?? false);
@@ -63,24 +95,37 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   }
 
   Future<void> _load() async {
+    final my = ++_seq;
     final params = <String, String>{'scope': _scope, 'page': '$_page'};
     _applied.forEach((k, v) {
-      if (v.isNotEmpty) params[k] = k == 'to' ? '${v}T23:59:59' : v;
+      if (v.isEmpty) return;
+      params[k] = k == 'to'
+          ? _dayBound(v, end: true)
+          : k == 'from'
+          ? _dayBound(v, end: false)
+          : v;
     });
     try {
       final r = await Api.I.get('/documents?${Uri(queryParameters: params).query}') as Map;
-      if (mounted) {
+      if (mounted && my == _seq) {
         setState(() {
           _data = r;
           _error = null;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = errorText(e));
+      if (mounted && my == _seq) setState(() => _error = errorText(e));
     }
   }
 
+  /// Try again after the first load failed.
+  Future<void> _retry() async {
+    setState(() => _error = null);
+    await _refreshAll();
+  }
+
   Future<void> _loadMeta() async {
+    final my = ++_metaSeq;
     final scopes = _isOwner ? ['all', 'mine', 'shared', 'trash'] : ['all', 'shared'];
     final results = await Future.wait(
       scopes.map((s) async {
@@ -97,7 +142,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       cats = ((await Api.I.get('/documents/categories') as Map)['categories'] as List).cast<String>();
     } catch (_) {}
     if (_isOwner) await _loadFolders();
-    if (mounted) {
+    if (mounted && my == _metaSeq) {
       setState(() {
         _counts = Map.fromEntries(results);
         _categories = cats;
@@ -108,8 +153,16 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   Future<void> _loadFolders() async {
     try {
       final f = ((await Api.I.get('/folders') as Map)['folders'] as List).cast<Map>();
-      if (mounted) setState(() => _folders = f);
+      if (mounted) _foldersChanged(f);
     } catch (_) {}
+  }
+
+  /// New folder list (loaded, or edited in the Folders sheet). A folder
+  /// filter that points at a folder which no longer exists is dropped.
+  void _foldersChanged(List<Map> f) {
+    setState(() => _folders = f);
+    final active = _applied['folderId']!;
+    if (active.isNotEmpty && !f.any((x) => x['id'] == active)) _apply({..._applied, 'folderId': ''});
   }
 
   void _apply(Map<String, String> f) {
@@ -255,10 +308,14 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                     top: -4,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(color: C.brand600, borderRadius: BorderRadius.circular(8)),
-                      child: Text(
-                        '$advanced',
-                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                      decoration: BoxDecoration(
+                        color: C.brand600,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: p.bg, width: 1.5),
+                      ),
+                      child: Semantics(
+                        label: '$advanced advanced filter${advanced == 1 ? '' : 's'} on',
+                        child: ExcludeSemantics(child: Text('$advanced', style: ts(context, size: 11, w: FontWeight.w600, color: Colors.white))),
                       ),
                     ),
                   ),
@@ -282,11 +339,13 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: InputChip(
-                        label: Text(_chipLabel(k), style: const TextStyle(fontSize: 12, color: Colors.white)),
-                        backgroundColor: p.dark ? C.slate700 : C.slate900,
-                        deleteIconColor: Colors.white,
-                        side: BorderSide.none,
+                        label: Text(_chipLabel(k), style: ts(context, size: 12, w: FontWeight.w500, color: p.accent)),
+                        backgroundColor: p.selectedBg,
+                        deleteIcon: Ic(PhosphorIconsBold.x, size: 12, color: p.accent),
+                        deleteButtonTooltipMessage: 'Remove filter',
+                        side: BorderSide(color: p.selectedBorder),
                         shape: const StadiumBorder(),
+                        materialTapTargetSize: MaterialTapTargetSize.padded,
                         onDeleted: () => _apply({..._applied, k: ''}),
                       ),
                     ),
@@ -295,15 +354,31 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
           ),
         ],
         const SizedBox(height: 16),
-        if (_error != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), const SizedBox(height: 12)],
-        if (data == null)
-          TvCard(padded: false, child: const SkeletonRows(rows: 6))
-        else if (docs.isEmpty)
-          _emptyState(p)
-        else if (_grid)
-          _DocGrid(docs: docs, trash: _scope == 'trash', onOpen: _open)
-        else
-          _DocList(docs: docs, trash: _scope == 'trash', onOpen: _open),
+        if (_error != null && data != null) ...[TvAlert(_error!, onDismiss: () => setState(() => _error = null)), const SizedBox(height: 12)],
+        AnimatedSwitcher(
+          duration: Motion.of(context, Motion.base),
+          switchInCurve: Motion.easeOut,
+          switchOutCurve: Motion.easeIn,
+          layoutBuilder: (current, previous) => Stack(alignment: Alignment.topCenter, children: [...previous, ?current]),
+          child: KeyedSubtree(
+            key: ValueKey(
+              data == null
+                  ? (_error != null ? 'error' : 'loading')
+                  : docs.isEmpty
+                  ? 'empty-$_scope'
+                  : '${_grid ? 'grid' : 'list'}-$_scope-$_page',
+            ),
+            child: data == null && _error != null
+                ? TvCard(child: ErrorState(title: 'Could not load your documents', message: _error, onRetry: _retry))
+                : data == null
+                ? TvCard(padded: false, child: const SkeletonRows(rows: 6))
+                : docs.isEmpty
+                ? _emptyState(p)
+                : _grid
+                ? _DocGrid(docs: docs, trash: _scope == 'trash', onOpen: _open)
+                : _DocList(docs: docs, trash: _scope == 'trash', onOpen: _open),
+          ),
+        ),
         if (data != null && total > pageSize) ...[
           const SizedBox(height: 16),
           Text(
@@ -347,14 +422,23 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     final p = Pal.of(context);
     return Tooltip(
       message: tip,
-      child: GestureDetector(
+      excludeFromSemantics: true,
+      child: Press(
         onTap: tap,
+        radius: 9,
+        button: true,
+        selected: on,
+        semanticLabel: tip,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          width: 36,
-          height: 34,
-          decoration: BoxDecoration(color: on ? p.soft2 : Colors.transparent, borderRadius: BorderRadius.circular(9)),
-          child: Center(child: Ic(icon, size: 18, color: on ? p.text : p.muted)),
+          duration: Motion.of(context, Motion.fast),
+          width: kMinTap,
+          height: kMinTap - 6,
+          decoration: BoxDecoration(
+            color: on ? p.raised : p.raised.withValues(alpha: 0),
+            borderRadius: BorderRadius.circular(9),
+            boxShadow: on ? p.shadow : const [],
+          ),
+          child: Center(child: Ic(icon, size: 18, color: on ? p.accent : p.muted)),
         ),
       ),
     );
@@ -375,21 +459,21 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         icon: PhosphorIconsDuotone.fileMagnifyingGlass,
         title: 'No documents match',
         body: 'Search only covers documents you can access, so something shared with others but not you will never appear.',
-        action: Btn('Clear search and filters', onPressed: _clearAll),
+        action: Btn('Clear search and filters', icon: PhosphorIconsBold.x, onPressed: _clearAll),
       );
     } else {
       body = EmptyState(
         icon: PhosphorIconsDuotone.files,
         title: _isOwner ? 'Upload your first document' : 'Nothing has been shared with you yet',
         body: _isOwner ? 'It is encrypted, scanned for malware, and visible to nobody until you share it.' : 'When someone shares a document with you, it appears here.',
-        action: _isOwner ? Btn('Upload document', variant: BtnVariant.primary, icon: PhosphorIconsBold.plus, onPressed: _openUpload) : null,
+        action: _isOwner ? Btn('Upload document', variant: BtnVariant.primary, icon: PhosphorIconsDuotone.cloudArrowUp, onPressed: _openUpload) : null,
       );
     }
     return Container(
       decoration: BoxDecoration(
         color: p.card.withValues(alpha: .6),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: p.dark ? Colors.white.withValues(alpha: .1) : C.slate300),
+        border: Border.all(color: p.dashed),
       ),
       child: body,
     );
@@ -402,6 +486,10 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
 
   Future<void> _openFilters() async {
     final f = Map<String, String>.of(_applied);
+    // A dropdown asserts its value is one of its items: a folder deleted
+    // elsewhere or a category that disappeared must read as "Any".
+    if (!_categories.contains(f['category'])) f['category'] = '';
+    if (!_folders.any((x) => x['id'] == f['folderId'])) f['folderId'] = '';
     final owner = TextEditingController(text: f['owner']);
     final res = await showSheet<Map<String, String>>(
       context,
@@ -423,7 +511,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                 onTap: () => pickDate(key),
                 child: InputDecorator(
                   decoration: fieldDeco(icon: PhosphorIconsDuotone.calendarBlank),
-                  child: Text(f[key]!.isEmpty ? 'Any' : f[key]!, style: ts(ctx, size: 14, color: f[key]!.isEmpty ? C.slate400 : null)),
+                  child: Text(f[key]!.isEmpty ? 'Any' : f[key]!, style: ts(ctx, size: 14, color: f[key]!.isEmpty ? Pal.of(ctx).faint : null)),
                 ),
               ),
             ),
@@ -485,7 +573,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                     ),
                   ),
                   gap8,
-                  Btn('Clear all', variant: BtnVariant.ghost, onPressed: () => Navigator.pop(ctx, {...Map.of(_empty), 'q': _applied['q']!})),
+                  Btn('Clear all', variant: BtnVariant.ghost, icon: PhosphorIconsBold.x, onPressed: () => Navigator.pop(ctx, {...Map.of(_empty), 'q': _applied['q']!})),
                 ],
               ),
             ],
@@ -493,7 +581,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         },
       ),
     );
-    if (res != null) _apply(res);
+    if (res != null && mounted) _apply(res);
   }
 
   Future<void> _openUpload() async {
@@ -521,7 +609,12 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       title: 'Your folders',
       icon: PhosphorIconsDuotone.folderSimple,
       description: 'Folders only organise your own documents. They are never shared: access is always granted per document.',
-      builder: (_) => _FolderManager(initial: _folders, onChanged: (f) => setState(() => _folders = f)),
+      builder: (_) => _FolderManager(
+        initial: _folders,
+        onChanged: (f) {
+          if (mounted) _foldersChanged(f);
+        },
+      ),
     );
   }
 }
@@ -542,10 +635,17 @@ class _DocList extends StatelessWidget {
         children: [
           for (var i = 0; i < docs.length; i++)
             Rise(
-              delay: i * 25,
-              child: InkWell(
-                onTap: () => onOpen(docs[i]['id'] as String),
-                child: Padding(padding: const EdgeInsets.fromLTRB(14, 13, 14, 13), child: _row(context, p, docs[i])),
+              key: ValueKey(docs[i]['id']),
+              delay: 40 * i.clamp(0, 8),
+              // Material so the ripple paints on the card, not behind it.
+              child: Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  onTap: () => onOpen(docs[i]['id'] as String),
+                  hoverColor: p.soft,
+                  highlightColor: p.soft2,
+                  child: Padding(padding: const EdgeInsets.fromLTRB(14, 13, 14, 13), child: _row(context, p, docs[i])),
+                ),
               ),
             ),
         ],
@@ -605,7 +705,7 @@ class _DocList extends StatelessWidget {
                       style: ts(context, size: 12, color: p.body),
                     ),
                   ),
-                  Text('  ·  ${relativeTime((trash ? d['deletedAt'] : d['updatedAt']) as String?)}', style: ts(context, size: 12, color: p.faint)),
+                  Text('  ·  ${relativeTime((trash ? d['deletedAt'] : d['updatedAt']) as String?)}', style: ts(context, size: 12, color: p.subtle)),
                 ],
               ),
             ],
@@ -625,20 +725,27 @@ class _DocGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     final cols = MediaQuery.of(context).size.width > 700 ? 3 : 2;
+    // Taller tiles with larger system text, so titles and meta never overflow.
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final extent = 196 * scale.clamp(1.0, 1.8);
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: docs.length,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 196),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: extent),
       itemBuilder: (_, i) {
         final d = docs[i];
         final cur = d['current'] as Map?;
         final owner = d['owner'] as Map;
         final access = d['myAccess'] as String;
         return Rise(
-          delay: i * 30,
+          key: ValueKey(d['id']),
+          delay: 40 * i.clamp(0, 8),
           child: Press(
             onTap: () => onOpen(d['id'] as String),
+            button: true,
+            radius: 18,
+            semanticLabel: d['title'] as String,
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -686,7 +793,7 @@ class _DocGrid extends StatelessWidget {
                           style: ts(context, size: 11.5, color: p.body),
                         ),
                       ),
-                      Text(relativeTime((trash ? d['deletedAt'] : d['updatedAt']) as String?), style: ts(context, size: 11, color: p.faint)),
+                      Text(relativeTime((trash ? d['deletedAt'] : d['updatedAt']) as String?), style: ts(context, size: 11.5, color: p.subtle)),
                     ],
                   ),
                 ],
@@ -719,20 +826,35 @@ class _UploadFormState extends State<_UploadForm> {
   bool _busy = false;
   String? _error;
 
+  @override
+  void dispose() {
+    _title.dispose();
+    _desc.dispose();
+    super.dispose();
+  }
+
   Future<void> _pick() async {
-    final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'pptx', 'txt', 'csv', 'md']);
-    if (f == null) return;
+    if (_busy) return;
+    final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: uploadExtensions);
+    if (f == null || !mounted) return;
     final size = await f.length() ?? 0;
+    if (!mounted) return;
+    final problem = uploadProblem(f.name, size);
+    if (problem != null) {
+      setState(() => _error = problem);
+      return;
+    }
     setState(() {
       _file = f;
       _size = size;
+      _error = null;
       if (_title.text.isEmpty) _title.text = f.name.replaceAll(RegExp(r'\.[^.]+$'), '').replaceAll(RegExp(r'[-_]+'), ' ');
     });
   }
 
   Future<void> _submit() async {
     final f = _file;
-    if (f == null) return;
+    if (f == null || _busy) return;
     if (_title.text.trim().isEmpty || _category.trim().isEmpty) {
       setState(() => _error = 'Title and category are required.');
       return;
@@ -760,21 +882,27 @@ class _UploadFormState extends State<_UploadForm> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     final f = _file;
+    final ok = toneOf(Tone.green, p.dark);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Press(
-          onTap: _pick,
+          onTap: _busy ? null : _pick,
+          button: true,
+          semanticLabel: f == null ? 'Choose a file to upload' : 'Change the file, ${f.name}',
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
+            duration: Motion.of(context, Motion.base),
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
             decoration: BoxDecoration(
-              color: f != null ? (p.dark ? C.emerald500.withValues(alpha: .06) : C.emerald50.withValues(alpha: .6)) : p.soft,
+              color: f != null ? ok.bg : p.soft,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: f != null ? (p.dark ? C.emerald500.withValues(alpha: .4) : C.emerald300) : (p.dark ? Colors.white.withValues(alpha: .15) : C.slate300), width: 1.6),
+              border: Border.all(color: f != null ? ok.ring : p.dashed, width: 1.6),
             ),
-            child: f != null
+            child: AnimatedSwitcher(
+              duration: Motion.of(context, Motion.base),
+              child: f != null
                 ? Row(
+                    key: ValueKey('file-${f.name}'),
                     children: [
                       FileIcon(f.name, size: 48),
                       const SizedBox(width: 12),
@@ -792,9 +920,11 @@ class _UploadFormState extends State<_UploadForm> {
                           ],
                         ),
                       ),
+                      Ic(PhosphorIconsDuotone.checkCircle, size: 20, color: p.success),
                     ],
                   )
                 : Column(
+                    key: const ValueKey('pick'),
                     children: [
                       const IconTile(PhosphorIconsDuotone.cloudArrowUp, size: 48, gradient: true),
                       const SizedBox(height: 12),
@@ -818,6 +948,7 @@ class _UploadFormState extends State<_UploadForm> {
                       ),
                     ],
                   ),
+            ),
           ),
         ),
         gap16,
@@ -835,12 +966,12 @@ class _UploadFormState extends State<_UploadForm> {
           hint: 'e.g. HR, Legal, Finance',
           child: Autocomplete<String>(
             optionsBuilder: (v) => widget.categories.where((c) => c.toLowerCase().contains(v.text.toLowerCase())),
-            onSelected: (v) => _category = v,
+            onSelected: (v) => setState(() => _category = v),
             fieldViewBuilder: (ctx, ctrl, focus, submit) => TextField(
               controller: ctrl,
               focusNode: focus,
               maxLength: 60,
-              onChanged: (v) => _category = v,
+              onChanged: (v) => setState(() => _category = v),
               decoration: fieldDeco(hint: 'Pick or type', icon: PhosphorIconsDuotone.tag).copyWith(counterText: ''),
             ),
           ),
@@ -860,7 +991,7 @@ class _UploadFormState extends State<_UploadForm> {
           FieldLabel(
             'Folder (optional)',
             child: DropdownButtonFormField<String>(
-              initialValue: _folderId,
+              initialValue: widget.folders.any((x) => x['id'] == _folderId) ? _folderId : '',
               decoration: fieldDeco(icon: PhosphorIconsDuotone.folderSimple),
               items: [
                 const DropdownMenuItem(value: '', child: Text('None')),
@@ -870,7 +1001,7 @@ class _UploadFormState extends State<_UploadForm> {
             ),
           ),
         ],
-        if (_error != null) ...[gap16, TvAlert(_error!)],
+        if (_error != null) ...[gap16, Rise(key: ValueKey(_error), dy: 6, child: Semantics(liveRegion: true, child: TvAlert(_error!)))],
         const SizedBox(height: 22),
         Btn(
           _busy ? 'Encrypting and uploading…' : 'Upload',
@@ -879,7 +1010,7 @@ class _UploadFormState extends State<_UploadForm> {
           expand: true,
           icon: PhosphorIconsDuotone.cloudArrowUp,
           loading: _busy,
-          onPressed: f == null ? null : _submit,
+          onPressed: f == null || _busy ? null : _submit,
         ),
       ],
     );
@@ -900,22 +1031,63 @@ class _FolderManagerState extends State<_FolderManager> {
   late List<Map> _folders = widget.initial;
   final _name = TextEditingController();
   String? _error;
+  /// 'create', or the id of the folder being deleted; one action at a time.
+  String? _busy;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
 
   Future<void> _reload() async {
     final f = ((await Api.I.get('/folders') as Map)['folders'] as List).cast<Map>();
-    setState(() => _folders = f);
+    // The parent still wants the new list after this sheet has closed.
     widget.onChanged(f);
+    if (mounted) setState(() => _folders = f);
   }
 
-  Future<void> _act(Future<void> Function() fn, String msg) async {
+  Future<void> _act(String key, Future<void> Function() fn, String msg) async {
+    if (_busy != null) return;
+    setState(() {
+      _busy = key;
+      _error = null;
+    });
     try {
       await fn();
-      setState(() => _error = null);
       if (mounted) toast(context, msg);
       await _reload();
     } catch (e) {
-      setState(() => _error = errorText(e));
+      if (mounted) setState(() => _error = errorText(e));
+    } finally {
+      if (mounted) setState(() => _busy = null);
     }
+  }
+
+  void _create() {
+    final n = _name.text.trim();
+    if (n.isEmpty) return;
+    _act('create', () async {
+      await Api.I.post('/folders', {'name': n});
+      _name.clear();
+    }, 'Folder “$n” created');
+  }
+
+  Future<void> _delete(Map f) async {
+    if (_busy != null) return;
+    final count = (f['documents'] as num?)?.toInt() ?? 0;
+    final ok = await showConfirm(
+      context,
+      'Delete “${f['name']}”?',
+      count == 0
+          ? 'The folder is empty. This can’t be undone.'
+          : 'Its $count document${count == 1 ? '' : 's'} stay${count == 1 ? 's' : ''} in your list, just without a folder. This can’t be undone.',
+      confirmLabel: 'Delete folder',
+      danger: true,
+      icon: PhosphorIconsDuotone.trash,
+    );
+    if (!ok || !mounted) return;
+    await _act(f['id'] as String, () => Api.I.delete('/folders/${f['id']}'), 'Folder “${f['name']}” deleted');
   }
 
   @override
@@ -930,27 +1102,17 @@ class _FolderManagerState extends State<_FolderManager> {
               child: TextField(
                 controller: _name,
                 maxLength: 80,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _create(),
                 onChanged: (_) => setState(() {}),
                 decoration: fieldDeco(hint: 'New folder name', icon: PhosphorIconsDuotone.folderSimplePlus).copyWith(counterText: ''),
               ),
             ),
             gap8,
-            Btn(
-              'Add',
-              variant: BtnVariant.primary,
-              onPressed: _name.text.trim().isEmpty
-                  ? null
-                  : () {
-                      final n = _name.text.trim();
-                      _act(() async {
-                        await Api.I.post('/folders', {'name': n});
-                        _name.clear();
-                      }, 'Folder “$n” created');
-                    },
-            ),
+            Btn('Add', variant: BtnVariant.primary, icon: PhosphorIconsBold.plus, loading: _busy == 'create', onPressed: _name.text.trim().isEmpty || _busy != null ? null : _create),
           ],
         ),
-        if (_error != null) ...[gap12, TvAlert(_error!)],
+        if (_error != null) ...[gap12, Semantics(liveRegion: true, child: TvAlert(_error!))],
         gap16,
         if (_folders.isEmpty)
           const EmptyState(icon: PhosphorIconsDuotone.folderSimple, tone: Tone.amber, title: 'No folders yet', body: 'Create one to keep your documents tidy.')
@@ -962,8 +1124,12 @@ class _FolderManagerState extends State<_FolderManager> {
             ),
             child: RowList(
               children: [
-                for (final f in _folders)
-                  Padding(
+                for (final (i, f) in _folders.indexed)
+                  Rise(
+                    key: ValueKey(f['id']),
+                    delay: 40 * i.clamp(0, 8),
+                    dy: 6,
+                    child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
                     child: Row(
                       children: [
@@ -978,14 +1144,22 @@ class _FolderManagerState extends State<_FolderManager> {
                             ],
                           ),
                         ),
-                        IconBtn(
-                          PhosphorIconsDuotone.trash,
-                          tooltip: 'Delete folder ${f['name']}',
-                          danger: true,
-                          onPressed: () => _act(() => Api.I.delete('/folders/${f['id']}'), 'Folder “${f['name']}” deleted'),
-                        ),
+                        if (_busy == f['id'])
+                          const SizedBox(
+                            width: kMinTap,
+                            height: kMinTap,
+                            child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+                          )
+                        else
+                          IconBtn(
+                            PhosphorIconsDuotone.trash,
+                            tooltip: 'Delete folder ${f['name']}',
+                            danger: true,
+                            onPressed: _busy != null ? null : () => _delete(f),
+                          ),
                       ],
                     ),
+                  ),
                   ),
               ],
             ),

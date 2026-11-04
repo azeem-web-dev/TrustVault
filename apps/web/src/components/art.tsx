@@ -121,21 +121,24 @@ export function VaultHero({ className }: { className?: string }) {
   );
 }
 
-/** A row of linked blocks: the audit hash chain, drawn intact or broken. */
+/** A row of linked blocks: the audit hash chain, drawn intact or broken. Theme-aware (class colours). */
 export function ChainArt({ ok = true, className }: { ok?: boolean; className?: string }) {
-  const color = ok ? '#10b981' : '#ef4444';
+  const line = ok ? 'stroke-emerald-500' : 'stroke-slate-400 dark:stroke-slate-500';
   return (
     <svg viewBox="0 0 220 64" className={className} aria-hidden>
       {[0, 1, 2, 3].map((i) => {
         const broken = !ok && i === 2;
         return (
           <g key={i} transform={`translate(${6 + i * 54} 12)`}>
-            {i > 0 && <path d={broken ? 'M-14 20 h5 m4 0 h5' : 'M-14 20 H0'} stroke={broken ? '#ef4444' : color} strokeWidth="3" strokeLinecap="round" opacity="0.7" />}
-            <rect width="40" height="40" rx="10" fill={broken ? '#fee2e2' : ok ? '#d1fae5' : '#f1f5f9'} stroke={broken ? '#ef4444' : color} strokeOpacity="0.6" strokeWidth="1.5" />
+            {i > 0 && <path d={broken ? 'M-14 20 h5 m4 0 h5' : 'M-14 20 H0'} className={broken ? 'stroke-red-500' : line} strokeWidth="3" strokeLinecap="round" opacity="0.7" />}
+            <rect
+              width="40" height="40" rx="10" strokeOpacity="0.6" strokeWidth="1.5"
+              className={broken ? 'fill-red-100 stroke-red-500 dark:fill-red-500/20' : ok ? 'fill-emerald-100 stroke-emerald-500 dark:fill-emerald-500/15' : 'fill-slate-100 stroke-slate-400 dark:fill-white/10 dark:stroke-slate-500'}
+            />
             {broken ? (
-              <path d="M14 14 L26 26 M26 14 L14 26" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" />
+              <path d="M14 14 L26 26 M26 14 L14 26" className="stroke-red-500" strokeWidth="3" strokeLinecap="round" />
             ) : (
-              <path d="M13 20 L18 25 L28 15" stroke={color} strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M13 20 L18 25 L28 15" className={ok ? 'stroke-emerald-500' : 'stroke-slate-400 dark:stroke-slate-500'} strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
             )}
           </g>
         );
@@ -144,39 +147,48 @@ export function ChainArt({ ok = true, className }: { ok?: boolean; className?: s
   );
 }
 
+/*
+ * Spot tones as class names (theme colours through CSS variables, X14), so
+ * a brand retune follows automatically. Written out in full so Tailwind sees
+ * every class.
+ */
 const SPOT_TONES = {
-  brand: ['#6366f1', '#a855f7'],
-  green: ['#10b981', '#14b8a6'],
-  amber: ['#f59e0b', '#f97316'],
-  red: ['#ef4444', '#f43f5e'],
-  slate: ['#64748b', '#94a3b8'],
+  brand: { stopA: '[stop-color:var(--color-brand-500)]', stopB: '[stop-color:var(--color-purple-500)]', fillA: 'fill-brand-500', fillB: 'fill-purple-500', strokeA: 'stroke-brand-500', strokeB: 'stroke-purple-500' },
+  green: { stopA: '[stop-color:var(--color-emerald-500)]', stopB: '[stop-color:var(--color-teal-500)]', fillA: 'fill-emerald-500', fillB: 'fill-teal-500', strokeA: 'stroke-emerald-500', strokeB: 'stroke-teal-500' },
+  amber: { stopA: '[stop-color:var(--color-amber-500)]', stopB: '[stop-color:var(--color-orange-500)]', fillA: 'fill-amber-500', fillB: 'fill-orange-500', strokeA: 'stroke-amber-500', strokeB: 'stroke-orange-500' },
+  orange: { stopA: '[stop-color:var(--color-orange-500)]', stopB: '[stop-color:var(--color-red-500)]', fillA: 'fill-orange-500', fillB: 'fill-red-500', strokeA: 'stroke-orange-500', strokeB: 'stroke-red-500' },
+  red: { stopA: '[stop-color:var(--color-red-500)]', stopB: '[stop-color:var(--color-rose-500)]', fillA: 'fill-red-500', fillB: 'fill-rose-500', strokeA: 'stroke-red-500', strokeB: 'stroke-rose-500' },
+  blue: { stopA: '[stop-color:var(--color-sky-500)]', stopB: '[stop-color:var(--color-brand-500)]', fillA: 'fill-sky-500', fillB: 'fill-brand-500', strokeA: 'stroke-sky-500', strokeB: 'stroke-brand-500' },
+  violet: { stopA: '[stop-color:var(--color-violet-500)]', stopB: '[stop-color:var(--color-purple-500)]', fillA: 'fill-violet-500', fillB: 'fill-purple-500', strokeA: 'stroke-violet-500', strokeB: 'stroke-purple-500' },
+  slate: { stopA: '[stop-color:var(--color-slate-500)]', stopB: '[stop-color:var(--color-slate-400)]', fillA: 'fill-slate-500', fillB: 'fill-slate-400', strokeA: 'stroke-slate-500', strokeB: 'stroke-slate-400' },
 } as const;
+export type SpotTone = keyof typeof SPOT_TONES;
 
 /** Spot illustration for empty states: a glowing tile with an icon and small floating shapes. */
-export function SpotArt({ icon, tone = 'brand' }: { icon: ReactNode; tone?: keyof typeof SPOT_TONES }) {
+export function SpotArt({ icon, tone = 'brand' }: { icon: ReactNode; tone?: SpotTone }) {
   const id = useId().replace(/:/g, '');
-  const [a, b] = SPOT_TONES[tone];
+  const t = SPOT_TONES[tone] ?? SPOT_TONES.brand;
   return (
     <div className="relative size-32">
       <svg viewBox="0 0 128 128" className="absolute inset-0" aria-hidden>
         <defs>
           <radialGradient id={`${id}-glow`} cx="0.5" cy="0.5" r="0.5">
-            <stop offset="0" stopColor={a} stopOpacity="0.22" />
-            <stop offset="1" stopColor={a} stopOpacity="0" />
+            <stop offset="0" stopOpacity="0.22" className={t.stopA} />
+            <stop offset="1" stopOpacity="0" className={t.stopA} />
           </radialGradient>
           <linearGradient id={`${id}-tile`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor={a} />
-            <stop offset="1" stopColor={b} />
+            <stop offset="0" className={t.stopA} />
+            <stop offset="1" className={t.stopB} />
           </linearGradient>
         </defs>
         <circle cx="64" cy="64" r="62" fill={`url(#${id}-glow)`} />
-        <circle cx="64" cy="64" r="46" fill="none" stroke={a} strokeOpacity="0.25" strokeDasharray="3 6" className="animate-dash" />
+        <circle cx="64" cy="64" r="46" fill="none" strokeOpacity="0.25" strokeDasharray="3 6" className={`animate-dash ${t.strokeA}`} />
         <rect x="38" y="38" width="52" height="52" rx="16" fill={`url(#${id}-tile)`} />
-        <rect x="38" y="38" width="52" height="26" rx="16" fill="#fff" fillOpacity="0.12" />
-        <circle cx="22" cy="40" r="4" fill={b} fillOpacity="0.5" className="animate-float" />
-        <rect x="100" y="28" width="10" height="10" rx="3" fill={a} fillOpacity="0.45" transform="rotate(20 105 33)" className="animate-float-4" />
-        <circle cx="104" cy="98" r="5" fill={a} fillOpacity="0.35" className="animate-float-5" />
-        <path d="M20 92 l4 4 m0 -4 l-4 4" stroke={b} strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
+        <rect x="38" y="38" width="52" height="26" rx="16" fillOpacity="0.12" className="fill-white" />
+        <circle cx="22" cy="40" r="4" fillOpacity="0.5" className={`animate-float ${t.fillB}`} />
+        <rect x="100" y="28" width="10" height="10" rx="3" fillOpacity="0.45" transform="rotate(20 105 33)" className={`animate-float-4 ${t.fillA}`} />
+        <circle cx="104" cy="98" r="5" fillOpacity="0.35" className={`animate-float-5 ${t.fillA}`} />
+        <path d="M20 92 l4 4 m0 -4 l-4 4" strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" className={t.strokeB} />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-white">{icon}</span>
     </div>

@@ -37,13 +37,42 @@ class Session extends ChangeNotifier {
   bool mfaPending = false;
   bool mfaEnrolled = false;
 
+  /// A session is stored on the phone but the server could not be reached
+  /// (offline, timeout) when the app started. Root shows a Retry screen
+  /// instead of the sign-in form, which would wrongly suggest a sign-out.
+  bool offline = false;
+
+  /// Why the start-up check failed, for the Retry screen.
+  String? offlineMessage;
+
   Future<void> start() async {
-    await Api.I.init();
-    if (Api.I.hasSession) {
-      await refresh();
+    try {
+      await Api.I.init();
+      if (Api.I.hasSession) {
+        await refresh();
+      }
+    } catch (_) {
+      // Never leave the app on the splash screen: fall through to Login.
+    } finally {
+      loading = false;
+      notifyListeners();
     }
-    loading = false;
-    notifyListeners();
+  }
+
+  /// Retry from the "Can't reach TrustVault" screen.
+  Future<void> retry() async {
+    if (!Api.I.hasSession) {
+      offline = false;
+      notifyListeners();
+      return;
+    }
+    await refresh();
+  }
+
+  /// Leave the offline screen for the sign-in form (the stored session is
+  /// dropped and the phone wiped, exactly like a sign-out).
+  Future<void> abandonOffline() async {
+    await _reset();
   }
 
   Future<void> refresh() async {
@@ -52,12 +81,20 @@ class Session extends ChangeNotifier {
       user = User.fromJson(r['user'] as Map);
       mfaPending = r['mfaRequired'] == true && r['mfaSatisfied'] != true;
       mfaEnrolled = r['mfaEnrolled'] == true;
+      offline = false;
+      offlineMessage = null;
     } on ApiError catch (e) {
       if (e.status == 401) {
         user = null;
         mfaPending = false;
+        offline = false;
         await Api.I.clearSession();
+      } else if (e.status == 0 && user == null && Api.I.hasSession) {
+        offline = true;
+        offlineMessage = e.message;
       }
+    } catch (_) {
+      // An unexpected body: keep whatever state we had.
     }
     notifyListeners();
   }
@@ -68,6 +105,7 @@ class Session extends ChangeNotifier {
     // the person finishes from the emailed link instead (THREATS.md S27).
     if (r['signInLinkSent'] == true) throw ApiError(202, r['message'] is String ? r['message'] as String : 'Check your email to finish signing in.');
     user = User.fromJson(r['user'] as Map);
+    offline = false;
     mfaPending = r['mfaRequired'] == true;
     mfaEnrolled = r['mfaEnrolled'] == true;
     notifyListeners();
@@ -89,6 +127,7 @@ class Session extends ChangeNotifier {
     await OfflineCopies.wipeOpened();
     user = null;
     mfaPending = false;
+    offline = false;
     notifyListeners();
   }
 

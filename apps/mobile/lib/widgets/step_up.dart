@@ -101,10 +101,21 @@ class _StepUpFormState extends State<_StepUpForm> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final p = Pal.of(context);
+    final link = TextButton.styleFrom(
+      foregroundColor: p.accent,
+      minimumSize: const Size(kMinTap, kMinTap),
+      textStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
+    );
+    // Passkey → emailed code: the sheet's height animates instead of jumping.
+    return AnimatedSize(
+      duration: Motion.of(context),
+      curve: Motion.curve,
+      alignment: Alignment.topCenter,
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_error != null) ...[TvAlert(_error!), gap12],
+        if (_error != null) ...[Rise(dy: 6, child: TvAlert(_error!)), gap12],
         if (widget.passkey && _sentTo == null) ...[
           Btn('Use a passkey', variant: BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.fingerprint, loading: _busy && _code.text.isEmpty, onPressed: _busy ? null : () => _try(() => Passkeys.assertTo('/auth/mfa/step-up'))),
           if (widget.totp || widget.email) const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: DividerLabel('or enter a code')),
@@ -112,7 +123,17 @@ class _StepUpFormState extends State<_StepUpForm> {
         if (widget.email && !widget.totp && _sentTo == null)
           Btn('Email a code to ${widget.emailTo}', variant: widget.passkey ? BtnVariant.secondary : BtnVariant.primary, size: BtnSize.lg, expand: true, icon: PhosphorIconsDuotone.envelope, loading: _busy, onPressed: _busy ? null : _sendEmail),
         if (_sentTo != null) ...[
-          Text('6-digit code we emailed to $_sentTo', textAlign: TextAlign.center),
+          Rise(
+            dy: 6,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Ic(PhosphorIconsDuotone.envelope, size: 16, color: p.accent),
+                const SizedBox(width: 6),
+                Flexible(child: Text('6-digit code we emailed to $_sentTo', textAlign: TextAlign.center, style: ts(context, size: 13.5, color: p.body))),
+              ],
+            ),
+          ),
           gap12,
         ],
         if (widget.totp || _sentTo != null) ...[
@@ -133,20 +154,23 @@ class _StepUpFormState extends State<_StepUpForm> {
             variant: widget.passkey && _sentTo == null ? BtnVariant.secondary : BtnVariant.primary,
             size: BtnSize.lg,
             expand: true,
+            icon: PhosphorIconsDuotone.shieldCheck,
             loading: _busy && _code.text.length == 6,
             onPressed: _code.text.length == 6 && !_busy
                 ? () => _try(() => Api.I.post('/auth/mfa/step-up', _sentTo != null ? {'code': _code.text, 'method': 'email'} : {'code': _code.text}))
                 : null,
           ),
-          if (_sentTo != null) TextButton(onPressed: _busy ? null : _sendEmail, child: const Text('No email? Send a new code')),
+          if (_sentTo != null) TextButton(style: link, onPressed: _busy ? null : _sendEmail, child: const Text('No email? Send a new code')),
         ],
         if (widget.email && widget.totp && _sentTo == null)
           TextButton.icon(
+            style: link,
             onPressed: _busy ? null : _sendEmail,
-            icon: const Ic(PhosphorIconsDuotone.envelope, size: 16),
+            icon: Ic(PhosphorIconsDuotone.envelope, size: 16, color: p.accent),
             label: const Text('Email me a code instead'),
           ),
       ],
+      ),
     );
   }
 }

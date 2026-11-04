@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, ArrowRight, LinkBreak } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
-import { AuthLayout } from '@/components/auth-layout';
-import { Alert, ButtonLink, Skeleton } from '@/components/ui';
+import { AUTH_TEXT_ACTION, AuthHeader, AuthLayout } from '@/components/auth-layout';
+import { Alert, ButtonLink, Skeleton, Spinner } from '@/components/ui';
 import { errorText } from '@/lib/api';
 
 /**
@@ -40,28 +40,24 @@ export default function SignInLinkPage() {
 
   if (!error) {
     return (
-      <AuthLayout>
-        <Skeleton className="h-8 w-56" />
-        <Skeleton className="mt-3 h-4 w-72" />
-        <p className="mt-8 text-sm text-slate-500 dark:text-slate-400">Signing you in…</p>
+      <AuthLayout stepKey="working">
+        <Skeleton className="mb-5 size-14 rounded-2xl" />
+        <Skeleton className="h-8 w-56 max-w-full" />
+        <Skeleton className="mt-3 h-4 w-72 max-w-full" />
+        <p role="status" className="mt-8 flex items-center gap-2 text-sm text-fg-subtle"><Spinner className="text-brand-500 dark:text-brand-300" />Signing you in…</p>
       </AuthLayout>
     );
   }
 
   return (
-    <AuthLayout>
-      <div className="mb-8">
-        <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-glow">
-          <LinkBreak size={28} />
-        </span>
-        <h1 className="text-[1.75rem] font-semibold tracking-tight">This link did not work</h1>
-      </div>
+    <AuthLayout stepKey="failed">
+      <AuthHeader icon={<LinkBreak size={26} />} title="This link did not work" tone="warning" />
       <div className="space-y-4">
         <Alert>{error}</Alert>
         <ButtonLink href="/login" variant="primary" size="lg" className="w-full">
           Sign in again <ArrowRight size={16} weight="bold" />
         </ButtonLink>
-        <Link href="/forgot" className="flex w-full items-center justify-center gap-1.5 pt-2 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
+        <Link href="/forgot" className={AUTH_TEXT_ACTION}>
           <ArrowLeft size={14} />Didn’t try to sign in? Reset your password
         </Link>
       </div>

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -128,7 +129,23 @@ class Api {
     }
   }
 
-  Future<dynamic> _finish(http.Response res) async {
+  /// Paths where a 401 means "that code or password was wrong", not "your
+  /// session is over": the user must stay where they are to try again.
+  static bool _isCredentialCheck(String path) =>
+      path.startsWith('/auth/login') || path.startsWith('/auth/mfa/') || path.startsWith('/auth/password');
+
+  /// Whether a 401 really ends the session (so the session layer may wipe
+  /// the phone). A wrong second-factor code, failed passkey or wrong current
+  /// password is an ordinary input mistake and must not sign the user out.
+  @visibleForTesting
+  static bool endsSession(String? path, String? code) {
+    if (code == 'session_required') return true;
+    if (code == 'wrong_code' || code == 'code_expired') return false;
+    if (path != null && _isCredentialCheck(path)) return false;
+    return true;
+  }
+
+  Future<dynamic> _finish(http.Response res, [String? path]) async {
     await _captureCookie(res);
     if (res.statusCode == 204) return null;
     dynamic data;
@@ -140,7 +157,7 @@ class Api {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       final map = data is Map ? data : const {};
       final code = map['code'] is String ? map['code'] as String : null;
-      if (res.statusCode == 401) onUnauthorized?.call();
+      if (res.statusCode == 401 && endsSession(path, code)) onUnauthorized?.call();
       if (res.statusCode == 403 && (code == 'mfa_required' || code == 'mfa_enrolment_required')) onMfaRequired?.call();
       final issues = map['issues'];
       String message;
@@ -176,15 +193,23 @@ class Api {
     final req = http.Request(method, _uri(path))..headers.addAll(_headers(method, json: body != null));
     if (body != null) req.body = jsonEncode(body);
     try {
-      final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 30)));
-      return await _finish(res);
-    } on SocketException {
-      throw ApiError(0, 'Could not reach the server. Check your connection.');
-    } on HttpException {
-      throw ApiError(0, 'Could not reach the server.');
-    } on HandshakeException {
-      throw ApiError(0, 'Secure connection failed.');
+      final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(seconds: 30))).timeout(const Duration(seconds: 60));
+      return await _finish(res, path);
+    } catch (e) {
+      throw _networkError(e);
     }
+  }
+
+  /// Maps transport failures (offline, timeout, TLS, dropped connection) to
+  /// ApiError(0) so every caller sees one error type; anything else
+  /// (including an ApiError from the server) passes through unchanged.
+  static Object _networkError(Object e) {
+    if (e is ApiError) return e;
+    if (e is SocketException) return ApiError(0, 'Could not reach the server. Check your connection.');
+    if (e is TimeoutException) return ApiError(0, 'The server took too long to answer. Try again.');
+    if (e is HandshakeException) return ApiError(0, 'Secure connection failed.');
+    if (e is HttpException || e is http.ClientException) return ApiError(0, 'Could not reach the server.');
+    return e;
   }
 
   Future<dynamic> get(String path) => _send('GET', path);
@@ -200,19 +225,24 @@ class Api {
       ..fields.addAll(fields)
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
     try {
-      final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3)));
-      return await _finish(res);
-    } on SocketException {
-      throw ApiError(0, 'Could not reach the server. Check your connection.');
+      final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3))).timeout(const Duration(minutes: 3));
+      return await _finish(res, path);
+    } catch (e) {
+      throw _networkError(e);
     }
   }
 
   /// Fetches a file the API streams as an attachment.
   Future<Download> download(String path, {String fallbackName = 'download'}) async {
     final req = http.Request('GET', _uri(path))..headers.addAll(_headers('GET', json: false)..remove('Accept'));
-    final res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3)));
+    final http.Response res;
+    try {
+      res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3))).timeout(const Duration(minutes: 3));
+    } catch (e) {
+      throw _networkError(e);
+    }
     if (res.statusCode != 200) {
-      await _finish(res);
+      await _finish(res, path);
       throw ApiError(res.statusCode, 'Download failed (${res.statusCode})');
     }
     await _captureCookie(res);

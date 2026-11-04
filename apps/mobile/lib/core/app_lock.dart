@@ -10,7 +10,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// local screen lock only: it never replaces the server's session, password
 /// or second factor, and a failed or cancelled unlock simply stays locked.
 class AppLock extends ChangeNotifier with WidgetsBindingObserver {
-  AppLock();
+  AppLock() {
+    // Registered now (before runApp builds the navigator's own observer) so
+    // [didPopRoute] sees Android Back first and can swallow it while locked.
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   static const grace = Duration(seconds: 30);
   static const _prefKey = 'tv-app-lock';
@@ -38,7 +42,7 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
     enabled = supported && (saved ?? true);
     locked = enabled && signedIn;
-    WidgetsBinding.instance.addObserver(this);
+    if (locked) _dropFocus();
     notifyListeners();
   }
 
@@ -50,6 +54,19 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
       (await SharedPreferences.getInstance()).setBool(_prefKey, enabled);
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// Typing must not go into a field hidden under the lock.
+  void _dropFocus() => FocusManager.instance.primaryFocus?.unfocus();
+
+  /// While locked, Android Back must not pop the (hidden) pages underneath.
+  @override
+  Future<bool> didPopRoute() async => locked && isSignedIn();
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   /// Nothing to protect while signed out; the next sign-in starts unlocked.
@@ -89,6 +106,7 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
       _leftAt = null;
       if (left != null && DateTime.now().difference(left) >= grace && !locked && isSignedIn()) {
         locked = true;
+        _dropFocus();
         notifyListeners();
       }
     }

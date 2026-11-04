@@ -68,7 +68,10 @@ class _HomeShellState extends State<HomeShell> {
               children: [
                 _TopBar(user: user, onSearch: () => _openSearch(context, tabs), onAccount: () => setState(() => _index = tabs.length - 1)),
                 Expanded(
-                  child: IndexedStack(index: _index, children: [for (final t in tabs) t.page]),
+                  child: _FadeOnChange(
+                    index: _index,
+                    child: IndexedStack(index: _index, children: [for (final t in tabs) t.page]),
+                  ),
                 ),
               ],
             ),
@@ -77,13 +80,13 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: p.dark ? C.ink900.withValues(alpha: .96) : Colors.white.withValues(alpha: .97),
+          color: p.raised.withValues(alpha: p.dark ? .96 : .97),
           border: Border(top: BorderSide(color: p.border)),
         ),
         child: NavigationBarTheme(
           data: NavigationBarThemeData(
             backgroundColor: Colors.transparent,
-            indicatorColor: p.dark ? C.brand500.withValues(alpha: .2) : C.brand50,
+            indicatorColor: p.selectedBg,
             surfaceTintColor: Colors.transparent,
             labelTextStyle: WidgetStateProperty.resolveWith(
               (s) => TextStyle(
@@ -142,7 +145,7 @@ class Backdrop extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   colors: [
-                    const Color(0xFF6366F1).withValues(alpha: dark ? .17 : .11),
+                    C.brand500.withValues(alpha: dark ? .17 : .11),
                     Colors.transparent,
                   ],
                 ),
@@ -158,7 +161,7 @@ class Backdrop extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   colors: [
-                    const Color(0xFFA855F7).withValues(alpha: dark ? .10 : .07),
+                    C.violet500.withValues(alpha: dark ? .10 : .07),
                     Colors.transparent,
                   ],
                 ),
@@ -210,12 +213,12 @@ class _TopBar extends StatelessWidget {
                 height: 42,
                 child: Row(
                   children: [
-                    Ic(icon, size: 18, color: danger ? C.red500 : (on ? p.accent : p.muted)),
+                    Ic(icon, size: 18, color: danger ? p.danger : (on ? p.accent : p.muted)),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         label,
-                        style: ts(ctx, size: 14, color: danger ? C.red500 : null, w: on ? FontWeight.w600 : null),
+                        style: ts(ctx, size: 14, color: danger ? p.danger : null, w: on ? FontWeight.w600 : null),
                       ),
                     ),
                     if (on) Ic(PhosphorIconsBold.check, size: 14, color: p.accent),
@@ -277,20 +280,44 @@ class _SearchSheetState extends State<_SearchSheet> {
   String _q = '';
   List<Map> _docs = [];
   Timer? _t;
+  /// Only the newest search may update the list (an older, slower answer
+  /// must not overwrite it).
+  int _seq = 0;
+  bool _searching = false;
+  String? _error;
 
   void _changed(String q) {
-    setState(() => _q = q);
     _t?.cancel();
+    final my = ++_seq;
     if (q.trim().length < 2) {
-      setState(() => _docs = []);
+      setState(() {
+        _q = q;
+        _docs = [];
+        _searching = false;
+        _error = null;
+      });
       return;
     }
+    setState(() {
+      _q = q;
+      _searching = true;
+      _error = null;
+    });
     _t = Timer(const Duration(milliseconds: 200), () async {
       try {
         final r = await Api.I.get('/documents?scope=all&page=1&q=${Uri.encodeQueryComponent(q.trim())}') as Map;
-        if (mounted) setState(() => _docs = (r['documents'] as List).cast<Map>().take(6).toList());
-      } catch (_) {
-        if (mounted) setState(() => _docs = []);
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _docs = (r['documents'] as List).cast<Map>().take(6).toList();
+          _searching = false;
+        });
+      } catch (e) {
+        if (!mounted || my != _seq) return;
+        setState(() {
+          _docs = [];
+          _searching = false;
+          _error = errorText(e, 'Search failed. Try again.');
+        });
       }
     });
   }
@@ -305,11 +332,20 @@ class _SearchSheetState extends State<_SearchSheet> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     final pages = widget.pages.where((e) => e.$2.label.toLowerCase().contains(_q.trim().toLowerCase())).toList();
-    Widget header(String s) => Padding(
+    Widget header(String s, PI icon) => Padding(
       padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
-      child: Text(
-        s.toUpperCase(),
-        style: ts(context, size: 11, w: FontWeight.w600, color: p.faint, spacing: 0.8),
+      child: Semantics(
+        header: true,
+        child: Row(
+          children: [
+            Ic(icon, size: 14, color: p.subtle),
+            const SizedBox(width: 6),
+            Text(
+              s.toUpperCase(),
+              style: ts(context, size: 11, w: FontWeight.w600, color: p.subtle, spacing: 0.8),
+            ),
+          ],
+        ),
       ),
     );
     return Padding(
@@ -324,16 +360,30 @@ class _SearchSheetState extends State<_SearchSheet> {
                 autofocus: true,
                 onChanged: _changed,
                 style: ts(context, size: 15),
-                decoration: fieldDeco(hint: 'Search documents or jump to a page…', icon: PhosphorIconsDuotone.magnifyingGlass),
+                textInputAction: TextInputAction.search,
+                decoration: fieldDeco(
+                  hint: 'Search documents or jump to a page…',
+                  icon: PhosphorIconsDuotone.magnifyingGlass,
+                  suffix: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                        )
+                      : null,
+                ),
               ),
             ),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 children: [
-                  if (_docs.isNotEmpty) header('Documents'),
-                  for (final d in _docs)
-                    ListTile(
+                  if (_docs.isNotEmpty) header('Documents', PhosphorIconsDuotone.files),
+                  for (final (n, d) in _docs.indexed)
+                    Rise(
+                      key: ValueKey('doc-${d['id']}'),
+                      delay: 40 * n,
+                      dy: 6,
+                      child: ListTile(
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       leading: FileIcon((d['current'] as Map?)?['fileName'] as String?, size: 34),
                       title: Text(
@@ -343,13 +393,14 @@ class _SearchSheetState extends State<_SearchSheet> {
                         style: ts(context, size: 14, w: FontWeight.w600),
                       ),
                       subtitle: Text('${d['category']} · ${d['isOwner'] == true ? 'You' : (d['owner'] as Map)['displayName']}', style: ts(context, size: 12, color: p.muted)),
-                      trailing: Ic(PhosphorIconsBold.arrowRight, size: 14, color: p.faint),
+                      trailing: Ic(PhosphorIconsBold.arrowRight, size: 14, color: p.subtle),
                       onTap: () {
                         Navigator.pop(context);
                         Navigator.of(context).push(MaterialPageRoute(builder: (_) => DocumentDetailScreen(id: d['id'] as String)));
                       },
+                      ),
                     ),
-                  if (pages.isNotEmpty) header('Go to'),
+                  if (pages.isNotEmpty) header('Go to', PhosphorIconsDuotone.squaresFour),
                   for (final (i, t) in pages)
                     ListTile(
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -361,27 +412,50 @@ class _SearchSheetState extends State<_SearchSheet> {
                       ),
                       title: Text(t.label, style: ts(context, size: 14, w: FontWeight.w600)),
                       subtitle: Text(t.hint, style: ts(context, size: 12, color: p.muted)),
-                      trailing: Ic(PhosphorIconsBold.arrowRight, size: 14, color: p.faint),
+                      trailing: Ic(PhosphorIconsBold.arrowRight, size: 14, color: p.subtle),
                       onTap: () {
                         Navigator.pop(context);
                         widget.onPage(i);
                       },
                     ),
-                  if (_docs.isEmpty && pages.isEmpty)
+                  if (_error != null) Padding(padding: const EdgeInsets.only(top: 10), child: TvAlert(_error!, title: 'Search failed')),
+                  if (_docs.isEmpty && pages.isEmpty && _error == null)
                     Padding(
-                      padding: const EdgeInsets.all(40),
-                      child: Text(
-                        _q.trim().length < 2 ? 'Type to search.' : 'Nothing you can access matches.',
-                        textAlign: TextAlign.center,
-                        style: ts(context, size: 13, color: p.muted),
+                      padding: const EdgeInsets.fromLTRB(24, 36, 24, 24),
+                      child: Semantics(
+                        liveRegion: true,
+                        child: Column(
+                          children: [
+                            Ic(_q.trim().length < 2 ? PhosphorIconsDuotone.magnifyingGlass : PhosphorIconsDuotone.fileMagnifyingGlass, size: 26, color: p.subtle),
+                            gap12,
+                            Text(
+                          _q.trim().length < 2
+                              ? 'Type to search.'
+                              : _searching
+                              ? 'Searching…'
+                              : 'Nothing you can access matches “${_q.trim()}”.',
+                          textAlign: TextAlign.center,
+                          style: ts(context, size: 13, color: p.muted),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'Results only include documents you can access',
-                      textAlign: TextAlign.center,
-                      style: ts(context, size: 11.5, color: p.faint),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Ic(PhosphorIconsDuotone.shieldCheck, size: 14, color: p.subtle),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Results only include documents you can access',
+                            textAlign: TextAlign.center,
+                            style: ts(context, size: 12, color: p.subtle),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -404,8 +478,40 @@ class PageBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return RefreshIndicator(
       onRefresh: onRefresh,
-      color: C.brand500,
+      color: Pal.of(context).accent,
+      backgroundColor: Pal.of(context).raised,
       child: ListView(controller: controller, physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.fromLTRB(16, 10, 16, 40), children: children),
     );
   }
+}
+
+/// Fades [child] in again whenever [index] changes (bottom-tab switches),
+/// without rebuilding it, so each tab keeps its scroll and state. Instant
+/// under reduced motion.
+class _FadeOnChange extends StatefulWidget {
+  const _FadeOnChange({required this.index, required this.child});
+  final int index;
+  final Widget child;
+  @override
+  State<_FadeOnChange> createState() => _FadeOnChangeState();
+}
+
+class _FadeOnChangeState extends State<_FadeOnChange> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 180), value: 1);
+  late final Animation<double> _a = CurvedAnimation(parent: _c, curve: Motion.easeOut);
+
+  @override
+  void didUpdateWidget(_FadeOnChange old) {
+    super.didUpdateWidget(old);
+    if (old.index != widget.index && !Motion.reduced(context)) _c.forward(from: 0.35);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(opacity: _a, child: widget.child);
 }
