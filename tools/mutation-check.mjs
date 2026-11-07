@@ -700,6 +700,11 @@ const MUTATIONS = [
     'ALTER TABLE folders DISABLE ROW LEVEL SECURITY', 'ALTER TABLE folders ENABLE ROW LEVEL SECURITY', ['test/idor-resources.test.ts']),
   sql('database: row-level security on download requests',
     'ALTER TABLE download_approvals DISABLE ROW LEVEL SECURITY', 'ALTER TABLE download_approvals ENABLE ROW LEVEL SECURITY', ['test/idor-resources.test.ts']),
+  // --- probes: file names, server errors (THREATS.md U11, I3) ---
+  code('file names: bidirectional and zero-width characters removed', 'src/documents/content-check.ts',
+    String.raw`.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')`, '', ['test/probes.test.ts']),
+  code('errors: an unexpected error answers a generic 500', 'src/common/errors.filter.ts',
+    "res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ message: 'Internal error', requestId });", "res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ message: String(exception), stack: (exception as Error).stack, requestId });", ['test/probes.test.ts']),
 ];
 
 function loadEnv() {
