@@ -85,7 +85,7 @@ describe('a person who signs in only with a passkey', () => {
   it('shows up with a passkey count and an admin can reset it', async () => {
     await withDb(ownerDb(), async (db) => {
       await db.query(`UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, email_otp_enabled_at = NULL WHERE id = $1`, [victor.id]);
-      await db.query(`INSERT INTO passkeys (user_id, credential_id, public_key, transports, name) VALUES ($1, 'cred-only', 'x', '{}', 'Phone')`, [victor.id]);
+      await db.query(`INSERT INTO passkeys (id, user_id, credential_id, public_key, transports, name) VALUES (gen_random_uuid(), $1, 'cred-only', 'x', '{}', 'Phone')`, [victor.id]);
     });
     const list = await as(t, ADM).get('/api/admin/users').expect(200);
     const row = list.body.users.find((u: { id: string }) => u.id === victor.id);

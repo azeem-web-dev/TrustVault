@@ -41,8 +41,9 @@ describe('authentication is deny-by-default', () => {
       expect(r.status).toBe(401);
       expect(r.body.code).toBe('session_required');
     }
-    expect(forged.body).toEqual(none.body);
-    expect(ended.body).toEqual(none.body);
+    const bare = (b: Record<string, unknown>) => ({ ...b, requestId: undefined });
+    expect(bare(forged.body)).toEqual(bare(none.body));
+    expect(bare(ended.body)).toEqual(bare(none.body));
     // Other refusals keep their own codes.
     const bad = await t.http.post('/api/auth/login').send({ email: u.email, password: 'wrong' });
     expect(bad.status).toBe(401);

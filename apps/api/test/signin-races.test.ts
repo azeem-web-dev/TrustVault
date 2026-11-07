@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { currentStep, totpAt } from '../src/auth/totp.js';
 import { createUser, ORIGIN, ownerDb, resetState, startApp, withDb, type TestApp, type TestUser } from './helpers.js';
 
@@ -15,6 +15,10 @@ beforeAll(async () => { t = await startApp(); });
 afterAll(async () => { await t.close(); });
 beforeEach(async () => { await resetState(t.app); });
 
+const open: pg.Client[] = [];
+// A failed test must not leave the row locked for the next one.
+afterEach(async () => { for (const db of open.splice(0)) { await db.query('ROLLBACK').catch(() => {}); await db.end().catch(() => {}); } });
+
 /** The admin's side: lock the row, run `change`, but do not commit yet. */
 async function adminHolding(userId: string, change: string): Promise<{ commit: () => Promise<void> }> {
   const db: pg.Client = ownerDb();
@@ -22,14 +26,16 @@ async function adminHolding(userId: string, change: string): Promise<{ commit: (
   await db.query('BEGIN');
   await db.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
   await db.query(change, [userId]);
-  return { commit: async () => { await db.query('COMMIT'); await db.end(); } };
+  open.push(db);
+  return { commit: async () => { await db.query('COMMIT'); await db.end(); open.splice(open.indexOf(db), 1); } };
 }
 
 /** Waits until some application query is blocked on a lock. */
 async function waitForBlocked(): Promise<void> {
   await withDb(ownerDb(), async (db) => {
     for (let i = 0; i < 200; i++) {
-      const r = await db.query(`SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`);
+      // pg_locks is readable by every role; pg_stat_activity hides other roles' waits from the owner.
+      const r = await db.query(`SELECT 1 FROM pg_locks WHERE NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
       if (r.rowCount) return;
       await new Promise((r2) => setTimeout(r2, 25));
     }

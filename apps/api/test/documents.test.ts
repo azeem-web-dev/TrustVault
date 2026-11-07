@@ -564,7 +564,7 @@ describe('folder counts', () => {
     for (const d of [d1, d2]) await as(t, A).patch(`/api/documents/${d}`, { folderId: folder }).expect(200);
     const count = async () => (await as(t, A).get('/api/folders').expect(200)).body.folders.find((f: { id: string }) => f.id === folder).documents;
     expect(await count()).toBe(2);
-    await as(t, A).post(`/api/documents/${d2}/trash`).expect(200);
+    await as(t, A).post(`/api/documents/${d2}/trash`).expect(204);
     expect(await count()).toBe(1);
   });
 });
