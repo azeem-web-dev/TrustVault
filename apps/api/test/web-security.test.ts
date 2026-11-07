@@ -57,6 +57,8 @@ const call = (method: string, path: string) => (t.http as unknown as Record<stri
 const PUBLIC_MUTATING = new Set([
   'POST /api/auth/login',
   'POST /api/auth/password/forgot',
+  // Public on purpose: rate-limited, same answer always, stores only the email.
+  'POST /api/beta/signup',
   'POST /api/auth/password/reset',
   'POST /api/auth/invite/check',
   'POST /api/auth/invite/accept',

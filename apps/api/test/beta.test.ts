@@ -66,7 +66,7 @@ describe('beta signup', () => {
   it('audits without the address', async () => {
     const r = await signup('secret@t.io').expect(202);
     expect(r.body).toEqual({ ok: true });
-    const rows = await auditRows(`action = 'beta.signup' AND created_at > now() - interval '1 minute'`);
+    const rows = await auditRows(`action = 'beta.signup' AND occurred_at > now() - interval '1 minute'`);
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.stringify(rows)).not.toContain('secret@t.io');
   });
