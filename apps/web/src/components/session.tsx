@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { api, ApiError, setCsrfToken, setMfaHandler, type User } from '@/lib/api';
+import { api, ApiError, setCsrfToken, setMfaHandler, setSessionEndedHandler, type User } from '@/lib/api';
 import { useToast } from './toast';
 
 interface Me {
@@ -63,8 +63,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (id !== seq.current) return;
       if (err instanceof ApiError && err.status === 401) {
         lastCheck.current = Date.now();
+        const wasSignedIn = meRef.current !== null;
         setMe(null);
-        if (!PUBLIC_PATHS.includes(pathRef.current)) router.replace('/login');
+        if (!PUBLIC_PATHS.includes(pathRef.current)) router.replace(wasSignedIn ? '/login?ended=1' : '/login');
       } else if (!PUBLIC_PATHS.includes(pathRef.current)) {
         // A network blip or a 5xx is not a sign-out: keep who we know and say so.
         toast('Could not reach the server to check your session.', 'warning', { action: { label: 'Retry', onClick: () => void refresh() } });
@@ -95,6 +96,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setMfaHandler(() => router.replace('/login/mfa'));
     return () => setMfaHandler(null);
+  }, [router]);
+
+  // Any call answered "session_required" while someone was signed in: back to sign-in, with the reason.
+  useEffect(() => {
+    setSessionEndedHandler(() => {
+      if (meRef.current === null) return;
+      meRef.current = null;
+      setMe(null);
+      setCsrfToken(null);
+      if (!PUBLIC_PATHS.includes(pathRef.current)) router.replace('/login?ended=1');
+    });
+    return () => setSessionEndedHandler(null);
   }, [router]);
 
   const signIn = useCallback(async (email: string, password: string) => {

@@ -400,7 +400,7 @@ export class MfaService {
   async stepUp(actor: Actor, proof: { code: string; method?: 'totp' | 'email' } | { response: AuthenticationResponseJSON }): Promise<void> {
     if (actor.authLevel !== 'mfa') throw new ForbiddenException({ message: 'Finish signing in first', code: 'mfa_required' });
     const mark = async (tx: Tx) => {
-      if (!(await this.sessions.markStepUp(actor.sessionId, tx))) throw new UnauthorizedException('Your session ended. Sign in again.');
+      if (!(await this.sessions.markStepUp(actor.sessionId, tx))) throw new UnauthorizedException({ message: 'Your session ended. Sign in again.', code: 'session_required' });
     };
     if ('code' in proof && proof.method === 'email') {
       await this.requireEmailOn(actor);
@@ -508,7 +508,7 @@ export class MfaService {
     const ended = (await this.sessions.revoke(actor.sessionId, tx, 'replaced_after_second_factor')) !== 1;
     if (ended || !u || !s || u.status !== 'ACTIVE' || (u.access_expires_at && u.access_expires_at.getTime() <= Date.now())
         || s.created_at.getTime() < u.password_changed_at.getTime() || (!u.totp && !u.email && u.passkeys === 0)) {
-      throw new UnauthorizedException('Your session ended. Sign in again.');
+      throw new UnauthorizedException({ message: 'Your session ended. Sign in again.', code: 'session_required' });
     }
     return this.sessions.create(actor.userId, { ip: ctx?.ip ?? null, userAgent: ctx?.userAgent ?? null, authLevel: 'mfa' }, tx);
   }

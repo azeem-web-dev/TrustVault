@@ -286,6 +286,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         padding: const EdgeInsets.only(top: 14),
                         child: Semantics(liveRegion: true, child: TvAlert(_error!, title: 'Could not sign in')),
                       )
+                    : _notice == null && context.watch<Session>().endedNotice != null
+                    ? Padding(
+                        key: const ValueKey('ended'),
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Semantics(liveRegion: true, child: TvAlert(context.watch<Session>().endedNotice!, tone: Tone.blue, title: 'Signed out')),
+                      )
                     : _notice != null
                     ? Padding(
                         key: ValueKey('note:$_notice'),

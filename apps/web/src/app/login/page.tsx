@@ -22,12 +22,18 @@ const DEMO = [
 export default function LoginPage() {
   const { user, loading, mfaPending, signIn } = useSession();
   const router = useRouter();
+  const [ended, setEnded] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [linkSent, setLinkSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Sent here by an ended session (401 session_required): say so, once.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('ended') === '1') setEnded(true);
+  }, []);
 
   // Already signed in (A6): there is nothing to do here.
   useEffect(() => {
@@ -89,6 +95,7 @@ export default function LoginPage() {
         <div className="-mt-2 flex justify-end">
           <Link href="/forgot" className={cx(AUTH_INLINE_LINK, 'min-h-8 px-1 text-xs')}>Forgot password?</Link>
         </div>
+        {ended && !error && !busy && <Alert tone="blue">Your session ended, please sign in again.</Alert>}
         {error && <Alert>{error}</Alert>}
         {linkSent && <Alert tone="blue" title="Check your email">{linkSent}</Alert>}
         <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">

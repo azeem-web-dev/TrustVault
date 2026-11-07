@@ -29,6 +29,25 @@ describe('authentication is deny-by-default', () => {
     const res = await t.http.get('/api/auth/me').set('Cookie', '__Host-tv_session=not-a-real-token');
     expect(res.status).toBe(401);
   });
+
+  it('a missing, forged or ended session answers 401 with the code session_required, the same body for all', async () => {
+    const none = await t.http.get('/api/auth/me');
+    const forged = await t.http.get('/api/auth/me').set('Cookie', '__Host-tv_session=not-a-real-token');
+    const u = await createUser({ email: 'ended@t.io', role: 'VIEWER' });
+    const s = await login(t, u);
+    await as(t, s).post('/api/auth/logout').expect(204);
+    const ended = await as(t, s).get('/api/auth/me');
+    for (const r of [none, forged, ended]) {
+      expect(r.status).toBe(401);
+      expect(r.body.code).toBe('session_required');
+    }
+    expect(forged.body).toEqual(none.body);
+    expect(ended.body).toEqual(none.body);
+    // Other refusals keep their own codes.
+    const bad = await t.http.post('/api/auth/login').send({ email: u.email, password: 'wrong' });
+    expect(bad.status).toBe(401);
+    expect(bad.body.code).not.toBe('session_required');
+  });
 });
 
 describe('login', () => {

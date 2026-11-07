@@ -108,6 +108,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     expect(s.user, isNull);
+    expect(s.endedNotice, Session.sessionEndedText);
     expect(h.secure, isEmpty);
     expect(await (await LocalCopies.root()).exists(), isFalse);
   });

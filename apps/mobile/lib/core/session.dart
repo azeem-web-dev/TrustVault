@@ -22,7 +22,10 @@ class User {
 class Session extends ChangeNotifier {
   Session() {
     Api.I.onUnauthorized = () {
-      if (user != null || mfaPending) _reset();
+      if (user != null || mfaPending) {
+        endedNotice = sessionEndedText;
+        _reset();
+      }
     };
     Api.I.onMfaRequired = () {
       if (!mfaPending) {
@@ -31,6 +34,10 @@ class Session extends ChangeNotifier {
       }
     };
   }
+
+  /// Shown on the sign-in screen after the server said the session is over.
+  static const sessionEndedText = 'Your session ended, please sign in again.';
+  String? endedNotice;
 
   User? user;
   bool loading = true;
@@ -85,6 +92,7 @@ class Session extends ChangeNotifier {
       offlineMessage = null;
     } on ApiError catch (e) {
       if (e.status == 401) {
+        if (user != null) endedNotice = sessionEndedText;
         user = null;
         mfaPending = false;
         offline = false;
@@ -100,6 +108,7 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> signIn(String email, String password) async {
+    endedNotice = null;
     final r = await Api.I.post('/auth/login', {'email': email, 'password': password}) as Map;
     // The account has had many failed sign-ins and this phone is new to it:
     // the person finishes from the emailed link instead (THREATS.md S27).

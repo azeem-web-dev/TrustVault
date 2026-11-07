@@ -25,6 +25,7 @@ export class ApiError extends Error {
 
 let csrfToken: string | null = null;
 let onMfaRequired: (() => void) | null = null;
+let onSessionEnded: (() => void) | null = null;
 let onStepUp: (() => Promise<boolean>) | null = null;
 
 export function setCsrfToken(token: string | null): void {
@@ -34,6 +35,11 @@ export function setCsrfToken(token: string | null): void {
 /** Called when the API says the session still owes a second factor. */
 export function setMfaHandler(fn: (() => void) | null): void {
   onMfaRequired = fn;
+}
+
+/** Called when the API says there is no live session (401 session_required): it ended, expired or was revoked. */
+export function setSessionEndedHandler(fn: (() => void) | null): void {
+  onSessionEnded = fn;
 }
 
 /**
@@ -71,6 +77,7 @@ async function call<T>(method: string, path: string, body?: unknown, retried = f
     if (res.status === 403 && data?.code === 'step_up_required' && !retried && onStepUp && (await onStepUp())) {
       return call<T>(method, path, body, true, opts);
     }
+    if (res.status === 401 && data?.code === 'session_required') onSessionEnded?.();
     if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
     const issues = (data as { issues?: { message: string }[] } | null)?.issues;
     const message = issues?.length ? issues.map((i) => i.message).join('; ') : (data?.message ?? `Request failed (${res.status})`);
@@ -104,6 +111,7 @@ export async function downloadBlob(url: string, opts: RequestOptions & { filenam
     if (res.status === 403 && data?.code === 'step_up_required' && !retried && onStepUp && (await onStepUp())) {
       return downloadBlob(url, opts, true);
     }
+    if (res.status === 401 && data?.code === 'session_required') onSessionEnded?.();
     if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaRequired?.();
     const message = data?.issues?.length ? data.issues.map((i) => i.message).join('; ') : (data?.message ?? `Download failed (${res.status})`);
     throw new ApiError(res.status, message, data);

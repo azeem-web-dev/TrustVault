@@ -85,7 +85,7 @@ export class SecurityGuard implements CanActivate {
     // 2. Session.
     const token = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
     const actor = await this.sessions.resolve(token);
-    if (!actor) throw new UnauthorizedException('Sign in required');
+    if (!actor) throw new UnauthorizedException({ message: 'Sign in required', code: 'session_required' });
     const ctx = currentContext();
     if (ctx) ctx.actor = actor;
 
