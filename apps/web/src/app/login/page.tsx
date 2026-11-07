@@ -83,14 +83,16 @@ export default function LoginPage() {
               placeholder="••••••••••••"
               className="pr-11"
             />
-            <IconButton
-              label={reveal ? 'Hide password' : 'Show password'}
-              aria-pressed={reveal}
-              onClick={() => setReveal((r) => !r)}
-              className="absolute right-0.5 top-1/2 -translate-y-1/2"
-            >
-              {reveal ? <EyeSlash size={18} /> : <Eye size={18} />}
-            </IconButton>
+            {/* IconButton is `relative` itself, so a wrapper does the positioning. */}
+            <span className="absolute inset-y-0 right-1 flex items-center">
+              <IconButton
+                label={reveal ? 'Hide password' : 'Show password'}
+                aria-pressed={reveal}
+                onClick={() => setReveal((r) => !r)}
+              >
+                {reveal ? <EyeSlash size={18} /> : <Eye size={18} />}
+              </IconButton>
+            </span>
           </span>
         </Label>
         <div className="-mt-2 flex justify-end">
