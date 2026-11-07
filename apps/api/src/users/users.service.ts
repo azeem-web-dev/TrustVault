@@ -22,6 +22,8 @@ export interface AdminUserView {
   isProtected: boolean;
   totpEnabledAt: Date | null;
   emailOtpEnabledAt: Date | null;
+  /** How many passkeys they have (only the list fills it in): a passkey-only person has no TOTP. */
+  passkeys?: number;
 }
 
 const VIEW = {
@@ -44,8 +46,9 @@ export class UsersService {
     @Inject(ApprovalsService) private readonly approvals: ApprovalsService,
   ) {}
 
-  list(): Promise<AdminUserView[]> {
-    return this.prisma.user.findMany({ select: VIEW, orderBy: { createdAt: 'asc' } });
+  async list(): Promise<AdminUserView[]> {
+    const rows = await this.prisma.user.findMany({ select: { ...VIEW, _count: { select: { passkeys: true } } }, orderBy: { createdAt: 'asc' } });
+    return rows.map(({ _count, ...u }) => ({ ...u, passkeys: _count.passkeys }));
   }
 
   /**

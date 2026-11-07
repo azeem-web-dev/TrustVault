@@ -81,6 +81,21 @@ describe('one administrator alone cannot do either', () => {
   });
 });
 
+describe('a person who signs in only with a passkey', () => {
+  it('shows up with a passkey count and an admin can reset it', async () => {
+    await withDb(ownerDb(), async (db) => {
+      await db.query(`UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, email_otp_enabled_at = NULL WHERE id = $1`, [victor.id]);
+      await db.query(`INSERT INTO passkeys (user_id, credential_id, public_key, transports, name) VALUES ($1, 'cred-only', 'x', '{}', 'Phone')`, [victor.id]);
+    });
+    const list = await as(t, ADM).get('/api/admin/users').expect(200);
+    const row = list.body.users.find((u: { id: string }) => u.id === victor.id);
+    expect(row).toMatchObject({ totpEnabledAt: null, passkeys: 1 });
+    await as(t, ADM).post(`/api/admin/users/${victor.id}/mfa/reset`).expect(204);
+    const left = await withDb(ownerDb(), async (db) => (await db.query('SELECT count(*)::int AS n FROM passkeys WHERE user_id = $1', [victor.id])).rows[0].n);
+    expect(left).toBe(0);
+  });
+});
+
 describe('the same person cannot ask and approve', () => {
   it('in the API', async () => {
     const r = await ask(ADM, { action: 'MFA_RESET', targetUserId: alice.id }).expect(201);
