@@ -306,7 +306,7 @@ export default function DocumentPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div key={activeTab} {...tabPanelProps(TABS_ID, activeTab)} className="min-w-0 animate-fade-in space-y-6 rounded-2xl lg:col-span-2">
-          {activeTab === 'pages' && current && <PageViewer doc={doc} canDownload={canDownload} />}
+          {activeTab === 'pages' && current && <PageViewer doc={doc} canDownload={canDownloadNow} approved={requestStatus === 'APPROVED' && canDownloadNow && !canDownload} />}
           {activeTab === 'overview' && (
             <>
               {inRequestFlow && current && !current.quarantine && (
@@ -329,7 +329,7 @@ export default function DocumentPage() {
           {activeTab === 'versions' && (
             <Versions
               doc={doc}
-              canDownload={canDownload}
+              canDownload={canDownload || canDownloadNow}
               canDownloadNow={canDownloadNow}
               needsApproval={inRequestFlow}
               canUpload={level >= RANK.EDIT && !trashed}
@@ -375,7 +375,7 @@ const reported = new Map<string, number>();
  * capture blank the pages for a moment and are reported to the owner,
  * silently (V11); the screenshot itself cannot be stopped from a web page.
  */
-function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
+function PageViewer({ doc, canDownload, approved }: { doc: Doc; canDownload: boolean; approved: boolean }) {
   const [info, setInfo] = useState<{ pages: number; preview: boolean; message: string | null; versionNo: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [infoAttempt, setInfoAttempt] = useState(0);
@@ -456,7 +456,7 @@ function PageViewer({ doc, canDownload }: { doc: Doc; canDownload: boolean }) {
     <Card
       title={canDownload ? 'View' : 'View only'}
       icon={<Eye size={20} />}
-      description={canDownload ? 'Pages drawn by TrustVault, marked with your name. Download gives you a copy stamped the same way.' : 'You can read this document here. It cannot be downloaded, and every page carries your name, the time and a trace code.'}
+      description={approved ? 'The owner approved a download. Pages are drawn by TrustVault, marked with your name; the Download button gives you a copy stamped the same way.' : canDownload ? 'Pages drawn by TrustVault, marked with your name. Download gives you a copy stamped the same way.' : 'You can read this document here. It cannot be downloaded, and every page carries your name, the time and a trace code.'}
       actions={total > 1 && (
         <div className="flex items-center gap-1">
           <IconButton label="Previous page" onClick={() => goTo(page - 1)} disabled={page <= 1}><CaretLeft size={16} weight="bold" /></IconButton>

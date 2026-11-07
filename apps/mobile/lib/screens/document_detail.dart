@@ -399,7 +399,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           child: KeyedSubtree(
             key: ValueKey('tab-$_tab'),
             child: switch (_tab) {
-              'versions' => _Versions(doc: doc, canDownload: canDownload, canDownloadNow: canDownloadNow, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: (note) => _act(() async {}, note == null ? 'New version uploaded' : 'New version uploaded. $note'), onError: _setError),
+              'versions' => _Versions(doc: doc, canDownload: canDownload || canDownloadNow, canDownloadNow: canDownloadNow, canUpload: level >= _rank['EDIT']! && !trashed, onUploaded: (note) => _act(() async {}, note == null ? 'New version uploaded' : 'New version uploaded. $note'), onError: _setError),
               'access' => _AccessPanel(doc: doc, onError: _setError),
               'history' => _History(docId: doc['id'] as String),
               _ => Column(
