@@ -695,6 +695,11 @@ const MUTATIONS = [
     "await this.limits.hit('invite:send:all'", "void ('invite:send:all'", ['test/demo-mode.test.ts']),
   code('invitations: counted before the account is created', 'src/users/users.controller.ts',
     '    await this.invites.checkSendLimit(actor);\n    const user = await this.users.create(actor, body);', '    const user = await this.users.create(actor, body);', ['test/demo-mode.test.ts']),
+  // --- IDOR on resources that are not documents (THREATS.md A27) ---
+  sql('database: row-level security on folders',
+    'ALTER TABLE folders DISABLE ROW LEVEL SECURITY', 'ALTER TABLE folders ENABLE ROW LEVEL SECURITY', ['test/idor-resources.test.ts']),
+  sql('database: row-level security on download requests',
+    'ALTER TABLE download_approvals DISABLE ROW LEVEL SECURITY', 'ALTER TABLE download_approvals ENABLE ROW LEVEL SECURITY', ['test/idor-resources.test.ts']),
 ];
 
 function loadEnv() {
