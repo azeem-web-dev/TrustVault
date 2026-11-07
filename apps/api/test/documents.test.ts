@@ -508,9 +508,14 @@ describe('access suggestions never widen access by themselves', () => {
     const d1 = await upload(A, 'Payroll Jan', PDF, 'a.pdf', 'Payroll');
     await grant(A, d1, { userId: V.userId, level: 'READ' }).expect(200);
     const d2 = await upload(A, 'Payroll Feb', PDF, 'b.pdf', 'Payroll');
+    const grantsOn = (doc: string) => withDb(ownerDb(), async (db) => Number((await db.query('SELECT count(*) FROM grants WHERE document_id = $1', [doc])).rows[0].count));
     const res = await as(t, A).get(`/api/documents/${d2}/suggestions`).expect(200);
     expect(res.body.suggestions.map((s: { id: string }) => s.id)).toContain(V.userId);
+    expect(await grantsOn(d2)).toBe(0); // asking for suggestions created no grant
     await as(t, V).get(`/api/documents/${d2}`).expect(404); // still no access
+    // Only someone who may share can turn a suggestion into a grant: the suggested person cannot accept it themselves.
+    await grant(V, d2, { userId: V.userId, level: 'READ', fromSuggestion: true }).expect(404);
+    expect(await grantsOn(d2)).toBe(0);
     await grant(A, d2, { userId: V.userId, level: 'READ', fromSuggestion: true }).expect(200);
     const rows = await auditRows(`document_id = $1 AND action IN ('access.suggest', 'access.grant')`, [d2]);
     expect(rows.map((r) => r.action)).toEqual(['access.suggest', 'access.grant']);
