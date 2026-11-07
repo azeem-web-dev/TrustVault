@@ -175,6 +175,8 @@ async function main(): Promise<void> {
             const row = await tx.grant.create({
               data: { documentId, userId: g.userId ?? null, groupId: g.groupId ?? null, level: g.level, expiresAt: g.days ? new Date(Date.now() + g.days * DAY) : null, grantedById: ownerId },
             });
+            // A group share covers the members the owner confirmed (THREATS.md R7), as SharingService does.
+            if (g.groupId) await tx.$queryRaw`SELECT tv_confirm_group_members(${row.id}::uuid, ${ownerId}::uuid)`;
             await tx.auditEvent.create({ data: { action: 'access.grant', outcome: 'ALLOWED', reason: 'seed', actorId: ownerId, actorEmail: ownerEmail, targetType: 'grant', targetId: row.id, documentId, details: { level: g.level, userId: g.userId ?? null, groupId: g.groupId ?? null } } });
           }
         });
