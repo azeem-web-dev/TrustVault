@@ -7,6 +7,10 @@ import { as, auditRows, createUser, login, ORIGIN, ownerDb, resetState, startApp
 // published accounts, so one visitor must not change what the next one can
 // do, and the demo admin login must not become a way to mail strangers.
 
+const settle = () => new Promise((r) => setTimeout(r, 200));
+/** Invitation, reset and sign-in-link messages, to anyone. */
+const linksSent = (mail: MailService) => mail.outbox.filter((m) => /invited to TrustVault|Reset your TrustVault password|Confirm your TrustVault sign-in/.test(m.subject));
+
 const linkCount = (userId: string, purpose: string) =>
   withDb(ownerDb(), async (db) => (await db.query('SELECT count(*)::int AS n FROM password_reset_tokens WHERE user_id = $1 AND purpose = $2', [userId, purpose])).rows[0].n as number);
 
@@ -24,6 +28,7 @@ describe('DEMO_MODE=true', () => {
     await resetState(t.app);
     admin = await createUser({ email: 'demo-admin@t.io', role: 'ADMIN' });
     a = await login(t, admin);
+    await settle(); // the admin's own sign-in notice arrives after the login
     mail.outbox.length = 0;
   });
 
@@ -31,7 +36,9 @@ describe('DEMO_MODE=true', () => {
     const res = await as(t, a).post('/api/admin/users', { email: 'stranger@elsewhere.io', role: 'VIEWER' });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.invited).toBe(false);
-    expect(mail.outbox).toHaveLength(0);
+    await settle();
+    expect(linksSent(mail)).toEqual([]);
+    expect(mail.outbox.filter((m) => m.to !== admin.email)).toEqual([]);
     expect(await linkCount(res.body.user.id, 'INVITE')).toBe(0);
     const rows = await auditRows(`action = 'user.invite' AND target_id = $1`, [res.body.user.id]);
     expect(rows.at(-1)).toMatchObject({ outcome: 'DENIED', reason: 'demo_mode', details: expect.objectContaining({ email: 'stranger@elsewhere.io', notSent: true }) });
@@ -42,7 +49,9 @@ describe('DEMO_MODE=true', () => {
     await t.http.post('/api/auth/password/forgot').set('Origin', ORIGIN).send({ email: viewer.email }).expect(202);
     const sent = await as(t, a).post(`/api/admin/users/${viewer.id}/reset-link`).expect(202);
     expect(sent.body.sent).toBe(false);
-    expect(mail.outbox).toHaveLength(0);
+    await settle();
+    expect(linksSent(mail)).toEqual([]);
+    expect(mail.outbox.filter((m) => m.to !== admin.email)).toEqual([]);
     expect(await linkCount(viewer.id, 'RESET')).toBe(0);
     expect((await auditRows(`action = 'auth.reset_requested' AND target_id = $1`, [viewer.id])).at(-1)).toMatchObject({ outcome: 'DENIED', reason: 'demo_mode' });
     expect((await auditRows(`action = 'user.reset_link_sent' AND target_id = $1`, [viewer.id])).at(-1)).toMatchObject({ outcome: 'DENIED', reason: 'demo_mode' });
@@ -52,7 +61,9 @@ describe('DEMO_MODE=true', () => {
     const viewer = await createUser({ email: 'demo-link@t.io', role: 'VIEWER' });
     const reason = await t.app.get(SignInLinkService).offer({ id: viewer.id, email: viewer.email, displayName: 'V', isProtected: false }, '203.0.113.5');
     expect(reason).toBe('stepup_link_demo_mode');
-    expect(mail.outbox).toHaveLength(0);
+    await settle();
+    expect(linksSent(mail)).toEqual([]);
+    expect(mail.outbox.filter((m) => m.to !== admin.email)).toEqual([]);
     expect(await linkCount(viewer.id, 'SIGNIN')).toBe(0);
   });
 
