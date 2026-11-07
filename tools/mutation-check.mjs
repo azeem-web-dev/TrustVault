@@ -715,6 +715,48 @@ async function main() {
   if (shard && !(shard.k >= 1 && shard.k <= shard.n)) { console.error('--shard K/N needs 1 <= K <= N'); process.exit(2); }
   const selected = (n) => (!only || (n >= only.lo && n <= only.hi)) && (!shard || (n - 1) % shard.n === shard.k - 1);
 
+  // --from-logs DIR --source TEXT --baseline TEXT: write docs/MUTATION_REPORT.md
+  // from the logs of the CI shards (each line "#N name ... VERDICT (summary)"),
+  // for when the suite cannot run locally. Every row must appear in the logs.
+  const logsIdx = process.argv.indexOf('--from-logs');
+  if (logsIdx > 0) {
+    const arg = (flag) => { const i = process.argv.indexOf(flag); return i > 0 ? process.argv[i + 1] : 'not given'; };
+    const { readdirSync } = await import('node:fs');
+    const dir = process.argv[logsIdx + 1];
+    const seen = new Map();
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.log'))) {
+      for (const raw of readFileSync(join(dir, f), 'utf8').split('\n')) {
+        const m = /#\s*(\d+) (.*) \.\.\. (CAUGHT|SURVIVED|NOT APPLIED) \((.*)\)\s*$/.exec(raw);
+        if (m) seen.set(Number(m[1]), { name: m[2], verdict: m[3], summary: m[4] });
+      }
+    }
+    const results = MUTATIONS.map((m, i) => {
+      const s = seen.get(i + 1);
+      if (!s || s.name !== m.name) { console.error(`row #${i + 1} (${m.name}) is not in the logs`); process.exit(2); }
+      return { n: i + 1, ...m, verdict: s.verdict, summary: s.summary };
+    });
+    const caught = results.filter((r) => r.verdict === 'CAUGHT').length;
+    writeFileSync(join(ROOT, 'docs/MUTATION_REPORT.md'), [
+      '# Mutation check report',
+      '',
+      `Assembled by \`node tools/mutation-check.mjs --from-logs\` on ${new Date().toISOString()} from the logs of ${arg('--source')}.`,
+      '',
+      'Each row removes or disables one authorisation rule, runs the tests that should notice, and expects them to fail.',
+      '"CAUGHT" means at least one test failed with the rule gone. "SURVIVED" would mean nothing tests that rule.',
+      '',
+      `Baseline (no mutation, full suite in the same CI run): ${arg('--baseline')}`,
+      '',
+      `**${caught} of ${results.length} mutations caught.**`,
+      '',
+      '| # | Rule removed | Where | Tests run | Result |',
+      '|---|---|---|---|---|',
+      ...results.map((r) => `| ${r.n} | ${r.name} | ${r.kind === 'code' ? `\`${r.file.replace('../../', '')}\`` : 'database'} | ${r.tests.map((t) => `\`${t.replace('test/', '')}\``).join(', ')} | **${r.verdict}** — ${r.summary} |`),
+      '',
+    ].join('\n'));
+    console.log(`${caught}/${results.length} caught. Report: docs/MUTATION_REPORT.md`);
+    process.exit(caught === results.length ? 0 : 1);
+  }
+
   if (process.argv.includes('--dry-run')) {
     let missing = 0;
     for (const [i, m] of MUTATIONS.entries()) {
