@@ -53,9 +53,11 @@ async function addAuthenticator(): Promise<string> {
 async function signInWithPassword(user: TestUser) {
   await context.clearCookies();
   await page.goto(`${WEB}/login`);
-  await page.getByLabel('Email').fill(user.email);
-  await page.getByLabel('Password', { exact: true }).fill(user.password);
-  await page.locator('form button[type=submit]').click();
+  // The login page also has a beta-signup form, so scope to the sign-in form.
+  const form = page.locator('form', { has: page.getByRole('button', { name: /^Sign in/ }) });
+  await form.getByLabel('Email').fill(user.email);
+  await form.getByLabel('Password', { exact: true }).fill(user.password);
+  await form.getByRole('button', { name: /^Sign in/ }).click();
   await page.waitForURL('**/login/mfa');
 }
 
