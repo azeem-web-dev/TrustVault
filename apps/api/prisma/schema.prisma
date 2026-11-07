@@ -695,3 +695,14 @@ model AlertGeneratorState {
 
   @@map("alert_generator_state")
 }
+
+/// Android beta signup: an address kept only to email the closed-test steps. No IP, no name.
+model BetaSignup {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastEmailedAt DateTime? @map("last_emailed_at") @db.Timestamptz(6)
+  emailCount    Int       @default(0) @map("email_count")
+
+  @@map("beta_signups")
+}

@@ -87,7 +87,7 @@ export async function startApp(overrides: Record<string, string> = {}): Promise<
  */
 export async function resetState(app: INestApplication): Promise<void> {
   await withDb(ownerDb(), async (db) => {
-    await db.query('TRUNCATE sessions, users, groups CASCADE');
+    await db.query('TRUNCATE sessions, users, groups, beta_signups CASCADE');
     // Back to the default second-factor policy (ADMIN only).
     await db.query(`UPDATE app_settings SET mfa_required_roles = '{ADMIN}', updated_by_id = NULL`);
     // Detection thresholds and hard download limits back to their defaults:

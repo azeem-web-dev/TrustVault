@@ -64,6 +64,10 @@ const EnvSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default('TrustVault <updates@rayyanazeem.cloud>'),
+  /** Android closed-test steps emailed by POST /beta/signup. */
+  BETA_GROUP_URL: z.string().url().default('https://groups.google.com/g/trust-vault-beta-users'),
+  BETA_OPTIN_URL: z.string().url().default('https://play.google.com/apps/testing/cloud.rayyanazeem.trustvault'),
+  BETA_STORE_URL: z.string().url().default('https://play.google.com/store/apps/details?id=cloud.rayyanazeem.trustvault'),
   /** Minutes a password-reset link works. */
   RESET_LINK_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
   /** Hours an invitation link works. */

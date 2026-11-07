@@ -55,6 +55,13 @@ Levels: **VIEW** < **READ** < **EDIT** < **MANAGE** < **owner**. VIEW sees metad
 | GET | `/health` | **public** | `{ok:true}` only. |
 | GET | `/witness/checkpoints` | **public** | `since` (seq, default 1), `limit` (1 to 1000). Signed audit checkpoints `{seq, headHash, signature, keyId, createdAt}`, the signing public key, and `eventHashAtSince` (the chain's current hash at `since`). No event content. Used by the outside witness (`tools/witness.mjs`). |
 
+
+## Android beta
+
+| Method | Path | Who may call | Notes |
+|---|---|---|---|
+| POST | `/beta/signup` | **public** | `{email}` (valid address, at most 254 characters, else `400`). Always `202 {ok:true}` whether the address is new, repeated or capped, so it reveals nothing. Emails the three steps to join the Google Play closed test, at most once per address per 24 hours; stores only the lowercase address, timestamps and a send count (no IP). `429` after 5 requests per 15 minutes from one IP (20 per network); per address, after 3 an hour it quietly stops sending and still answers `202`. Audited as `beta.signup` (reason only, never the address). Links come from `BETA_GROUP_URL`, `BETA_OPTIN_URL`, `BETA_STORE_URL`. |
+
 ## Documents
 
 | Method | Path | Who may call | Notes |

@@ -44,6 +44,22 @@ ${l.button ? `<p style="margin:22px 0"><a href="${esc(l.button.url)}" style="dis
 const when = (d: Date) => d.toUTCString();
 
 export const mailTemplates = {
+  betaSteps(urls: { group: string; optIn: string; store: string }) {
+    return {
+      subject: 'Join the TrustVault Android beta',
+      ...render('there', {
+        title: 'Join the Android beta',
+        intro: 'Thanks for your interest! Three quick steps and the app is on your phone. Use the same Google account here as the one on your phone.',
+        lines: [
+          `1) Join the testers group (sign in with your phone's Google account, then click "Join group"): ${urls.group}`,
+          `2) Become a tester: ${urls.optIn}`,
+          `3) Install the app from Google Play: ${urls.store}`,
+        ],
+        button: { label: 'Start with step 1', url: urls.group },
+        footer: 'Step 3 can take a little while to appear after step 2. You will not get further emails from this signup. Want your address removed? Just reply to this email.',
+      }),
+    };
+  },
   signInLink(name: string, url: string, minutes: number, ip: string | null, at: Date) {
     return {
       subject: 'Confirm your TrustVault sign-in',

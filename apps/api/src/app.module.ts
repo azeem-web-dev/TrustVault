@@ -42,6 +42,8 @@ import { DownloadRequestsController, RolePoliciesController } from './documents/
 import { JobsService } from './jobs/jobs.service.js';
 import { MailService } from './mail/mail.service.js';
 import { NotifyService } from './mail/notify.service.js';
+import { BetaController } from './beta/beta.controller.js';
+import { BetaService } from './beta/beta.service.js';
 import { PasswordResetService } from './auth/password-reset.service.js';
 import { InviteService } from './auth/invite.service.js';
 import { RescanService } from './scanning/rescan.service.js';
@@ -78,7 +80,7 @@ export class AppModule {
         SessionsController, SettingsController,
         DownloadRequestsController, RolePoliciesController,
         KeydAdminController, KeydWitnessController,
-        RiskController,
+        RiskController, BetaController,
       ],
       providers: [
         { provide: ENV, useValue: env },
@@ -113,6 +115,7 @@ export class AppModule {
         MailService,
         NotifyService,
         PasswordResetService,
+        BetaService,
         InviteService,
         // Insider-extraction detection: alerts, thresholds, download limits.
         AlertStoreService,
