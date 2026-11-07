@@ -555,3 +555,16 @@ function zip(names: string[]): Buffer {
 }
 
 void appDb; void ORIGIN;
+
+describe('folder counts', () => {
+  it('do not count documents in the trash', async () => {
+    const folder = (await as(t, A).post('/api/folders', { name: 'Contracts' }).expect(201)).body.id as string;
+    const d1 = await upload(A, 'One');
+    const d2 = await upload(A, 'Two');
+    for (const d of [d1, d2]) await as(t, A).patch(`/api/documents/${d}`, { folderId: folder }).expect(200);
+    const count = async () => (await as(t, A).get('/api/folders').expect(200)).body.folders.find((f: { id: string }) => f.id === folder).documents;
+    expect(await count()).toBe(2);
+    await as(t, A).post(`/api/documents/${d2}/trash`).expect(200);
+    expect(await count()).toBe(1);
+  });
+});

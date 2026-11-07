@@ -25,7 +25,7 @@ export class FoldersController {
   @Get()
   async list(@CurrentActor() actor: Actor) {
     const folders = await this.prisma.asUser(actor.userId, (tx) =>
-      tx.folder.findMany({ where: { ownerId: actor.userId }, orderBy: { name: 'asc' }, select: { id: true, name: true, _count: { select: { documents: true } } } }),
+      tx.folder.findMany({ where: { ownerId: actor.userId }, orderBy: { name: 'asc' }, select: { id: true, name: true, _count: { select: { documents: { where: { deletedAt: null } } } } } }),
     );
     return { folders: folders.map((f) => ({ id: f.id, name: f.name, documents: f._count.documents })) };
   }
