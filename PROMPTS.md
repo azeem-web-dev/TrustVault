@@ -420,6 +420,20 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ---
 
+## 2026-11-07 — "The sign-in races are closed" was not true (authentication)
+
+**Asked (Claude):** close the open items from the writeup, including proving with a test that two sign-in races are safe: an admin resetting the password, or deactivating the account, while that person is signing in.
+
+**Got:** the claim, from reading the code, that both races were already closed by row locks and re-checks (`attemptLogin` and the second-factor step take `FOR UPDATE` on the user row), so only tests were needed.
+
+**What was wrong:** the test proved the claim wrong. Four cases passed, but the old password still produced a session when an admin reset the password at the same moment. The password hash was read by a function inside the same `SELECT ... FOR UPDATE` that waited for the lock, and Postgres evaluated it against the snapshot taken *before* the wait, so it returned the old hash after the reset had committed. Status and expiry were plain columns and re-read correctly, which is why only the password case leaked. The first versions of the test were also wrong (they looked for the lock wait in the wrong place), and CI caught that before it could hide the bug.
+
+**What I did instead:** sign-in now takes the row lock first and reads the password hash in a separate statement after it, refusing if it changed; the refusal, audit row and timing padding are identical to a normal wrong password. The race test now runs against both sign-in steps on every push.
+
+**Commits:** [d026211](https://github.com/azeem-web-dev/TrustVault/commit/d026211) (fix), [3455a08](https://github.com/azeem-web-dev/TrustVault/commit/3455a08), [8be53a0](https://github.com/azeem-web-dev/TrustVault/commit/8be53a0) (tests).
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:
