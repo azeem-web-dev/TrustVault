@@ -19,6 +19,7 @@ Every factual claim in README.md, docs/WRITEUP.md and docs/API.md that can be ch
 | 11 | Break-glass "one hour, read-only" (WRITEUP, permission model) | `README` Roles table, `approvals.test.ts` | Since S19 it needs a second admin's approval and gives View only (pages, no file) | WRITEUP sentence updated |
 | 12 | docs/API.md lists every endpoint | Script: every `@Get/@Post/@Put/@Patch/@Delete` in `apps/api/src/**/*.controller.ts` compared with the method/path rows of API.md | 111 routes in code; every one is documented (differences were only the script's handling of two controllers in one file and combined `GET / POST` rows) | No change |
 | 13 | "Every route that names a document calls `access.require()` before anything else" (WRITEUP) | `documents.test.ts` route matrix (17 routes), mutation rows 7 and 8 | Holds: removing `require()`'s refusal fails 10 tests; removing the download line fails 2 | No change |
+| 15 | API.md: inviting a user and re-sending an invitation need step-up | `apps/api/src/users/users.controller.ts` (no `@StepUp` on either route; the code comment says why) | Wrong: neither route asks for step-up | API.md corrected; the code was not changed |
 | 14 | Demo accounts "never receive email" (README) | `MailService.canReach()` returns false for `is_protected` accounts; `email.test.ts` "demo (protected) accounts never get mail and cannot be reset" | Holds | No change |
 
 ## Clean-clone run
