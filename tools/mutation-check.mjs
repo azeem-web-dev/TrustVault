@@ -705,6 +705,10 @@ const MUTATIONS = [
     String.raw`.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')`, '', ['test/probes.test.ts']),
   code('errors: an unexpected error answers a generic 500', 'src/common/errors.filter.ts',
     "res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ message: 'Internal error', requestId });", "res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ message: String(exception), stack: (exception as Error).stack, requestId });", ['test/probes.test.ts']),
+  // --- access suggestions never widen access (THREATS.md A14) ---
+  code('suggestions: asking for suggestions never creates a grant', 'src/documents/sharing.service.ts',
+    '      return { suggestions };', "      for (const s of suggestions) if (s.type === 'user') await tx.grant.create({ data: { documentId, userId: s.id, level: 'READ', grantedById: actor.userId } }); return { suggestions };",
+    ['test/documents.test.ts']),
 ];
 
 function loadEnv() {
