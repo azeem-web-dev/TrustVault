@@ -72,6 +72,16 @@ const EnvSchema = z.object({
   RESET_LINK_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
   /** Hours an invitation link works. */
   INVITE_LINK_HOURS: z.coerce.number().int().min(1).max(336).default(72),
+  /** Invitations (new or sent again) one admin may send per hour. */
+  INVITE_LIMIT_PER_ADMIN: z.coerce.number().int().min(1).max(1000).default(20),
+  /** Invitations all admins together may send per hour. */
+  INVITE_LIMIT_GLOBAL: z.coerce.number().int().min(1).max(10_000).default(60),
+  /**
+   * Shared public demo (THREATS.md I15): invitation, reset and sign-in-link
+   * emails are recorded but never sent, and settings that would lock the demo
+   * accounts out (MFA policy for non-admin roles, role-wide rules) are refused.
+   */
+  DEMO_MODE: bool.default(false),
   /** Risky actions need a second factor presented within this many minutes (THREATS.md S20). */
   STEP_UP_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
   /** Extra passkey origins: the Android app's android:apk-key-hash:..., comma separated (THREATS.md S22). */

@@ -3,6 +3,8 @@ import { PrismaService, type Tx } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { Role } from '../generated/prisma/enums.js';
+import { ENV, type Env } from '../config/env.js';
+import { demoModeRefusal } from '../common/demo-mode.js';
 
 const ORDER: Role[] = ['ADMIN', 'OWNER', 'VIEWER', 'EXTERNAL'];
 
@@ -20,6 +22,7 @@ export class MfaPolicyService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async requiredRoles(tx?: Tx): Promise<Role[]> {
@@ -36,6 +39,12 @@ export class MfaPolicyService {
   async update(actor: Actor, roles: Role[]): Promise<Role[]> {
     if (!roles.includes('ADMIN')) throw new BadRequestException('Administrators always need a second factor');
     const to = normalise(roles);
+    // Shared demo: the published owner, viewer and external accounts cannot
+    // enrol a factor (they are protected), so covering their role locks them out.
+    if (this.env.DEMO_MODE && to.some((r) => r !== 'ADMIN')) {
+      await this.audit.record({ action: 'settings.mfa_policy', outcome: 'DENIED', reason: 'demo_mode', targetType: 'settings', targetId: 'mfa_policy', details: { to } });
+      throw demoModeRefusal('requiring a second factor for roles other than ADMIN');
+    }
     return this.prisma.asUser(actor.userId, async (tx) => {
       // Row lock: two admins changing it at once are applied one after the other.
       const [row] = await tx.$queryRaw<{ roles: Role[] }[]>`SELECT mfa_required_roles::text[] AS roles FROM app_settings WHERE id = 1 FOR UPDATE`;

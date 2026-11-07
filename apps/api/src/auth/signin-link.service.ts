@@ -30,7 +30,9 @@ export class SignInLinkService {
   ) {}
 
   /** Email a link if the person can get mail and is under the hourly cap. Returns the audit reason. */
-  async offer(user: { id: string; email: string; displayName: string; isProtected: boolean }, ip: string | null): Promise<'stepup_link_sent' | 'stepup_link_not_sent'> {
+  async offer(user: { id: string; email: string; displayName: string; isProtected: boolean }, ip: string | null): Promise<'stepup_link_sent' | 'stepup_link_not_sent' | 'stepup_link_demo_mode'> {
+    // Shared demo: the caller records the refused sign-in with this reason; no link is made or sent.
+    if (this.env.DEMO_MODE) return 'stepup_link_demo_mode';
     if (!this.mail.canReach(user) || !(await this.throttle.mayEmailLink(user.email))) return 'stepup_link_not_sent';
     const token = randomBytes(32).toString('base64url');
     await this.prisma.$transaction([

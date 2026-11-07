@@ -74,7 +74,7 @@ export class PasswordResetService {
     }
     const user = await this.prisma.user.findUnique({ where: { email }, select: { id: true, email: true, displayName: true, status: true, isProtected: true, accessExpiresAt: true } });
     const eligible = Boolean(user && user.status === 'ACTIVE' && !user.isProtected && !(user.accessExpiresAt && user.accessExpiresAt.getTime() <= Date.now()));
-    const reason = !user ? 'no_account' : !eligible ? 'not_eligible' : !underLimit ? 'rate_limited' : !this.mail.canReach(user) ? 'mail_off' : 'sent';
+    const reason = !user ? 'no_account' : !eligible ? 'not_eligible' : !underLimit ? 'rate_limited' : this.env.DEMO_MODE ? 'demo_mode' : !this.mail.canReach(user) ? 'mail_off' : 'sent';
     if (reason === 'sent') await this.issue(user!, null);
     await this.audit.record({
       action: 'auth.reset_requested', outcome: reason === 'sent' ? 'ALLOWED' : 'DENIED', reason,
@@ -88,9 +88,9 @@ export class PasswordResetService {
     if (!user) throw new NotFoundException('User not found');
     if (user.status === 'INVITED') throw new BadRequestException('This person has not accepted their invitation yet. Send the invitation again instead.');
     if (user.status !== 'ACTIVE') throw new BadRequestException('Reactivate the account first');
-    const sent = this.mail.canReach(user);
+    const sent = !this.env.DEMO_MODE && this.mail.canReach(user);
     if (sent) await this.issue(user, actor.userId);
-    await this.audit.record({ action: 'user.reset_link_sent', outcome: sent ? 'ALLOWED' : 'DENIED', reason: sent ? undefined : user.isProtected ? 'demo_account' : 'mail_off', targetType: 'user', targetId: user.id, details: { email: user.email } });
+    await this.audit.record({ action: 'user.reset_link_sent', outcome: sent ? 'ALLOWED' : 'DENIED', reason: sent ? undefined : this.env.DEMO_MODE ? 'demo_mode' : user.isProtected ? 'demo_account' : 'mail_off', targetType: 'user', targetId: user.id, details: { email: user.email } });
     return { sent };
   }
 

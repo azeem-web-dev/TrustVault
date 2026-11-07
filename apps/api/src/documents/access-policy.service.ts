@@ -3,6 +3,8 @@ import { PrismaService } from '../db/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../common/request-context.js';
 import type { Role } from '../generated/prisma/enums.js';
+import { ENV, type Env } from '../config/env.js';
+import { demoModeRefusal } from '../common/demo-mode.js';
 import { NotifyService } from '../mail/notify.service.js';
 import { AccessService } from './access.js';
 import { listOrNull, networkColumns, type WindowInput, windowColumns, windowOut } from './policy-input.js';
@@ -30,6 +32,7 @@ export class AccessPolicyService {
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(NotifyService) private readonly notify: NotifyService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async createOverride(actor: Actor, documentId: string, input: { userId: string; reason: string; hours: number }) {
@@ -88,6 +91,12 @@ export class AccessPolicyService {
     if (role === 'ADMIN') throw new BadRequestException('Administrators never reach documents through shares; there is nothing to restrict');
     const w = windowColumns(input.window);
     const networks = networkColumns(input.networks);
+    // Shared demo: every non-admin role has a published demo account, so a
+    // role-wide window or network rule shuts it out for every other visitor.
+    if (this.env.DEMO_MODE) {
+      await this.audit.record({ action: 'policy.role_set', outcome: 'DENIED', reason: 'demo_mode', targetType: 'role', targetId: role, details: { role } });
+      throw demoModeRefusal('role-wide time and network rules');
+    }
     return this.prisma.asUser(actor.userId, async (tx) => {
       const before = await tx.roleAccessPolicy.findUnique({ where: { role } });
       await tx.$executeRaw`

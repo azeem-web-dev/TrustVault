@@ -49,6 +49,12 @@ export class InviteService {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, displayName: true, role: true, status: true, isProtected: true, accessExpiresAt: true } });
     if (!user) throw new NotFoundException('User not found');
     if (user.status !== 'INVITED') throw new BadRequestException(user.status === 'ACTIVE' ? 'This person has already accepted their invitation' : 'Reactivate the account first');
+    // Shared demo: recorded, never sent (anyone with the demo admin login could
+    // otherwise mail any address from our domain).
+    if (this.env.DEMO_MODE) {
+      await this.audit.record({ action: 'user.invite', outcome: 'DENIED', reason: 'demo_mode', targetType: 'user', targetId: user.id, details: { email: user.email, role: user.role, again, notSent: true } });
+      return { sent: false };
+    }
     const reachable = this.mail.canReach(user);
     const token = reachable ? await this.issue(user.id, actor.userId) : null;
     const sent = token !== null;
@@ -61,6 +67,20 @@ export class InviteService {
       targetType: 'user', targetId: user.id, details: { email: user.email, role: user.role, again },
     });
     return { sent };
+  }
+
+  /**
+   * Invitations per admin and in total, per hour, counted before an account
+   * is created or a link is sent. A refusal is recorded.
+   */
+  async checkSendLimit(actor: Actor): Promise<void> {
+    try {
+      await this.limits.hit(`invite:send:admin:${actor.userId}`, this.env.INVITE_LIMIT_PER_ADMIN, 3600, 'You have sent too many invitations this hour. Try again later.');
+      await this.limits.hit('invite:send:all', this.env.INVITE_LIMIT_GLOBAL, 3600, 'Too many invitations have been sent this hour. Try again later.');
+    } catch (err) {
+      await this.audit.record({ action: 'user.invite', outcome: 'DENIED', reason: 'rate_limited', targetType: 'user' });
+      throw err;
+    }
   }
 
   /** New link, under the user's row lock; null if the account stopped being INVITED meanwhile. */

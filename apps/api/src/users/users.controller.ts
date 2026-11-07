@@ -53,6 +53,7 @@ export class UsersController {
   // and its role is shown to every admin (owner's choice, THREATS.md S20).
   @Post()
   async create(@CurrentActor() actor: Actor, @Body(new ZodPipe(CreateUserSchema)) body: z.infer<typeof CreateUserSchema>) {
+    await this.invites.checkSendLimit(actor);
     const user = await this.users.create(actor, body);
     const { sent } = await this.invites.send(actor, user.id, false);
     return { user, invited: sent };
@@ -62,6 +63,7 @@ export class UsersController {
   @Post(':id/invite')
   @HttpCode(202)
   async resendInvite(@CurrentActor() actor: Actor, @Param('id', uuid) id: string) {
+    await this.invites.checkSendLimit(actor);
     return { ok: true, ...(await this.invites.send(actor, id, true)) };
   }
 
