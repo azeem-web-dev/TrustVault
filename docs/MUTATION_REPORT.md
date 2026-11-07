@@ -1,13 +1,13 @@
 # Mutation check report
 
-Assembled by `node tools/mutation-check.mjs --from-logs` on 2026-11-07T18:18:20.018Z from the logs of GitHub Actions CI run 42374014798 (commit 8f1c2ef, 8 shards).
+Assembled by `node tools/mutation-check.mjs --from-logs` on 2026-11-07T19:14:44.347Z from the logs of GitHub Actions CI run 42403412506 (commit c182ce6, 8 shards).
 
 Each row removes or disables one authorisation rule, runs the tests that should notice, and expects them to fail.
 "CAUGHT" means at least one test failed with the rule gone. "SURVIVED" would mean nothing tests that rule.
 
-Baseline (no mutation, full suite in the same CI run): Tests 879 passed, 1 skipped (880)
+Baseline (no mutation, full suite in the same CI run): Tests 901 passed, 1 skipped (902)
 
-**235 of 235 mutations caught.**
+**249 of 249 mutations caught.**
 
 | # | Rule removed | Where | Tests run | Result |
 |---|---|---|---|---|
@@ -17,7 +17,7 @@ Baseline (no mutation, full suite in the same CI run): Tests 879 passed, 1 skipp
 | 4 | decide: externals capped at READ | `src/documents/access.ts` | `access.unit.test.ts` | **CAUGHT** — Tests 1 failed, 27 passed (28) |
 | 5 | decide: deleted documents hidden from non-owners | `src/documents/access.ts` | `access.unit.test.ts` | **CAUGHT** — Tests 1 failed, 27 passed (28) |
 | 6 | decide: inactive users get nothing | `src/documents/access.ts` | `access.unit.test.ts` | **CAUGHT** — Tests 1 failed, 27 passed (28) |
-| 7 | require(): refuse when decide() says no | `src/documents/access.ts` | `documents.test.ts` | **CAUGHT** — Tests 10 failed, 43 passed (53) |
+| 7 | require(): refuse when decide() says no | `src/documents/access.ts` | `documents.test.ts` | **CAUGHT** — Tests 11 failed, 42 passed (53) |
 | 8 | download: the authorisation line itself | `src/documents/documents.service.ts` | `documents.test.ts` | **CAUGHT** — Tests 2 failed, 51 passed (53) |
 | 9 | sharing: only the owner grants MANAGE | `src/documents/sharing.service.ts` | `documents.test.ts` | **CAUGHT** — Tests 1 failed, 52 passed (53) |
 | 10 | search: application-side access filter | `src/documents/documents.service.ts` | `search-filter.test.ts` | **CAUGHT** — Tests 6 failed, 2 passed (8) |
@@ -246,3 +246,17 @@ Baseline (no mutation, full suite in the same CI run): Tests 879 passed, 1 skipp
 | 233 | email codes: a policy-covered role keeps its last factor | `src/auth/mfa.service.ts` | `email-otp.test.ts` | **CAUGHT** — Tests 1 failed, 19 passed (20) |
 | 234 | database: never an administrator's email codes (check constraint) | database | `email-otp.test.ts` | **CAUGHT** — Tests 1 failed, 19 passed (20) |
 | 235 | database: email codes turned on only by their owner | database | `email-otp.test.ts` | **CAUGHT** — Tests 2 failed, 18 passed (20) |
+| 236 | demo mode: MFA policy for non-admin roles refused | `src/auth/mfa-policy.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 237 | demo mode: role-wide time and network rules refused | `src/documents/access-policy.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 238 | demo mode: invitations recorded, not sent | `src/auth/invite.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 239 | demo mode: reset links recorded, not sent (admin-sent) | `src/auth/password-reset.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 240 | demo mode: reset links recorded, not sent (self-service) | `src/auth/password-reset.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 241 | demo mode: sign-in links never made | `src/auth/signin-link.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 242 | invitations: limit per admin | `src/auth/invite.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 243 | invitations: global limit | `src/auth/invite.service.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 1 failed, 6 passed (7) |
+| 244 | invitations: counted before the account is created | `src/users/users.controller.ts` | `demo-mode.test.ts` | **CAUGHT** — Tests 2 failed, 5 passed (7) |
+| 245 | database: row-level security on folders | database | `idor-resources.test.ts` | **CAUGHT** — Tests 1 failed, 4 passed (5) |
+| 246 | database: row-level security on download requests | database | `idor-resources.test.ts` | **CAUGHT** — Tests 2 failed, 3 passed (5) |
+| 247 | file names: bidirectional and zero-width characters removed | `src/documents/content-check.ts` | `probes.test.ts` | **CAUGHT** — Tests 1 failed, 5 passed (6) |
+| 248 | errors: an unexpected error answers a generic 500 | `src/common/errors.filter.ts` | `probes.test.ts` | **CAUGHT** — Tests 1 failed, 5 passed (6) |
+| 249 | suggestions: asking for suggestions never creates a grant | `src/documents/sharing.service.ts` | `documents.test.ts` | **CAUGHT** — Tests 1 failed, 52 passed (53) |

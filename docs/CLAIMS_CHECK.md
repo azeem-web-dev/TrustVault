@@ -20,6 +20,7 @@ Every factual claim in README.md, docs/WRITEUP.md and docs/API.md that can be ch
 | 12 | docs/API.md lists every endpoint | Script: every `@Get/@Post/@Put/@Patch/@Delete` in `apps/api/src/**/*.controller.ts` compared with the method/path rows of API.md | 111 routes in code; every one is documented (differences were only the script's handling of two controllers in one file and combined `GET / POST` rows) | No change |
 | 13 | "Every route that names a document calls `access.require()` before anything else" (WRITEUP) | `documents.test.ts` route matrix (17 routes), mutation rows 7 and 8 | Holds: removing `require()`'s refusal fails 10 tests; removing the download line fails 2 | No change |
 | 15 | API.md: inviting a user and re-sending an invitation need step-up | `apps/api/src/users/users.controller.ts` (no `@StepUp` on either route; the code comment says why) | Wrong: neither route asks for step-up | API.md corrected; the code was not changed |
+| 16 | Counts after this session’s changes | GitHub Actions run 42403412506 (commit c182ce6): API job and the 8 mutation shards | `Test Files 61 passed (61)`, `Tests 901 passed, 1 skipped (902)`; browser tests 28 passed; mutation **249 of 249 caught** | README and MUTATION_REPORT.md updated to these numbers |
 | 14 | Demo accounts "never receive email" (README) | `MailService.canReach()` returns false for `is_protected` accounts; `email.test.ts` "demo (protected) accounts never get mail and cannot be reset" | Holds | No change |
 
 ## Clean-clone run

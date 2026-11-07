@@ -39,7 +39,7 @@ Paths are relative to the repository root; tests are in `apps/api/test/`. CI run
 | 7 | "Search by name, owner, category and date" | `documents.service.ts` `search()`; filters on the web documents page | Search box plus the owner, category and date filters | `documents.test.ts` "q matches the title…", "owner matches the owner by name or email", "category matches exactly…", "from/to bound the upload date", "filters combine" |
 | 8 | "Validation of what is uploaded" | `apps/api/src/documents/content-check.ts` (type from the bytes, structure checks in a worker), `pdf-sanitize.ts`, `apps/api/src/scanning/` (ClamAV, fails closed) | Upload a renamed `.exe` or a PDF with JavaScript: refused, and a `DENIED` row appears in History / Audit | `documents.test.ts` upload section, `content-check.unit.test.ts`, `upload-sanitize.test.ts` |
 | 9 | "An administrative view of document activity and permission changes" | `apps/api/src/audit/audit-admin.service.ts`; web `apps/web/src/app/admin/audit/page.tsx`, `admin/alerts/page.tsx` | Ada → Audit log → "Permission changes" filter → Verify integrity | `admin-mfa.test.ts` "lists document activity and permission changes, with document titles", "non-admins cannot read the audit log, alerts or export" |
-| 10 | "Automated tests showing that one user cannot reach another user's documents" | `apps/api/test/documents.test.ts` (`describe('one user cannot reach another user’s documents')`), `rls.test.ts`, `search-filter.test.ts`, `tools/mutation-check.mjs` | `cd apps/api && npx vitest run test/documents.test.ts` | The suite itself: 879 tests pass in CI; 235 of 235 authorisation rules, removed one at a time, each fail a test ([MUTATION_REPORT.md](docs/MUTATION_REPORT.md)) |
+| 10 | "Automated tests showing that one user cannot reach another user's documents" | `apps/api/test/documents.test.ts` (`describe('one user cannot reach another user’s documents')`), `rls.test.ts`, `search-filter.test.ts`, `tools/mutation-check.mjs` | `cd apps/api && npx vitest run test/documents.test.ts` | The suite itself: 901 tests pass in CI (1 skipped); 249 of 249 rules, removed one at a time, each fail a test ([MUTATION_REPORT.md](docs/MUTATION_REPORT.md)) |
 
 ## The three non-negotiables
 
@@ -139,10 +139,10 @@ Then seed with production passwords (`SEED_PASSWORD_*`, `SEED_ADMIN_TOTP_SECRET`
 ## Tests
 
 ```bash
-cd apps/api && npx vitest run            # 880 tests (879 pass, 1 skipped) in 57 files against a real Postgres and Redis (CI, 2026-11-07)
+cd apps/api && npx vitest run            # 902 tests (901 pass, 1 skipped) in 61 files against a real Postgres and Redis (CI run 42403412506, 2026-11-08)
 cd apps/api && npm run test:e2e          # real Chrome: passkeys, and stored XSS / CSP / framing on the production build
 cd apps/api && npm run measure:timing    # login timing: can response time reveal which emails exist?
-node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (235 of them; all 235 caught in CI on 2026-11-07), one at a time; every removal must fail a test
+node tools/mutation-check.mjs            # removes every authorisation rule listed in tools/mutation-check.mjs (249 of them; all 249 caught in CI on 2026-11-08), one at a time; every removal must fail a test
 node tools/verify-audit.test.mjs         # the offline audit verifier against forged and cut bundles
 cd keyd && cargo test --locked           # key service (tickets, ledger, rate limits)
 cd apps/mobile && flutter test           # the Android app: session storage, wipe on sign-out and 401, local copies, transport policy
