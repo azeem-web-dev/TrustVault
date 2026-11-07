@@ -152,9 +152,13 @@ export class AuthService {
       // an admin reset the password, deactivated the account or it expired in
       // that window, the old password must not yield a session (THREATS.md R9).
       // The row lock orders this against those changes.
-      const [now] = await tx.$queryRaw<{ password_hash: string; status: string; access_expires_at: Date | null }[]>`
-        SELECT tv_password_hash(id) AS password_hash, status, access_expires_at FROM users WHERE id = ${user!.id}::uuid FOR UPDATE`;
-      if (!now || now.password_hash !== passwordHash || now.status !== 'ACTIVE' || (now.access_expires_at && now.access_expires_at.getTime() <= Date.now())) {
+      const [now] = await tx.$queryRaw<{ status: string; access_expires_at: Date | null }[]>`
+        SELECT status, access_expires_at FROM users WHERE id = ${user!.id}::uuid FOR UPDATE`;
+      // A separate statement, after the lock: a function in the locked
+      // statement's select list reads the snapshot taken BEFORE the wait, so
+      // it would still return the old hash after a concurrent reset commits.
+      const [cur] = await tx.$queryRaw<{ hash: string | null }[]>`SELECT tv_password_hash(${user!.id}::uuid) AS hash`;
+      if (!now || cur?.hash !== passwordHash || now.status !== 'ACTIVE' || (now.access_expires_at && now.access_expires_at.getTime() <= Date.now())) {
         return null;
       }
       return this.openSession(user!, previousToken, tx, gate.trusted ? 'trusted_device' : 'password');
