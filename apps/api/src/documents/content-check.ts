@@ -326,12 +326,13 @@ function detectText(buf: Buffer, originalName: string): DetectedType {
 
 /**
  * Display name for a stored file: no directories, no control characters,
- * no quotes, bounded length, and an extension that matches what the file
- * actually is.
+ * no quotes, no bidirectional or zero-width characters (an RTL override
+ * makes "report<U+202E>fdp.exe" display as "reportexe.pdf"), bounded length,
+ * and an extension that matches what the file actually is.
  */
 export function safeFileName(original: string, type: DetectedType): string {
   let name = original.normalize('NFC').split(/[\\/]/).pop() ?? '';
-  name = name.replace(/[\u0000-\u001f\u007f"<>|:*?]/g, '').replace(/\s+/g, ' ').trim();
+  name = name.replace(/[\u0000-\u001f\u007f-\u009f"<>|:*?]/g, '').replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   const dot = name.lastIndexOf('.');
   let stem = dot > 0 ? name.slice(0, dot) : name;
   stem = stem.slice(0, 150).trim() || 'document';
