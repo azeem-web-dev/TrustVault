@@ -1,0 +1,26 @@
+# Claims check
+
+Every factual claim in README.md, docs/WRITEUP.md and docs/API.md that can be checked, how it was checked, what was found, and what was changed. Checked on 2026-11-07.
+
+**Where the numbers come from.** The API test suite needs a real Postgres and Redis. On the PC used for this check there was no working Redis and the local Postgres roles refused the dev passwords, so the DB-backed suite could not be run locally. The test count and the mutation result below are read from the GitHub Actions logs of the named CI runs, not from a local run.
+
+| # | Claim (where) | How checked | Result | Action |
+|---|---|---|---|---|
+| 1 | "over 750 tests" (README, Tests) | GitHub Actions run 42374014798 (commit 8f1c2ef), job "API tests (real Postgres + Redis)", vitest summary line | `Test Files 57 passed (57)`, `Tests 879 passed, 1 skipped (880)`; browser tests `2 passed (2)` files | Replaced with the real number |
+| 2 | "235" authorisation rules in the mutation check (README) | Same CI run, 8 mutation shards; counted `CAUGHT` lines and each shard's `n/n caught` summary | 29+29+29+29+29+30+30+30 = **235 of 235 caught, 0 survived** | Kept 235, dated; docs/MUTATION_REPORT.md regenerated from the CI logs (see its header) |
+| 3 | README test table: each named file exists and covers what it says | Listed `apps/api/test/`, counted `it(` per file, read test names for the specific claims | All 40 named files exist (plus `e2e/passkey.e2e.ts`, `e2e/web-security.e2e.ts`, `tools/verify-audit.test.mjs`). One number was wrong: `documents.test.ts` refuses **17** document routes to 4 kinds of outsider, not 13. `verify-audit.test.mjs` does have 19 cases | Fixed "13" → "17" |
+| 4 | Witness branch "every 15 min" (README, How it works) | GitHub API: commits on `witness`, runs of `witness.yml` | Last commit 2026-11-07 16:27 UTC ("up to seq 550"); runs on 2026-11-06/07 at 18:29, 23:27, 03:05, 10:09, 16:26. Scheduled every 15 minutes, but GitHub actually ran it every 4–7 hours. Still updating, all runs green | README now says GitHub often runs it hours late; listed in Known limitations |
+| 5 | Sigstore: every checkpoint published within about a minute | Witness branch `public-log.jsonl` (last entry) vs `checkpoints.jsonl`; live `GET /api/witness/checkpoints` | Checkpoint seq 550 created 15:55:24 UTC, in Rekor (logIndex 3741064693) at 15:55:30: **6 seconds**. Live server's newest checkpoint: seq 564 at 17:55 UTC. Still updating | No change. The README link points to one early entry (logIndex 3633615638); it still resolves, and newer entries are listed in `public-log.jsonl` |
+| 6 | "Demo video: recorded" (docs/WRITEUP.md, What is not finished) | Looked for a link anywhere in the repository | No link exists | Replaced with a marked placeholder `[DEMO VIDEO LINK: TO BE ADDED]` in WRITEUP and README; flagged to the owner |
+| 7 | Access suggestions described as AI (THREATS.md A14, docs/PLAN.md, docs/WRITEUP.md) | Read `SharingService.suggestions()` in `apps/api/src/documents/sharing.service.ts` | A heuristic: counts the owner's earlier grants on documents of the same category, top 5, never externals or inactive accounts. No model, no AI call | Wording changed everywhere to "a heuristic, not AI" (README, WRITEUP, THREATS A14, PLAN, API) |
+| 8 | "Owns five documents" (README, Olivia) | `apps/api/prisma/seed.ts` | The seed gives Olivia **four** documents (Offer letter, Salary bands 2026, Q3 board minutes, Partner NDA) | Changed to "the four seeded documents" |
+| 9 | "Victor sees 3 documents (one direct, two through groups)" (README) | `seed.ts` grants | Offer letter (direct READ), Q3 board minutes (Finance group), Architecture review (Engineering group) | Correct, no change |
+| 10 | "Backups stay on server 136 … declined for now" (WRITEUP) vs "PC copy live" (THREATS I13) | Looked at the PC's backup folder and scheduled tasks | The two documents disagreed. The PC holds copies pulled by hand, the newest from 2026-11-03; there is no scheduled pull | WRITEUP and README now say: pulled by hand, last 2026-11-03, not scheduled |
+| 11 | Break-glass "one hour, read-only" (WRITEUP, permission model) | `README` Roles table, `approvals.test.ts` | Since S19 it needs a second admin's approval and gives View only (pages, no file) | WRITEUP sentence updated |
+| 12 | docs/API.md lists every endpoint | Script: every `@Get/@Post/@Put/@Patch/@Delete` in `apps/api/src/**/*.controller.ts` compared with the method/path rows of API.md | 111 routes in code; every one is documented (differences were only the script's handling of two controllers in one file and combined `GET / POST` rows) | No change |
+| 13 | "Every route that names a document calls `access.require()` before anything else" (WRITEUP) | `documents.test.ts` route matrix (17 routes), mutation rows 7 and 8 | Holds: removing `require()`'s refusal fails 10 tests; removing the download line fails 2 | No change |
+| 14 | Demo accounts "never receive email" (README) | `MailService.canReach()` returns false for `is_protected` accounts; `email.test.ts` "demo (protected) accounts never get mail and cannot be reset" | Holds | No change |
+
+## Clean-clone run
+
+See the section at the end of this file (filled in by Task 7 of the 2026-11-07 session).
