@@ -159,6 +159,10 @@ jobs:
           persist-credentials: false
       # 1.91.1 is the toolchain install-keyd.sh uses on the server.
       - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: clippy
+      # Any clippy warning fails the build.
+      - run: cd keyd && cargo clippy --locked --all-targets -- -D warnings
       # --locked: fail if Cargo.lock is missing or out of date, so CI builds
       # exactly the dependency versions that were reviewed.
       - run: cd keyd && cargo test --release --locked
