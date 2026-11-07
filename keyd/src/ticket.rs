@@ -7,6 +7,7 @@
 //!   - requires a fresh ALLOWED audit event for exactly that user, document,
 //!     version and action (each event can back one ticket only),
 //!   - MACs the ticket with a secret the application role cannot read.
+//!
 //! keyd holds the same secret (systemd credential ticket.key) and checks
 //! the MAC, the expiry, single use, and that the wrapped key and AAD it is
 //! asked to open are the ones the ticket names.

@@ -90,8 +90,8 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
     }
     Some(out)
 }
@@ -162,7 +162,7 @@ impl Ledger {
             if e.hash != hex(&h) {
                 return Err(format!("ledger entry {} hash mismatch", e.seq));
             }
-            if (e.seq - 1) % INDEX_EVERY == 0 {
+            if (e.seq - 1).is_multiple_of(INDEX_EVERY) {
                 inner.index.push(offset);
             }
             visit(&e);
@@ -200,7 +200,7 @@ impl Ledger {
                 let _ = file.set_len(start);
                 return Err(format!("cannot write ledger: {err}"));
             }
-            if (e.seq - 1) % INDEX_EVERY == 0 {
+            if (e.seq - 1).is_multiple_of(INDEX_EVERY) {
                 i.index.push(start);
             }
             i.len = start + line.len() as u64;
