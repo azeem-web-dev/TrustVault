@@ -85,7 +85,7 @@ Admins must use a second factor (passkey or TOTP).
 - Download: always `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, strict CSP; nothing uploaded is ever rendered inline on our origin.
 
 ## Feature scope
-Required ten, plus: groups, folders, versions, trash + restore, ownership transfer, external expiring access, retention policy job, passkeys, admin 2FA, alerts (repeated denials, bulk downloads, revoked-user attempts, new external grants, break-glass), AI access suggestions (suggest only; owner confirms; suggestion and decision both audited; the AI code path has no grant capability).
+Required ten, plus: groups, folders, versions, trash + restore, ownership transfer, external expiring access, retention policy job, passkeys, admin 2FA, alerts (repeated denials, bulk downloads, revoked-user attempts, new external grants, break-glass), access suggestions (suggest only; owner confirms; suggestion and decision both audited; the suggestion code path has no grant capability). Built as a heuristic over past shares, not an AI model.
 
 ## Tests
 - Permission matrix: every endpoint × every role × {owner, READ, EDIT, MANAGE, none, revoked, expired, deactivated, deleted doc}.
@@ -99,5 +99,5 @@ Required ten, plus: groups, folders, versions, trash + restore, ownership transf
 3. Grants, groups, revoke, external expiry, ownership transfer.
 4. Audit chain, DB lockdown, keyd signing, admin view + alerts.
 5. Search, folders, versions, trash, retention.
-6. Passkeys + admin 2FA, AI suggestions, mutation check, attack my own deployment.
+6. Passkeys + admin 2FA, access suggestions (heuristic, not AI), mutation check, attack my own deployment.
 7. THREATS.md pass, API docs, README, write-up, demo.
