@@ -27,7 +27,7 @@ interface SessionState {
 }
 
 const SessionContext = createContext<SessionState | null>(null);
-const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite', '/signin-link', '/privacy', '/delete-account'];
+const PUBLIC_PATHS = ['/login', '/forgot', '/reset', '/invite', '/signin-link', '/privacy', '/beta', '/delete-account'];
 /** Navigating re-checks the session only when the last check is older than this (A5). */
 const RECHECK_MS = 5 * 60_000;
 

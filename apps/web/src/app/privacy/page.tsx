@@ -48,6 +48,7 @@ export default function PrivacyPolicyPage() {
           <li><span className="font-medium">A device trust token</span> — a random value stored on your device so a known device can be recognised at sign-in. It is not an advertising or hardware identifier.</li>
         </ul>
         <p>TrustVault does not collect your location, contacts, or advertising identifiers, and contains no ads or third-party analytics or advertising SDKs.</p>
+        <p>If you ask for the Android beta steps, we store your email address, when we emailed you and how many times, only to send you those instructions (one email per day at most). We keep no IP address or other detail with it. To have it removed, email <a className={LEGAL_LINK} href={`mailto:${CONTACT}`}>{CONTACT}</a> from that address.</p>
       </Section>
 
       <Section title="Why we use it" index={3} icon={<Target size={18} weight="duotone" />}>
