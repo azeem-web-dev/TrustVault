@@ -676,6 +676,25 @@ const MUTATIONS = [
     "ALTER TABLE users ADD CONSTRAINT users_email_otp_not_admin CHECK (email_otp_enabled_at IS NULL OR role <> 'ADMIN')", ['test/email-otp.test.ts']),
   sql('database: email codes turned on only by their owner',
     'ALTER TABLE users DISABLE TRIGGER users_guard_update_email_otp', 'ALTER TABLE users ENABLE TRIGGER users_guard_update_email_otp', ['test/email-otp.test.ts']),
+  // --- shared public demo (THREATS.md I15) and invitation limits ---
+  code('demo mode: MFA policy for non-admin roles refused', 'src/auth/mfa-policy.service.ts',
+    "if (this.env.DEMO_MODE && to.some((r) => r !== 'ADMIN')) {", 'if (false) {', ['test/demo-mode.test.ts']),
+  code('demo mode: role-wide time and network rules refused', 'src/documents/access-policy.service.ts',
+    '    if (this.env.DEMO_MODE) {\n      await this.audit.record({ action: \'policy.role_set\'', '    if (false) {\n      await this.audit.record({ action: \'policy.role_set\'', ['test/demo-mode.test.ts']),
+  code('demo mode: invitations recorded, not sent', 'src/auth/invite.service.ts',
+    '    if (this.env.DEMO_MODE) {', '    if (false) {', ['test/demo-mode.test.ts']),
+  code('demo mode: reset links recorded, not sent (admin-sent)', 'src/auth/password-reset.service.ts',
+    'const sent = !this.env.DEMO_MODE && this.mail.canReach(user);', 'const sent = this.mail.canReach(user);', ['test/demo-mode.test.ts']),
+  code('demo mode: reset links recorded, not sent (self-service)', 'src/auth/password-reset.service.ts',
+    "this.env.DEMO_MODE ? 'demo_mode' : !this.mail.canReach(user) ? 'mail_off' : 'sent';", "!this.mail.canReach(user) ? 'mail_off' : 'sent';", ['test/demo-mode.test.ts']),
+  code('demo mode: sign-in links never made', 'src/auth/signin-link.service.ts',
+    "if (this.env.DEMO_MODE) return 'stepup_link_demo_mode';", '', ['test/demo-mode.test.ts']),
+  code('invitations: limit per admin', 'src/auth/invite.service.ts',
+    'await this.limits.hit(`invite:send:admin:${actor.userId}`', 'void (`invite:send:admin:${actor.userId}`', ['test/demo-mode.test.ts']),
+  code('invitations: global limit', 'src/auth/invite.service.ts',
+    "await this.limits.hit('invite:send:all'", "void ('invite:send:all'", ['test/demo-mode.test.ts']),
+  code('invitations: counted before the account is created', 'src/users/users.controller.ts',
+    '    await this.invites.checkSendLimit(actor);\n    const user = await this.users.create(actor, body);', '    const user = await this.users.create(actor, body);', ['test/demo-mode.test.ts']),
 ];
 
 function loadEnv() {
