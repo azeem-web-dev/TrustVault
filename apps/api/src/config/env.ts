@@ -82,6 +82,12 @@ const EnvSchema = z.object({
    * accounts out (MFA policy for non-admin roles, role-wide rules) are refused.
    */
   DEMO_MODE: bool.default(false),
+  /**
+   * The two published demo administrators (protected accounts) sign in with a
+   * password only, so reviewers need no authenticator (THREATS.md S21a). Every
+   * other administrator still needs a second factor. Off unless set.
+   */
+  DEMO_ADMIN_NO_MFA: bool.default(false),
   /** Risky actions need a second factor presented within this many minutes (THREATS.md S20). */
   STEP_UP_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
   /** Extra passkey origins: the Android app's android:apk-key-hash:..., comma separated (THREATS.md S22). */

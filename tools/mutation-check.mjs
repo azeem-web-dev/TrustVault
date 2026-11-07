@@ -693,6 +693,10 @@ const MUTATIONS = [
     'await this.limits.hit(`invite:send:admin:${actor.userId}`', 'void (`invite:send:admin:${actor.userId}`', ['test/demo-mode.test.ts']),
   code('invitations: global limit', 'src/auth/invite.service.ts',
     "await this.limits.hit('invite:send:all'", "void ('invite:send:all'", ['test/demo-mode.test.ts']),
+  code('demo admins without MFA: only protected accounts', 'src/auth/mfa-policy.service.ts',
+    "return env.DEMO_ADMIN_NO_MFA && u.role === 'ADMIN' && u.isProtected;", "return env.DEMO_ADMIN_NO_MFA && u.role === 'ADMIN';", ['test/demo-admin-mfa.test.ts']),
+  code('demo admins without MFA: only when the flag is on', 'src/auth/mfa-policy.service.ts',
+    "return env.DEMO_ADMIN_NO_MFA && u.role === 'ADMIN' && u.isProtected;", "return u.role === 'ADMIN' && u.isProtected;", ['test/demo-admin-mfa.test.ts']),
   code('invitations: counted before the account is created', 'src/users/users.controller.ts',
     '    await this.invites.checkSendLimit(actor);\n    const user = await this.users.create(actor, body);', '    const user = await this.users.create(actor, body);', ['test/demo-mode.test.ts']),
   // --- IDOR on resources that are not documents (THREATS.md A27) ---

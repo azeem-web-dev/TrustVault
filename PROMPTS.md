@@ -510,6 +510,20 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ---
 
+## 2026-11-08 — Reviewers could not get past the admin's second factor (authentication)
+
+**Asked (Claude):** turn off the authenticator for the demo admin, because a reviewer will not set up an authenticator app just to look around.
+
+**Got:** first, pushback: admin MFA is a rule in code ("Administrators always need a second factor", THREATS.md S21), the README already publishes the TOTP secret, so a reviewer "only" has to add it to an app. The suggestion was a QR code in the README instead.
+
+**What was wrong:** that answer optimised the threat model and ignored the reader. A reviewer with a few minutes will not install an authenticator, so the admin view, the audit log and the integrity check (a large part of what is marked) would go unseen. Turning MFA off for *every* admin, on the other hand, would weaken real accounts.
+
+**What I did instead:** `DEMO_ADMIN_NO_MFA=true` exempts only the protected (published) demo administrators; every other admin still needs a second factor, and the flag is off by default. `demo-admin-mfa.test.ts` proves the demo admin gets full access with a password, a real admin with the flag on is still refused with `mfa_required`, and with the flag off the demo admin needs the factor. Two mutation rows (drop the protected check, drop the flag check) must each fail a test. THREATS.md S21a records the trade-off: the demo admin login is now password-only, which already gave no document access.
+
+**Commits:** _(this commit)_
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:

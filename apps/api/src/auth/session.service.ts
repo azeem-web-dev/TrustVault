@@ -4,7 +4,7 @@ import { ENV, type Env } from '../config/env.js';
 import { PrismaService, type Tx } from '../db/prisma.service.js';
 import type { Actor } from '../common/request-context.js';
 import { AuditService } from '../audit/audit.service.js';
-import { emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
+import { demoAdminExempt, emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
 import { deviceName } from './device-name.js';
 
 export const SESSION_COOKIE = '__Host-tv_session';
@@ -120,7 +120,7 @@ export class SessionService {
       authLevel: session.authLevel,
       csrfToken: session.csrfToken,
       mfaEnrolled,
-      mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),
+      mfaRequired: !demoAdminExempt(this.env, user) && MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),
       mfaVerifiedAt: session.mfaVerifiedAt,
     };
   }

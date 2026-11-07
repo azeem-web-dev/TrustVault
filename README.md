@@ -10,14 +10,14 @@ A document platform where the wrong person can never read the file, and you can 
 
 | Role | Email | Password | What to try |
 |---|---|---|---|
-| Admin | `admin@demo.com` | `admin1234567` | Needs a second factor: add the secret below to an authenticator app (Google Authenticator, 1Password, Authy...) or generate a code with `oathtool --totp -b <secret>`. Audit log, alerts, verify integrity. Break-glass and clearing an owner's second factor need a second admin's approval (THREATS.md S19): ask here, approve as Ben. |
+| Admin | `admin@demo.com` | `admin1234567` | Password only on the live demo: the two published demo admins are exempt from the second factor (`DEMO_ADMIN_NO_MFA`, THREATS.md S21a); every other admin still needs one. Audit log, alerts, verify integrity. Break-glass and clearing an owner's second factor need a second admin's approval (THREATS.md S19): ask here, approve as Ben. |
 | Admin 2 | `admin2@demo.com` | `admin2345678` | The second administrator, with its own authenticator secret (below). Approve or reject Ada's requests on the Approvals page; then Ada uses the approval once (break-glass gives one hour of View only). Nobody approves their own request. |
 | Owner | `olivia@demo.com` | `owner1234567` | Owns the four seeded documents, shared in different ways. Share, revoke, see history. |
 | Owner | `oscar@demo.com` | `owner1234567` | Owns *Architecture review* (Engineering group can edit, Olivia can manage). |
 | Viewer | `victor@demo.com` | `viewer123456` | Sees 3 documents (one direct, two through groups). Try to reach *Salary bands 2026*. |
 | External | `erin@demo.com` | `external1234` | Sees only the NDA shared with her, read-only, until it expires. |
 
-**Admin authenticator secret:** `NZVD2J3RUX6P7RSZ3FSGBT2ACTCWOPRZ`  
+Only needed if `DEMO_ADMIN_NO_MFA` is off (for example on a local run): **Admin authenticator secret:** `NZVD2J3RUX6P7RSZ3FSGBT2ACTCWOPRZ`  
 **Admin 2 authenticator secret:** `NIGQMN42LTYZ6MNDYSNHFFOBUVL5C3E6`
 
 The demo accounts are published because the brief asks for them, so they are **protected**: nobody can deactivate, demote, rename them or change their password or second factor (THREATS.md I7, I8). Each code works once (replay-protected). If a code is refused, wait for the next one.

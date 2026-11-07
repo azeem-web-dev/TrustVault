@@ -57,6 +57,15 @@ export class MfaPolicyService {
 }
 
 /**
+ * The published demo administrators skip the second factor when
+ * DEMO_ADMIN_NO_MFA is on (THREATS.md S21a). Only protected ADMIN accounts:
+ * a real administrator always needs one, whatever the flag.
+ */
+export function demoAdminExempt(env: Pick<Env, 'DEMO_ADMIN_NO_MFA'>, u: { role: Role; isProtected: boolean }): boolean {
+  return env.DEMO_ADMIN_NO_MFA && u.role === 'ADMIN' && u.isProtected;
+}
+
+/**
  * Emailed codes count as a second factor for this account (THREATS.md S30).
  * Never for an ADMIN (their mailbox must not be enough to become them) or a
  * demo account (they get no mail); the database refuses both as well.

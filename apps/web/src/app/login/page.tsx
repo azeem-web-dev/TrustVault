@@ -13,7 +13,7 @@ import { errorText } from '@/lib/api';
 // The published demo accounts (also listed in the README). They are
 // protected server-side: nobody can change their password or second factor.
 const DEMO = [
-  { name: 'Ada Admin', role: 'Administrator', email: 'admin@demo.com', password: 'admin1234567', note: 'Needs a 6-digit code' },
+  { name: 'Ada Admin', role: 'Administrator', email: 'admin@demo.com', password: 'admin1234567', note: 'Password only on this demo' },
   { name: 'Ben Admin', role: 'Second administrator', email: 'admin2@demo.com', password: 'admin2345678', note: 'Approves the first admin’s requests' },
   { name: 'Olivia Owner', role: 'Document owner', email: 'olivia@demo.com', password: 'owner1234567' },
   { name: 'Victor Viewer', role: 'Viewer', email: 'victor@demo.com', password: 'viewer123456' },
@@ -137,7 +137,7 @@ export default function LoginPage() {
         </div>
         <p className="flex items-start gap-1.5 text-xs leading-5 text-fg-subtle">
           <Sparkle size={14} className="mt-0.5 shrink-0 text-brand-500 dark:text-brand-300" />
-          Picking one fills in its login. The admin also needs a 6-digit code from the secret in the README.
+          Picking one fills in its login, then press Sign in.
         </p>
       </div>
 

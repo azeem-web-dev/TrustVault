@@ -7,7 +7,7 @@ import { RateLimitService } from '../redis/rate-limit.service.js';
 import { currentContext, type Actor } from '../common/request-context.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type NewSession } from './session.service.js';
-import { emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
+import { demoAdminExempt, emailCodesOn, MfaPolicyService } from './mfa-policy.service.js';
 import { DeviceTrustService } from './device-trust.service.js';
 import { LoginThrottleService } from './login-throttle.service.js';
 import { SIGNIN_TOKEN_SHAPE, SignInLinkService } from './signin-link.service.js';
@@ -212,7 +212,7 @@ export class AuthService {
     return {
       session,
       user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-      mfa: { required: MfaPolicyService.isRequired(user.role, enrolled, await this.policy.requiredRoles()), enrolled, methods },
+      mfa: { required: !demoAdminExempt(this.env, user) && MfaPolicyService.isRequired(user.role, enrolled, await this.policy.requiredRoles()), enrolled, methods },
     };
   }
 
