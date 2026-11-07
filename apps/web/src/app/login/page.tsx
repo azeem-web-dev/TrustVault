@@ -1,9 +1,10 @@
 'use client';
 
+import { BetaCard } from '@/components/beta-card';
 import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AndroidLogo, ArrowRight, Envelope, Eye, EyeSlash, LockSimple, SignIn, Sparkle } from '@phosphor-icons/react';
+import { ArrowRight, Envelope, Eye, EyeSlash, LockSimple, SignIn, Sparkle } from '@phosphor-icons/react';
 import { useSession } from '@/components/session';
 import { AUTH_INLINE_LINK, AuthFootnote, AuthHeader, AuthLayout } from '@/components/auth-layout';
 import { Alert, Avatar, Button, Divider, IconButton, Input, Label, cx, staggerClass } from '@/components/ui';
@@ -103,9 +104,7 @@ export default function LoginPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-xs text-fg-subtle">
-        <Link href="/beta" className={cx(AUTH_INLINE_LINK, 'min-h-8 gap-1 px-1')}><AndroidLogo size={14} />Get the Android beta</Link>
-      </p>
+      <BetaCard />
 
       <div className="mt-8 space-y-3">
         <Divider label="or try a demo account" />
