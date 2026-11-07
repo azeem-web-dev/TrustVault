@@ -96,19 +96,30 @@ Grants are per document, to named people or to groups. A group share covers the 
 
 ## Run it locally
 
-Needs Node 22+, PostgreSQL 16 and Redis 7.
+Needs Node 22+, PostgreSQL 16 and Redis 7 running on the machine.
 
 ```bash
 git clone https://github.com/azeem-web-dev/TrustVault.git && cd TrustVault
 npm ci --ignore-scripts && npm rebuild prisma @prisma/engines esbuild
-sudo bash infra/server/provision.sh        # or create the roles in infra/ci/setup-db.sql by hand
-cp apps/api/.env.example apps/api/.env     # fill in URLs; LOCAL_MASTER_KEY=$(openssl rand -base64 32)
+# Database roles and a database, the same layout as production (row-level security needs it):
+sudo -u postgres psql -v ON_ERROR_STOP=1 < infra/ci/setup-db.sql   # on stdin: the postgres user may not be able to read your home folder
+#   creates database trustvault_test, owner role tv_dev_owner (password ci-owner), app role tv_dev_app (password ci-app)
+cp apps/api/.env.example apps/api/.env
+#   in apps/api/.env set:
+#   DATABASE_URL=postgresql://tv_dev_app:ci-app@127.0.0.1:5432/trustvault_test
+#   DATABASE_OWNER_URL=postgresql://tv_dev_owner:ci-owner@127.0.0.1:5432/trustvault_test
+#   TEST_DATABASE_URL and TEST_DATABASE_OWNER_URL: the same two URLs
+#   REDIS_URL=redis://127.0.0.1:6379        (a local Redis without ACLs)
+#   LOCAL_MASTER_KEY=<output of: openssl rand -base64 32>
 cd apps/api
+npx prisma generate                        # the database client is generated, not committed
 npx prisma migrate deploy                  # runs as DATABASE_OWNER_URL
 npx tsx --env-file=.env prisma/seed.ts     # demo data with dev-only passwords
 npm run dev                                # API on http://127.0.0.1:4100
-cd ../web && npm run dev                   # web on http://localhost:3005 (set PUBLIC_ORIGIN to match)
+cd ../web && npm run dev                   # web on http://localhost:3005 (PUBLIC_ORIGIN in .env must be http://localhost:3005)
 ```
+
+On an Ubuntu server, `sudo bash infra/server/provision.sh` creates the roles with generated passwords instead (see Deploy). The tests use the same `.env`: `cd apps/api && npx vitest run`. What happened when this was followed from a fresh clone is in [docs/CLAIMS_CHECK.md](docs/CLAIMS_CHECK.md#clean-clone-run).
 
 ## Deploy (Ubuntu 24.04, from a clean machine)
 
