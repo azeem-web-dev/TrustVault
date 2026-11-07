@@ -249,7 +249,7 @@ const MUTATIONS = [
   code('mfa: a step-up code works only once', 'src/auth/mfa.service.ts',
     'AND (totp_last_step IS NULL OR totp_last_step < ${step})', '', ['test/step-up.test.ts']),
   code('session: the MFA policy applies to live sessions', SESSION,
-    'mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),', "mfaRequired: MfaPolicyService.isRequired(user.role, mfaEnrolled, ['ADMIN']),",
+    'mfaRequired: !demoAdminExempt(this.env, user) && MfaPolicyService.isRequired(user.role, mfaEnrolled, requiredRoles),', "mfaRequired: !demoAdminExempt(this.env, user) && MfaPolicyService.isRequired(user.role, mfaEnrolled, ['ADMIN']),",
     ['test/mfa-policy.test.ts']),
   code('policy: ADMIN can never be taken out of the MFA policy', 'src/auth/mfa-policy.service.ts',
     "if (!roles.includes('ADMIN')) throw new BadRequestException('Administrators always need a second factor');", '', ['test/mfa-policy.test.ts']),
