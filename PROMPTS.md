@@ -27,6 +27,8 @@ Tools: ChatGPT (early brainstorming), Claude Code / Claude Opus (planning, code,
 
 ## Reused context
 
+The full text I give the AI each session, including the ground rules added on 2026-11-07, is in [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md). There is no CLAUDE.md or other hidden context file; what is quoted below and in that file is all of it.
+
 The problem statement and [docs/PLAN.md](docs/PLAN.md) are given to the AI at the start of each working session, with the instruction: *"Every endpoint must go through decide(); never cache permissions; every allow and deny writes an audit row in the same transaction."*
 
 When a piece of work is split across parallel subagents — the independent reviewers (2026-11-02) and later the attack/hardening run (2026-11-03) — each subagent is handed the same written brief, so they stay consistent and never step on each other. The brief for the security hunt, given to every attacker/reviewer, was in substance:
@@ -282,6 +284,8 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ## 2026-11-03 — Accounts by invitation
 
+*Written afterwards, on the evening of 2026-11-03 (commit [8c75a56](https://github.com/azeem-web-dev/TrustVault/commit/8c75a56)), from the commit history and my notes, not at the time.*
+
 **Asked (Claude):** "for a new account … admin enters mail and role and if any access date, and the receiver gets an email and fills the remaining info" — build invite-by-email account creation.
 
 **Got:** an admin form that takes email, role and an optional access-end date and sends a one-time invite link; an `/invite` page where the invited person sets their own name and password; the same flow in the Android app. No admin-chosen password ever exists, and an invited account can do nothing until it is accepted.
@@ -297,6 +301,8 @@ The same shape drives the independent code reviewers: one property each, and eve
 ---
 
 ## 2026-11-03 — Ten security workstreams in parallel
+
+*Written afterwards, on the evening of 2026-11-03 (commit [8c75a56](https://github.com/azeem-web-dev/TrustVault/commit/8c75a56)), from the commit history and my notes, not at the time.*
 
 **Asked (Claude):** "make the authenticator good and advanced"; then, for view-only files, "if only view is given, users can still download or screenshot … what's the plan?" → "build all 6"; then "use max sub agents" to work the security checklist.
 
@@ -314,6 +320,8 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ## 2026-11-03 — Integrating ten branches, making CI fast, and deploying
 
+*Written afterwards, on the evening of 2026-11-03 (commit [8c75a56](https://github.com/azeem-web-dev/TrustVault/commit/8c75a56)), from the commit history and my notes, not at the time.*
+
 **Asked (Claude):** "deploy … start all three … keep working until all are satisfied"; later "make ci green and deploy it"; then "deploy".
 
 **Got:** the ten branches merged into main one at a time with the full suite after each, a second protected demo admin so the two-admin break-glass flow can be tried end to end ([0859258](https://github.com/azeem-web-dev/TrustVault/commit/0859258)), and a production deploy (migrations in order, new settings, the key-service install, health checks).
@@ -330,6 +338,8 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ## 2026-11-03 — Screenshots, PDF sanitising, and a simpler second factor
 
+*Written afterwards, on the evening of 2026-11-03 (commit [8c75a56](https://github.com/azeem-web-dev/TrustVault/commit/8c75a56)), from the commit history and my notes, not at the time.*
+
 **Asked (Claude), three separate requests:** "for view-only documents I can take a screenshot — stop it, and tell the owner, without telling the viewer"; the owner's sanitisation rules for uploaded PDFs ("sanitise and validate automatically before encryption; reject if sanitising fails; scan the output again; log both hashes"); and "every user can turn on two-step — authenticator or a simple email toggle".
 
 **Got, what was wrong, and what I did — one per request:**
@@ -340,6 +350,8 @@ The same shape drives the independent code reviewers: one property each, and eve
 ---
 
 ## 2026-11-03 — Attacking everything at once (the security hunt)
+
+*Written afterwards, on the evening of 2026-11-03 (commit [8c75a56](https://github.com/azeem-web-dev/TrustVault/commit/8c75a56)), from the commit history and my notes, not at the time.*
 
 **Asked (Claude):** "start the hunt" — the 40 KB file that takes the server down, SQL injection from files, "and all security constraints you can think of", with the parallel attackers each in isolation.
 
@@ -431,6 +443,70 @@ The same shape drives the independent code reviewers: one property each, and eve
 **What I did instead:** sign-in now takes the row lock first and reads the password hash in a separate statement after it, refusing if it changed; the refusal, audit row and timing padding are identical to a normal wrong password. The race test now runs against both sign-in steps on every push.
 
 **Commits:** [d026211](https://github.com/azeem-web-dev/TrustVault/commit/d026211) (fix), [3455a08](https://github.com/azeem-web-dev/TrustVault/commit/3455a08), [8be53a0](https://github.com/azeem-web-dev/TrustVault/commit/8be53a0) (tests).
+
+---
+
+## 2026-11-08 — Checking every claim against the code (documentation)
+
+**Asked (Claude, one long session with the ground rules in [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md)):** restructure the README for a judge, then check every factual claim in README, WRITEUP and API.md against the code and run what can be run; record it in docs/CLAIMS_CHECK.md.
+
+**Got:** a claims table and a README that reads top-down: live URL, accounts, the ten requirements with file paths and tests, the three non-negotiables, limits.
+
+**What was wrong:** with the old README. "Over 750 tests" was 880 (879 pass, 1 skipped); "13 document routes" refused to outsiders was 17; Olivia owns four seeded documents, not five; the write-up said the demo video was "recorded" with no link; THREATS.md, PLAN.md and the write-up called access suggestions "AI" when the code is a heuristic over past shares; the write-up said backups stay on the server while THREATS.md said a PC copy was live (the truth: copied by hand, last on 11-03); the witness branch is scheduled every 15 minutes but GitHub ran it every 4–7 hours. And the AI could not run the suite here (no Redis; the local database roles refused their passwords), so it took the numbers from the GitHub Actions logs and says so, rather than writing a number it had not seen.
+
+**What I did instead:** every number now comes from a named CI run; the mutation report is assembled from the eight CI shard logs by a new `--from-logs` mode that refuses to write a report if any row is missing; the video link is a marked placeholder.
+
+**Commits:** [e11df92](https://github.com/azeem-web-dev/TrustVault/commit/e11df92), [e6562aa](https://github.com/azeem-web-dev/TrustVault/commit/e6562aa), [b09756e](https://github.com/azeem-web-dev/TrustVault/commit/b09756e), [54d0390](https://github.com/azeem-web-dev/TrustVault/commit/54d0390).
+
+---
+
+## 2026-11-08 — Protecting the shared demo, and a seed that shared with nobody (authorisation)
+
+**Asked (Claude):** every judge uses the same published accounts, admin included, so one judge must not change what the next sees. Add `DEMO_MODE` (record but never send invitation, reset and sign-in-link mail; refuse with a clear 403 settings that would lock the demo accounts out), invitation rate limits, and a scheduled demo reset that does not touch the audit log, with tests. Do not switch it on in production.
+
+**Got:** the API changes and tests, and a reset script with a systemd timer.
+
+**What was wrong:**
+1. **The seed's group shares covered nobody on a fresh database.** The new reset test runs the real `prisma/seed.ts` on an empty database, and Victor could open one document instead of the three the README promises. Group shares only reach members the owner confirmed (`tv_confirm_group_members`, added on 11-02); the app calls it on every group share, the seed never did. Production was seeded before that migration, which back-filled the existing shares, so nobody noticed. A clean clone would have shown a broken demo.
+2. **The AI's own test was wrong:** it checked that the outbox was empty, but the admin's own "new sign-in" notice arrives a moment after the login. Three pushes went red in CI ([3c22656](https://github.com/azeem-web-dev/TrustVault/commit/3c22656), [9577bd9](https://github.com/azeem-web-dev/TrustVault/commit/9577bd9), [e217d52](https://github.com/azeem-web-dev/TrustVault/commit/e217d52)) until the test waited for that notice and looked only for invitation, reset and sign-in-link messages.
+3. A first design put the demo flag in the database as well. Rejected: the flag would need a second switch the app role cannot flip, which is a new subsystem; the reset, running as the schema owner, is the backstop instead, and THREATS.md I15 says so.
+
+**What I did instead:** the seed confirms group members like the app does; the reset is a function (`apps/api/src/cli/demo-reset.ts`) that CI runs against the real seed after breaking the MFA policy, role rules, groups, grants, owner, trash and folders, and checks the audit log grew by exactly one `demo.reset` row. Nine mutation rows cover demo mode and the limits. The flag and the timer stay off in production until the owner decides.
+
+**Commits:** [ea11bd9](https://github.com/azeem-web-dev/TrustVault/commit/ea11bd9) (seed), [6d02684](https://github.com/azeem-web-dev/TrustVault/commit/6d02684), [5c913fa](https://github.com/azeem-web-dev/TrustVault/commit/5c913fa), [3c22656](https://github.com/azeem-web-dev/TrustVault/commit/3c22656), [ed16a95](https://github.com/azeem-web-dev/TrustVault/commit/ed16a95) (test fix).
+
+---
+
+## 2026-11-08 — The likely attack list, item by item, and CI gates (authorisation)
+
+**Asked (Claude):** for each item on a list of probes a judge is likely to try (IDOR on every non-document resource, leaks through other routes, session fixation and cookies, revocation edge cases, hostile uploads, XSS on web and Android, open redirect, CSRF, CORS, audit tampering, AI and insiders), make sure THREATS.md has a row with the defence, status and a test, writing the test if missing; add mutation rows for authorisation rules. Make CI fail on clippy warnings. Write the interview walkthrough.
+
+**Got:** most items already had a row and a test; the gaps were IDOR on folders and download requests, CORS, open redirect, `Content-Disposition`, a forced 500, and the suggestion test (it never checked that asking creates no grant row).
+
+**What was wrong:**
+1. **File names kept bidirectional controls.** `safeFileName()` dropped C0 controls but kept U+202E (RTL override), zero-width and C1 characters, so `report\u202Efdp.exe` would display reversed. Fixed and tested.
+2. **The AI's edit tool wrote the invisible characters themselves into the source** when it meant to write `\u202E` escape text, both in `content-check.ts` and in the mutation row. The mutation dry run reported the row as "MISSING", which is how it was caught before the commit; the files were converted back to escape text. Invisible bidi characters in source are exactly the "Trojan Source" problem the fix is about.
+3. **Turning on `cargo clippy -D warnings` turned main red** ([2ccd42f](https://github.com/azeem-web-dev/TrustVault/commit/2ccd42f)): six findings in keyd. The AI added the gate without being able to run clippy here (no MSVC linker on this PC; keyd is Linux-only), so CI found them. Fixed without behaviour change in [c182ce6](https://github.com/azeem-web-dev/TrustVault/commit/c182ce6).
+4. **Folder RLS makes one rule untestable on its own:** removing the API's own `owner_id = me` filter on folders changes nothing a test can see while row-level security is on. Written down in THREATS.md A27 instead of adding a mutation row that would "survive".
+5. Two things the AI tried and the permission system stopped: building Redis from source to run the suite locally, and a TCP relay to reach the WSL database. CI stayed the source of truth.
+
+**What I did instead:** `idor-resources.test.ts` and `probes.test.ts` (API and the database alone), new THREATS.md rows A27, I15, I16, U11, W9, W10 and a section mapping every probe to its row and test; an honest "partial" for audit tampering by a superuser and for admin impersonation through a reset.
+
+**Commits:** [986c42a](https://github.com/azeem-web-dev/TrustVault/commit/986c42a), [9577bd9](https://github.com/azeem-web-dev/TrustVault/commit/9577bd9), [77cdfcd](https://github.com/azeem-web-dev/TrustVault/commit/77cdfcd), [e217d52](https://github.com/azeem-web-dev/TrustVault/commit/e217d52), [b6e1db2](https://github.com/azeem-web-dev/TrustVault/commit/b6e1db2), [e57b132](https://github.com/azeem-web-dev/TrustVault/commit/e57b132), [f617326](https://github.com/azeem-web-dev/TrustVault/commit/f617326), [2ccd42f](https://github.com/azeem-web-dev/TrustVault/commit/2ccd42f), [c182ce6](https://github.com/azeem-web-dev/TrustVault/commit/c182ce6).
+
+---
+
+## 2026-11-08 — Can someone else run it? A clean clone (documentation)
+
+**Asked (Claude):** follow README "Run it locally" exactly, in a fresh container, and fix every step that fails.
+
+**Got:** no container runtime on this PC, so a fresh `git clone` into a new empty directory instead (recorded as such).
+
+**What was wrong:** the README's database step said "or create the roles in infra/ci/setup-db.sql by hand" without saying how, and that script creates `trustvault_test` while `.env.example` pointed at `trustvault_dev`; `npx prisma generate` was missing (the client is not committed, CI runs it explicitly); `.env.example` had the web origin on port 3000 while the dev server runs on 3005. The database steps themselves could not be run here; CI runs them on every push.
+
+**What I did instead:** exact commands and URLs in the README, the missing step, the corrected origin; results in docs/CLAIMS_CHECK.md. Also new: docs/DEMO.md (timed script of tested features), docs/DEPLOY_CHECK.md (curl output from the live site), docs/OPERATIONS.md, docs/AUTHZ_WALKTHROUGH.md.
+
+**Commits:** [47dcb58](https://github.com/azeem-web-dev/TrustVault/commit/47dcb58), [a0f424d](https://github.com/azeem-web-dev/TrustVault/commit/a0f424d), [d34d419](https://github.com/azeem-web-dev/TrustVault/commit/d34d419), [833c773](https://github.com/azeem-web-dev/TrustVault/commit/833c773), [30e216d](https://github.com/azeem-web-dev/TrustVault/commit/30e216d), [8d496e4](https://github.com/azeem-web-dev/TrustVault/commit/8d496e4).
 
 ---
 
