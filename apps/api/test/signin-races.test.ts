@@ -33,11 +33,11 @@ async function adminHolding(userId: string, change: string): Promise<{ commit: (
 /** Waits until some application query is blocked on a lock. */
 async function waitForBlocked(): Promise<void> {
   await withDb(ownerDb(), async (db) => {
-    for (let i = 0; i < 200; i++) {
-      // pg_locks is readable by every role; pg_stat_activity hides other roles' waits from the owner.
-      const r = await db.query(`SELECT 1 FROM pg_locks WHERE NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
+    for (let i = 0; i < 400; i++) {
+      // A row-lock wait shows as an ungranted transactionid/tuple lock, which has no database column. pg_locks is readable by every role; pg_stat_activity hides other roles' waits from the owner.
+      const r = await db.query(`SELECT 1 FROM pg_locks WHERE NOT granted`);
       if (r.rowCount) return;
-      await new Promise((r2) => setTimeout(r2, 25));
+      await new Promise((r2) => setTimeout(r2, 50));
     }
     throw new Error('the sign-in never queued behind the lock');
   });
