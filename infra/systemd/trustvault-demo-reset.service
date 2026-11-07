@@ -1,0 +1,12 @@
+[Unit]
+Description=TrustVault: put the shared public demo back to its seed state (docs/DEMO.md)
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+# Root only to read /etc/trustvault/migrate.env; the reset itself runs as the
+# trustvault user (sudo -u in the script) with the owner URL in its environment.
+ExecStart=/usr/bin/bash /opt/trustvault/app/infra/server/demo-reset.sh
+Nice=10
+PrivateTmp=yes
