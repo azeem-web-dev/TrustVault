@@ -23,4 +23,16 @@ Every factual claim in README.md, docs/WRITEUP.md and docs/API.md that can be ch
 
 ## Clean-clone run
 
-See the section at the end of this file (filled in by Task 7 of the 2026-11-07 session).
+**Not a container.** There is no Docker or Podman on the PC used (2026-11-08), so this was a fresh `git clone` into a new, empty temporary directory, following README "Run it locally" exactly as it was written at commit d34d419. Windows 11, Node 24.19.0, Git Bash.
+
+| Step (as written) | Result | Fix |
+|---|---|---|
+| `git clone …` | OK, 4 s | |
+| `npm ci --ignore-scripts && npm rebuild prisma @prisma/engines esbuild` | OK (1 min 31 s; "rebuilt dependencies successfully") | |
+| `sudo bash infra/server/provision.sh  # or create the roles in infra/ci/setup-db.sql by hand` | **Fails as written on a developer machine.** provision.sh is the Ubuntu server script. The "by hand" route was not spelled out, and `setup-db.sql` creates database `trustvault_test` with passwords `ci-owner` / `ci-app`, while `.env.example` points at `trustvault_dev`: a newcomer would end up with URLs for a database that does not exist | README now gives the exact command (SQL fed on stdin, since the postgres user may not read a home folder) and the exact URLs to put in `.env` |
+| `cp apps/api/.env.example apps/api/.env  # fill in URLs; LOCAL_MASTER_KEY=…` | OK; until the key is filled the API refuses to start with "LOCAL_MASTER_KEY must be 32 bytes of base64", as the comment says | `.env.example` had `PUBLIC_ORIGIN=http://localhost:3000` while the web dev server runs on 3005; now 3005 |
+| `npx prisma migrate deploy`, then the seed, then `npm run dev` | **A step was missing:** the Prisma client is generated, not committed (0 tracked files under `apps/api/src/generated`), and nothing in the README generated it. CI runs `npx prisma generate` explicitly. After generating, `tsc --noEmit` passed in the fresh clone | Added `npx prisma generate` |
+| `npx prisma migrate deploy`, seed, `npm run dev` (both servers) | **Not run here**: no Postgres or Redis reachable from Windows on this PC. The same steps run in CI on every push against a fresh Postgres 16 and Redis 7: `setup-db.sql`, `prisma generate`, migrations (test global setup), and since this session `demo-reset.test.ts` runs `prisma/seed.ts` itself on an empty database | |
+| Seed on an empty database | Found by the new CI test, not by hand: **the seed's group shares covered nobody** on a fresh database, because `seed.ts` never confirmed group members (`tv_confirm_group_members`), which the app does on every group share. Victor would have seen one document, not the three the README promises | Fixed in `seed.ts`; `demo-reset.test.ts` "a group share in the seed reaches the group members" |
+
+So: a fresh clone installs and type-checks; the README now gives every command needed for the database steps; the database steps themselves are verified in CI rather than on this PC.
