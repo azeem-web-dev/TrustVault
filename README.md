@@ -72,7 +72,7 @@ No anonymous share links, no folder inheritance, no end-to-end encryption, no ex
 - **Screenshots of View-only pages** cannot be stopped in a browser: they are watermarked and likely attempts are reported to the owner. Android blocks them.
 - **Shared demo accounts:** every judge uses the same logins. Protected accounts cannot be changed, but other shared state (shares, groups, policies) can be. `DEMO_MODE` and a scheduled demo reset are in the repository but not switched on in production yet ([docs/DEMO.md](docs/DEMO.md)).
 - **Access suggestions are a heuristic, not AI:** they rank people you shared documents of the same category with. They never grant anything.
-- **Android:** checked by hand on a phone; not in a store; no automated on-device test.
+- **Android:** checked by hand on a phone; in a Google Play closed test, not yet public; no automated on-device test.
 - The full list is in [docs/WRITEUP.md, "What is not finished"](docs/WRITEUP.md#what-is-not-finished).
 
 ## Roles
