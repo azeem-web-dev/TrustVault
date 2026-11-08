@@ -2,7 +2,7 @@
 
 Recorded at https://vault.rayyanazeem.cloud with two browser windows side by side: a normal one for the owner and the admin, a private one for Victor. Demo logins and the admin authenticator secret are in the README. Every step below uses a feature that exists and is tested; the test is named so the claim can be checked.
 
-Video: `[DEMO VIDEO LINK: TO BE ADDED]`
+Video: https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk
 
 ## Before recording
 
@@ -36,7 +36,7 @@ printf '<html><script>alert(1)</script></html>' > invoice.pdf         # HTML pre
 - [ ] Files *Q4 forecast.pdf* and *invoice.pdf* on the desktop.
 - [ ] Nothing secret on screen: no terminal with `/etc/trustvault`, no SSH session, no password manager.
 - [ ] 1080p, microphone level checked, one take per row is fine; cut between rows.
-- [ ] Afterwards: remove the shares you added (or run the reset), trash *Q4 forecast*, and paste the video link into the README and docs/WRITEUP.md where it says `[DEMO VIDEO LINK: TO BE ADDED]`.
+- [ ] Afterwards: remove the shares you added (or run the reset), trash *Q4 forecast*, and make sure the video link in the README still opens (done for the 2026-11-08 recording).
 
 ## Keeping the shared demo usable
 
