@@ -329,7 +329,6 @@ export function StatCard({ label, value, icon, tone = 'brand', hint, delay = 0 }
 /* ------------------------------------------------------------------- badges */
 
 export type Tone = 'neutral' | 'green' | 'amber' | 'orange' | 'red' | 'blue' | 'violet';
-export type BadgeTone = Tone;
 const TONES: Record<Tone, string> = {
   neutral: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-white/10 dark:text-slate-300 dark:ring-white/10',
   green: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/25',
@@ -354,8 +353,7 @@ export function Badge({ tone = 'neutral', dot, icon, children, className }: { to
 export const ACCESS_TONE: Record<string, Tone> = { OWNER: 'violet', MANAGE: 'blue', EDIT: 'amber', READ: 'green', VIEW: 'neutral', NONE: 'neutral' };
 export const ACCESS_LABEL: Record<string, string> = { OWNER: 'Owner', MANAGE: 'Manage', EDIT: 'Edit', READ: 'Download', VIEW: 'View only', NONE: 'None' };
 export const OUTCOME_TONE = { ALLOWED: 'green', DENIED: 'red', FAILED: 'amber' } as const;
-/** One severity scale for pills, stat tiles and side bars (§2.1): critical red, high orange, medium amber, low blue, info slate. */
-export const SEVERITY_TONE: Record<string, Tone> = { CRITICAL: 'red', HIGH: 'orange', MEDIUM: 'amber', LOW: 'blue', INFO: 'neutral' };
+/** One severity scale for stat tiles and side bars (§2.1): critical red, high orange, medium amber, low blue, info slate. */
 export const SEVERITY_TILE_TONE: Record<string, TileTone> = { CRITICAL: 'red', HIGH: 'orange', MEDIUM: 'amber', LOW: 'blue', INFO: 'slate' };
 
 /* ------------------------------------------------------------------- alerts */
