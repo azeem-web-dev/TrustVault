@@ -106,8 +106,6 @@ export default function LoginPage() {
         </Button>
       </form>
 
-      <BetaCard />
-
       <div className="mt-8 space-y-3">
         <Divider label="or try a demo account" />
         <div className="grid grid-cols-2 gap-2">
@@ -140,6 +138,8 @@ export default function LoginPage() {
           Picking one fills in its login, then press Sign in.
         </p>
       </div>
+
+      <BetaCard />
 
       <AuthFootnote />
     </AuthLayout>
