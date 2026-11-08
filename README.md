@@ -111,6 +111,7 @@ cp apps/api/.env.example apps/api/.env
 #   TEST_DATABASE_URL and TEST_DATABASE_OWNER_URL: the same two URLs
 #   REDIS_URL=redis://127.0.0.1:6379        (a local Redis without ACLs)
 #   LOCAL_MASTER_KEY=<output of: openssl rand -base64 32>
+#   DEMO_ADMIN_NO_MFA=true                  (optional: the two demo admins sign in with a password only, like the live demo; THREATS.md S21a)
 cd apps/api
 npx prisma generate                        # the database client is generated, not committed
 npx prisma migrate deploy                  # runs as DATABASE_OWNER_URL
@@ -191,6 +192,8 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 
 ## What to read
 
+Every document in `docs/`, grouped, one line each: [docs/README.md](docs/README.md).
+
 | File | What it is |
 |---|---|
 | [docs/WRITEUP.md](docs/WRITEUP.md) | What I built, what I deliberately did not, the permission model in my own words, how I used AI and where it was wrong, what is unfinished |
@@ -214,6 +217,26 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | [apps/mobile/README.md](apps/mobile/README.md) | The Android app: same screens and rules, how it signs in, how to build the APK |
 | [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
 | [Sigstore public log](https://search.sigstore.dev/?logIndex=3633615638) | Every signed audit checkpoint, published within about a minute; nobody can remove an entry |
+
+## Repository layout
+
+```text
+apps/
+  api/          NestJS API: auth, documents, access decisions, audit chain, jobs (src/), Prisma schema,
+                migrations and seed (prisma/), API and browser tests (test/, test/e2e/)
+  web/          Next.js web app (src/app pages, src/components, src/lib)
+  mobile/       Flutter Android app (lib/, unit and widget tests in test/, device tests in integration_test/)
+keyd/           Rust key daemon: releases a file key only against a database-issued ticket, signs the key-use ledger
+infra/
+  ci/           Database roles and grants used by CI and local runs
+  nginx/        Reverse-proxy config for the live site
+  server/       Provisioning, deploy, backup, ClamAV and off-site scripts for the Ubuntu server
+  systemd/      Service and timer units (API, web, keyd, backups, audit anchoring, demo reset)
+tools/          Audit-chain verifier, witness and Sigstore publishing, mutation check, restore drill,
+                ledger reconciliation, independent Python verifier, Android security check
+docs/           Design, security, operations and Android documents; index in docs/README.md
+.github/        CI, release, Android release and witness workflows
+```
 
 ---
 
