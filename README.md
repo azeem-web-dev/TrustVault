@@ -1,10 +1,17 @@
 # TrustVault
 
+[![CI](https://github.com/azeem-web-dev/TrustVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/azeem-web-dev/TrustVault/actions/workflows/ci.yml) [![Live demo](https://img.shields.io/badge/live-vault.rayyanazeem.cloud-7c3aed)](https://vault.rayyanazeem.cloud) [![Demo video](https://img.shields.io/badge/demo-video-e11d48)](https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk) ![Tests](https://img.shields.io/badge/tests-900%2B_passing-16a34a) [![Mutation check](https://img.shields.io/badge/mutation_check-every_rule_caught-16a34a)](docs/MUTATION_REPORT.md)
+
 A document platform where the wrong person can never read the file, and you can prove who read it.
 
 **Live:** https://vault.rayyanazeem.cloud
 
 **Demo video:** https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk (or download it from the [GitHub release](https://github.com/azeem-web-dev/TrustVault/releases/tag/demo-video-2026-11-08))
+
+| | |
+|---|---|
+| ![Admin audit log with the integrity check](docs/images/audit-log.jpg) <br> **Audit log:** every action and refusal, hash-chained and checkable | ![Sharing one document with a named person](docs/images/share-access.jpg) <br> **Sharing:** one document, one named person, effective immediately |
+| ![View-only document with the viewer's watermark](docs/images/watermarked-view.jpg) <br> **View-only:** watermarked with who is looking, no download | ![Download approvals waiting for the owner](docs/images/download-approvals.jpg) <br> **Approvals:** a viewer asks, the owner allows a set number of downloads |
 
 ## Demo accounts
 
