@@ -4,7 +4,7 @@ A document platform where the wrong person can never read the file, and you can 
 
 **Live:** https://vault.rayyanazeem.cloud
 
-**Demo video:** https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk
+**Demo video:** https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk (or download it from the [GitHub release](https://github.com/azeem-web-dev/TrustVault/releases/tag/demo-video-2026-11-08))
 
 ## Demo accounts
 
