@@ -4,7 +4,7 @@ A document platform where the wrong person can never read the file, and you can 
 
 **Live:** https://vault.rayyanazeem.cloud
 
-**Demo video (5 min):** `[DEMO VIDEO LINK: TO BE ADDED]`
+**Demo video:** https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk
 
 ## Demo accounts
 

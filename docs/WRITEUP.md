@@ -66,7 +66,6 @@ These were open gaps in the first version and are now built and tested: the outs
 - **The last minute or two of audit events** before a server compromise are signed but not yet public, so root could still cut those off (L5).
 - **Malware nobody has a signature for yet** is caught only once ClamAV learns it; the nightly re-scan then quarantines it. Files are still never opened on the server.
 - **A physical phone or security key** has not been tried against the live site. Real Chrome with its virtual authenticator, through the real pages and API, is tested on every push.
-- **Demo video:** link still to be added: `[DEMO VIDEO LINK: TO BE ADDED]`. The script it follows is in [docs/DEMO.md](DEMO.md).
 - **One server.** No database replication.
 - **Admin impersonation is reduced, not fully prevented.** The old admin set-password endpoint was removed; an admin can only send a reset link, so they never choose or see a user's password. An admin resetting a password and then signing in as that person is still possible, but it is detected, emailed to the person and raised as an alert (THREATS.md S15), not prevented.
 - **The Android app** has its own test suite (unit and widget tests against a fake API, a static manifest/backup/Gradle security check and a release-build check, all in CI) and passkey sign-in through Android's Credential Manager. On a physical phone the sign-in screen, app lock and screenshot blocking have so far been checked by hand, not by an automated device test; it is not in a store, and the APK is built from `apps/mobile`.
