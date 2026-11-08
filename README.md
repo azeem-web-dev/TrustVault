@@ -6,6 +6,10 @@ A document platform where the wrong person can never read the file, and you can 
 
 **Demo video:** https://drive.google.com/file/d/1Kq3-oORDJoaL3NhjghYuXnQi9WVIaJjf/view?usp=drivesdk
 
+**Android app on Google Play:** in a closed test now. Join the test at https://play.google.com/apps/testing/cloud.rayyanazeem.trustvault, or ask for an invite on the [beta page](https://vault.rayyanazeem.cloud/beta). The public Play Store release is planned for when Google's required 14-day closed-test period ends. Same server-side rules as the web app; screenshots blocked, app lock, passkeys ([apps/mobile/README.md](apps/mobile/README.md)).
+
+**How it is hosted:** its own domain, `vault.rayyanazeem.cloud`, on a Hostinger VPS (Ubuntu 24.04), deployed with the scripts in `infra/server/`. nginx serves HTTPS only, with a Let's Encrypt certificate from certbot (plain HTTP redirects to HTTPS), HSTS for two years and per-IP rate limits. The API and web server listen only on 127.0.0.1 behind nginx and Redis is bound to loopback; the services run sandboxed under systemd; uploads are virus-scanned; backups are encrypted nightly. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DEPLOY_CHECK.md](docs/DEPLOY_CHECK.md).
+
 ## Demo accounts
 
 | Role | Email | Password | What to try |
