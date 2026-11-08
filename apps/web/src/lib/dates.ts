@@ -52,11 +52,3 @@ export function toLocalDateInput(v: string | Date | null | undefined): string {
   if (Number.isNaN(d.getTime())) return '';
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
-
-/** An ISO instant (or Date) as a local 'YYYY-MM-DDTHH:mm' for a datetime-local input. Empty string if missing. */
-export function toLocalDateTimeInput(v: string | Date | null | undefined): string {
-  const day = toLocalDateInput(v);
-  if (!day) return '';
-  const d = v instanceof Date ? v : new Date(v as string);
-  return `${day}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}

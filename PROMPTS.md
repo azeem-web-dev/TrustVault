@@ -524,6 +524,20 @@ The same shape drives the independent code reviewers: one property each, and eve
 
 ---
 
+## 2026-11-08 — Splitting the three largest UI files, and a docs index (engineering quality)
+
+**Asked (Claude):** split `documents/[id]/page.tsx`, `document_detail.dart` and `widgets/ui.dart` without changing behaviour, remove dead code that can be proven unused, add an index of `docs/` and a repository layout to the README, check every relative link. On a branch, CI as the judge.
+
+**Got:** the web page (1410 lines) became a 319-line page plus seven files in `_components/` (viewer, overview cards, versions, access panel with its exception dialog, history, owner actions, shared types). `document_detail.dart` (2317 lines) became a 487-line screen plus six `part` files, so its private widgets stay private. `ui.dart` (1589 lines) became a 12-line barrel that re-exports nine small libraries in `widgets/ui/`, so no screen's imports changed. Each split was checked by sorting the code lines before and after (identical apart from imports and `export`), `tsc --noEmit`, `flutter analyze` and `flutter test` (59/59), then CI (API tests, browser e2e tests, Android job). Three web exports nothing references were removed. `docs/README.md` indexes all 27 documents; a link check over README, THREATS, PROMPTS, SECURITY and `docs/` found 137 relative links and no broken one.
+
+**What was wrong:** my first web split dropped the doc comment above the capture-report debounce map: the cut was one line too low, so the comment was left dangling at the end of `page.tsx`. Caught by reading the result, fixed before committing. The first automatic import pass also exported everything and pulled in names that only appeared inside strings (`Access`, `Select`); `tsc --noUnusedLocals` caught them. Separately, a docs commit made with `git commit -a` by the orchestrating session in the same working copy swept my half-finished `ui.dart` barrel into it (1f490e8) while the new `ui/` files were still untracked, so the branch did not build for one push; the next commit (3895736) added them. History was not rewritten. `docs/LOGIN_TIMING_floor0.md` looked like a leftover copy but is a separate measurement (padding off) that LOGIN_TIMING.md and the measuring script link to, so it stays.
+
+**What I did instead:** private Dart widgets kept private with `part` files instead of renaming them public; exports only where another file needs them; CI made to run on the review branch so every step was checked there. `useDismissToast` in `toast.tsx` is also unused, but removing it means removing its context provider too, so it is listed rather than deleted. Also, at the owner's request, the top of the README now says the Android app is in a Google Play closed test (public release planned after Google's 14-day closed-test period) and how the live site is hosted (own domain, Hostinger VPS, Let's Encrypt HTTPS with HSTS, loopback-only services); each claim was checked against the beta page, `infra/nginx/vault.conf` and `infra/server/` first, and the old "not in a store" lines in README and WRITEUP were corrected ([dbf4ca6](https://github.com/azeem-web-dev/TrustVault/commit/dbf4ca6), [6356b09](https://github.com/azeem-web-dev/TrustVault/commit/6356b09)).
+
+**Commits:** [fb60b5e](https://github.com/azeem-web-dev/TrustVault/commit/fb60b5e), [04889da](https://github.com/azeem-web-dev/TrustVault/commit/04889da), [bc8bb69](https://github.com/azeem-web-dev/TrustVault/commit/bc8bb69), [3895736](https://github.com/azeem-web-dev/TrustVault/commit/3895736), [433eada](https://github.com/azeem-web-dev/TrustVault/commit/433eada), [a646eb8](https://github.com/azeem-web-dev/TrustVault/commit/a646eb8), [ac79aa9](https://github.com/azeem-web-dev/TrustVault/commit/ac79aa9), [981bde8](https://github.com/azeem-web-dev/TrustVault/commit/981bde8), and this entry
+
+---
+
 ## Reused instructions (updated)
 
 Given to the AI at the start of each session, together with the problem statement and docs/PLAN.md:

@@ -13,6 +13,10 @@ A document platform where the wrong person can never read the file, and you can 
 | ![Admin audit log with the integrity check](docs/images/audit-log.jpg) <br> **Audit log:** every action and refusal, hash-chained and checkable | ![Sharing one document with a named person](docs/images/share-access.jpg) <br> **Sharing:** one document, one named person, effective immediately |
 | ![View-only document with the viewer's watermark](docs/images/watermarked-view.jpg) <br> **View-only:** watermarked with who is looking, no download | ![Download approvals waiting for the owner](docs/images/download-approvals.jpg) <br> **Approvals:** a viewer asks, the owner allows a set number of downloads |
 
+**Android app on Google Play:** in a closed test now. Join the test at https://play.google.com/apps/testing/cloud.rayyanazeem.trustvault, or ask for an invite on the [beta page](https://vault.rayyanazeem.cloud/beta). The public Play Store release is planned for when Google's required 14-day closed-test period ends. Same server-side rules as the web app; screenshots blocked, app lock, passkeys ([apps/mobile/README.md](apps/mobile/README.md)).
+
+**How it is hosted:** its own domain, `vault.rayyanazeem.cloud`, on a Hostinger VPS (Ubuntu 24.04), deployed with the scripts in `infra/server/`. nginx serves HTTPS only, with a Let's Encrypt certificate from certbot (plain HTTP redirects to HTTPS), HSTS for two years and per-IP rate limits. The API and web server listen only on 127.0.0.1 behind nginx and Redis is bound to loopback; the services run sandboxed under systemd; uploads are virus-scanned; backups are encrypted nightly. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DEPLOY_CHECK.md](docs/DEPLOY_CHECK.md).
+
 ## Demo accounts
 
 | Role | Email | Password | What to try |
@@ -75,7 +79,7 @@ No anonymous share links, no folder inheritance, no end-to-end encryption, no ex
 - **Screenshots of View-only pages** cannot be stopped in a browser: they are watermarked and likely attempts are reported to the owner. Android blocks them.
 - **Shared demo accounts:** every judge uses the same logins. Protected accounts cannot be changed, but other shared state (shares, groups, policies) can be. `DEMO_MODE` and a scheduled demo reset are in the repository but not switched on in production yet ([docs/DEMO.md](docs/DEMO.md)).
 - **Access suggestions are a heuristic, not AI:** they rank people you shared documents of the same category with. They never grant anything.
-- **Android:** checked by hand on a phone; not in a store; no automated on-device test.
+- **Android:** checked by hand on a phone; in a Google Play closed test, not yet public; no automated on-device test.
 - The full list is in [docs/WRITEUP.md, "What is not finished"](docs/WRITEUP.md#what-is-not-finished).
 
 ## Roles
@@ -118,6 +122,7 @@ cp apps/api/.env.example apps/api/.env
 #   TEST_DATABASE_URL and TEST_DATABASE_OWNER_URL: the same two URLs
 #   REDIS_URL=redis://127.0.0.1:6379        (a local Redis without ACLs)
 #   LOCAL_MASTER_KEY=<output of: openssl rand -base64 32>
+#   DEMO_ADMIN_NO_MFA=true                  (optional: the two demo admins sign in with a password only, like the live demo; THREATS.md S21a)
 cd apps/api
 npx prisma generate                        # the database client is generated, not committed
 npx prisma migrate deploy                  # runs as DATABASE_OWNER_URL
@@ -198,6 +203,8 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 
 ## What to read
 
+Every document in `docs/`, grouped, one line each: [docs/README.md](docs/README.md).
+
 | File | What it is |
 |---|---|
 | [docs/WRITEUP.md](docs/WRITEUP.md) | What I built, what I deliberately did not, the permission model in my own words, how I used AI and where it was wrong, what is unfinished |
@@ -221,6 +228,26 @@ node tools/verify-audit.mjs bundle.json --key OMFkgIVZnsaXmuQkQv/Ibi8oEEEXveEbML
 | [apps/mobile/README.md](apps/mobile/README.md) | The Android app: same screens and rules, how it signs in, how to build the APK |
 | [`witness` branch](https://github.com/azeem-web-dev/TrustVault/tree/witness) | Every signed audit checkpoint, recorded by GitHub outside the server's reach |
 | [Sigstore public log](https://search.sigstore.dev/?logIndex=3633615638) | Every signed audit checkpoint, published within about a minute; nobody can remove an entry |
+
+## Repository layout
+
+```text
+apps/
+  api/          NestJS API: auth, documents, access decisions, audit chain, jobs (src/), Prisma schema,
+                migrations and seed (prisma/), API and browser tests (test/, test/e2e/)
+  web/          Next.js web app (src/app pages, src/components, src/lib)
+  mobile/       Flutter Android app (lib/, unit and widget tests in test/, device tests in integration_test/)
+keyd/           Rust key daemon: releases a file key only against a database-issued ticket, signs the key-use ledger
+infra/
+  ci/           Database roles and grants used by CI and local runs
+  nginx/        Reverse-proxy config for the live site
+  server/       Provisioning, deploy, backup, ClamAV and off-site scripts for the Ubuntu server
+  systemd/      Service and timer units (API, web, keyd, backups, audit anchoring, demo reset)
+tools/          Audit-chain verifier, witness and Sigstore publishing, mutation check, restore drill,
+                ledger reconciliation, independent Python verifier, Android security check
+docs/           Design, security, operations and Android documents; index in docs/README.md
+.github/        CI, release, Android release and witness workflows
+```
 
 ---
 
