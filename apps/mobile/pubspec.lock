@@ -271,10 +271,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_svg
-      sha256: "100c19dcc4ff60083e95a44a6f44f3a1bb887d353c5d86f6a9b688aa3cb46236"
+      sha256: "4565a66f0a968f2e1ab4197854686990258aadab9572eb80a7655053a01dc302"
       url: "https://pub.dev"
     source: hosted
-    version: "2.3.2"
+    version: "2.5.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -391,6 +391,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.1.0"
+  listen:
+    dependency: transitive
+    description:
+      name: listen
+      sha256: "47501a08016a43fcad79252439d723f50f14f88fa7bfd8a177e0a417e5c9e1f2"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.1"
   local_auth:
     dependency: "direct main"
     description:
@@ -459,10 +467,10 @@ packages:
     dependency: transitive
     description:
       name: meta
-      sha256: c82594181e3312f3d0695fc95aaaf7758d75b8d4ae2bbecf223b9fd5109a059d
+      sha256: "307249ce4ff29d58a18e97f6345f539382eb9c9c29ecda628900f31de0443dd9"
       url: "https://pub.dev"
     source: hosted
-    version: "1.18.3"
+    version: "1.19.0"
   nested:
     dependency: transitive
     description:
@@ -515,58 +523,58 @@ packages:
     dependency: "direct main"
     description:
       name: passkeys
-      sha256: b3230c542246d7f90093e8ce00cf8552006cf5e54dbc1cb9b593f12f85d20705
+      sha256: "3416cddb3ea43d9fb30f136241df83dc87b19ba60072bf0fb9b270c7bfc6e88b"
       url: "https://pub.dev"
     source: hosted
-    version: "2.23.1"
+    version: "2.24.2"
   passkeys_android:
     dependency: transitive
     description:
       name: passkeys_android
-      sha256: "92e7607612a6cf6fc8c6590384ffc25f98e9cad1154b17c84d6ccf251ba25c31"
+      sha256: "2b070609a4278a07e653b4404f2cc2e525718c3fc19bd2b4dc52f09083f0705b"
       url: "https://pub.dev"
     source: hosted
-    version: "2.14.1"
+    version: "2.15.0"
   passkeys_darwin:
     dependency: transitive
     description:
       name: passkeys_darwin
-      sha256: ceb245f1c98fa25119fd2795ebe8dc39dd7a6b443de77bf58fde9f5ff76237b9
+      sha256: "83e4efcd1841f2031206cc9c9c5d30d6859e3624e1892c87fd100e97f612fb86"
       url: "https://pub.dev"
     source: hosted
-    version: "0.4.5"
+    version: "0.4.8"
   passkeys_doctor:
     dependency: transitive
     description:
       name: passkeys_doctor
-      sha256: "44eefcc28603cdeb052e7a6b5fd8642f47e54bb5450ffbd7da3dc0e2a728bb7b"
+      sha256: "1b602706f637597fa1941c606a8d9dfb04370f314584ed9090fe1abf9f70583f"
       url: "https://pub.dev"
     source: hosted
-    version: "1.6.2"
+    version: "1.7.1"
   passkeys_platform_interface:
     dependency: transitive
     description:
       name: passkeys_platform_interface
-      sha256: "5fca044a6f1a3c5abff645ca5a5417b613c130d1c4e08513ba9182c7f4834619"
+      sha256: "1a4a39920a737dfacfb7d4bb8f03bb0d95e9fdb6c3ff2010cfeb7fc5d087eeb1"
       url: "https://pub.dev"
     source: hosted
-    version: "2.10.0"
+    version: "2.11.0"
   passkeys_web:
     dependency: transitive
     description:
       name: passkeys_web
-      sha256: "5a02f256914eeb5d06d1b5a8e552c6a2837a7364d7591c14b06a992fcc4da051"
+      sha256: "4f024405d1e1af9e510b0062d2e602b3567b97a47833f0ac78d53e9f888301f2"
       url: "https://pub.dev"
     source: hosted
-    version: "2.10.1"
+    version: "2.11.0"
   passkeys_windows:
     dependency: transitive
     description:
       name: passkeys_windows
-      sha256: "43d116e42324788e1cddc1ba6e98a32a28ccc47f68508c4cd4a19e6309daa127"
+      sha256: "1b5baee872a9b3cc66fb41e43d5c5bd1d38b2ded0ab57a9fb9dd632acb047176"
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.5"
+    version: "0.1.6"
   path:
     dependency: transitive
     description:
@@ -816,10 +824,10 @@ packages:
     dependency: transitive
     description:
       name: test_api
-      sha256: "2a122cbe059f8b610d3a5415f42e255b6c17b1f21eee1d960f31080237fb4f11"
+      sha256: "0a10344e901e5b2e63819567951cb6a06673ed6b84f40462188ff5a0c41f371f"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.12"
+    version: "0.7.14"
   typed_data:
     dependency: transitive
     description:
@@ -920,10 +928,10 @@ packages:
     dependency: transitive
     description:
       name: vector_math
-      sha256: "1d774bbdf6b72a0b12122fc1560c9c2d2a67db5a4a4cc2bd8a5c990ab20e3188"
+      sha256: fa49e1674cb84acb900141714e6c6e1f9ae099827c24d141430ff6819db4e1bc
       url: "https://pub.dev"
     source: hosted
-    version: "2.4.0"
+    version: "2.4.4"
   vm_service:
     dependency: transitive
     description:
