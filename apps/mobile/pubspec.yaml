@@ -34,13 +34,13 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_secure_storage: ^11.2.0
-  flutter_svg: ^2.3.2
+  flutter_svg: ^2.5.0
   http: ^1.6.0
   intl: ^0.20.3
   # Pinned exactly: they sit on the sign-in path (app lock, passkeys).
   local_auth: 3.0.2
   open_filex: ^5.0.0
-  passkeys: 2.23.1
+  passkeys: 2.24.2
   path_provider: ^2.1.6
   provider: ^6.1.5+1
   qr_flutter: ^4.1.0
